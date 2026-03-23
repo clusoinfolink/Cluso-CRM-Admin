@@ -13,13 +13,32 @@ const patchSchema = z.object({
 
 export async function GET(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
-  if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
+  if (
+    !auth ||
+    (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   await connectMongo();
 
-  const items = await VerificationRequest.find({})
+  let requestFilter = {};
+
+  if (auth.role === "verifier") {
+    const verifier = await User.findOne({ _id: auth.userId, role: "verifier" }).lean();
+    if (!verifier) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const assignedCompanies = (verifier.assignedCompanies ?? []).map((item) => String(item));
+    if (assignedCompanies.length === 0) {
+      return NextResponse.json({ items: [] });
+    }
+
+    requestFilter = { customer: { $in: assignedCompanies } };
+  }
+
+  const items = await VerificationRequest.find(requestFilter)
     .sort({ createdAt: -1 })
     .lean();
 
@@ -48,7 +67,10 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
-  if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
+  if (
+    !auth ||
+    (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -67,6 +89,31 @@ export async function PATCH(req: NextRequest) {
   }
 
   await connectMongo();
+
+  if (auth.role === "verifier") {
+    const verifier = await User.findOne({ _id: auth.userId, role: "verifier" }).lean();
+    if (!verifier) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const assignedCompanies = new Set(
+      (verifier.assignedCompanies ?? []).map((item) => String(item)),
+    );
+    if (assignedCompanies.size === 0) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const requestDoc = await VerificationRequest.findById(parsed.data.requestId)
+      .select("customer")
+      .lean();
+    if (!requestDoc) {
+      return NextResponse.json({ error: "Request not found." }, { status: 404 });
+    }
+
+    if (!assignedCompanies.has(String(requestDoc.customer))) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
 
   const updateData =
     parsed.data.status === "approved"

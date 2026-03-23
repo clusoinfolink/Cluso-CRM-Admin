@@ -7,9 +7,15 @@ const UserSchema = new Schema(
     passwordHash: { type: String, required: true },
     role: {
       type: String,
-      enum: ["superadmin", "admin", "customer", "delegate"],
+      enum: ["superadmin", "admin", "verifier", "customer", "delegate"],
       required: true,
     },
+    assignedCompanies: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
     parentCustomer: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -33,7 +39,11 @@ const UserSchema = new Schema(
 
 export type UserDocument = InferSchemaType<typeof UserSchema> & { _id: string };
 
-if (models.User && !models.User.schema.path("selectedServices")) {
+if (
+  models.User &&
+  (!models.User.schema.path("selectedServices") ||
+    !models.User.schema.path("assignedCompanies"))
+) {
   delete models.User;
 }
 

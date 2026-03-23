@@ -27,12 +27,13 @@ import {
   Archive,
 } from "lucide-react";
 import AdminManagement from "../../components/AdminManagement";
+import VerifierManagement from "../../components/VerifierManagement";
 
 type AdminUser = {
   id: string;
   name: string;
   email: string;
-  role: "admin" | "superadmin";
+  role: "admin" | "superadmin" | "verifier";
 };
 
 type RequestItem = {
@@ -126,16 +127,18 @@ export default function AdminDashboard() {
       setRequests(reqJson.items);
     }
 
-    const serviceRes = await fetch("/api/services", { cache: "no-store" });
-    if (serviceRes.ok) {
-      const serviceJson = (await serviceRes.json()) as { items: ServiceItem[] };
-      setServices(serviceJson.items);
-    }
+    if (meJson.user.role === "admin" || meJson.user.role === "superadmin") {
+      const serviceRes = await fetch("/api/services", { cache: "no-store" });
+      if (serviceRes.ok) {
+        const serviceJson = (await serviceRes.json()) as { items: ServiceItem[] };
+        setServices(serviceJson.items);
+      }
 
-    const companyRes = await fetch("/api/customers", { cache: "no-store" });
-    if (companyRes.ok) {
-      const companyJson = (await companyRes.json()) as { items: CompanyItem[] };
-      setCompanies(companyJson.items);
+      const companyRes = await fetch("/api/customers", { cache: "no-store" });
+      if (companyRes.ok) {
+        const companyJson = (await companyRes.json()) as { items: CompanyItem[] };
+        setCompanies(companyJson.items);
+      }
     }
 
     setLoading(false);
@@ -885,11 +888,13 @@ export default function AdminDashboard() {
       </section>
 
       {me?.role === "superadmin" && <AdminManagement />}
+      {(me?.role === "admin" || me?.role === "superadmin") && <VerifierManagement />}
 
       {message && (
         <p style={{ marginTop: 0, color: "#114c8f", fontWeight: 600 }}>{message}</p>
       )}
 
+      {(me?.role === "admin" || me?.role === "superadmin") && (
       <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
         <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <Package size={24} color="#4A90E2" />
@@ -1003,7 +1008,9 @@ export default function AdminDashboard() {
           </div>
         )}
       </section>
+      )}
 
+      {(me?.role === "admin" || me?.role === "superadmin") && (
       <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
         <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <UserPlus size={24} color="#4A90E2" />
@@ -1161,7 +1168,9 @@ export default function AdminDashboard() {
           </div>
         </form>
       </section>
+      )}
 
+      {(me?.role === "admin" || me?.role === "superadmin") && (
       <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
         <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <Building size={24} color="#4A90E2" />
@@ -1293,6 +1302,7 @@ export default function AdminDashboard() {
           </div>
         </form>
       </section>
+      )}
 
       <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
         <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>

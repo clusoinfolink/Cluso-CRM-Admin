@@ -6,7 +6,7 @@ const TOKEN_NAME = "cluso_admin_token";
 
 type AdminPayload = {
   userId: string;
-  role: "admin" | "superadmin";
+  role: "admin" | "superadmin" | "verifier";
 };
 
 export function signAdminToken(payload: AdminPayload) {
