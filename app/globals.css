@@ -37,6 +37,17 @@ body {
   margin: 0 auto;
 }
 
+.portal-shell {
+  width: min(1180px, 92vw);
+  margin: 0 auto;
+  padding: 1.4rem 0 4rem;
+}
+
+.dashboard-stack {
+  display: grid;
+  gap: 1rem;
+}
+
 .glass-card {
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid rgba(46, 121, 204, 0.2);
@@ -85,6 +96,39 @@ body {
   font-weight: 600;
 }
 
+.title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.inline-alert {
+  margin: 0;
+  border-radius: 12px;
+  padding: 0.66rem 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.inline-alert-success {
+  color: #0f7b3d;
+  background: #e9faef;
+  border-color: rgba(14, 127, 69, 0.2);
+}
+
+.inline-alert-warning {
+  color: #9b7100;
+  background: #fff7dc;
+  border-color: rgba(155, 113, 0, 0.18);
+}
+
+.inline-alert-danger {
+  color: #b62d2d;
+  background: #ffe8e8;
+  border-color: rgba(182, 45, 45, 0.2);
+}
+
 .btn {
   border: 0;
   border-radius: 12px;
@@ -101,6 +145,168 @@ body {
 .btn-secondary {
   color: var(--ink);
   background: var(--panel);
+}
+
+.btn-outline-success {
+  border: 1px solid #22c55e;
+  color: #15803d;
+  background: #e9faef;
+}
+
+.btn-outline-danger {
+  border: 1px solid #ef4444;
+  color: #b91c1c;
+  background: #ffe8e8;
+}
+
+.portal-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.portal-nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.46rem 0.78rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #2c5a8a;
+  border: 1px solid #c9dcf2;
+  background: rgba(255, 255, 255, 0.88);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.portal-nav-link:hover {
+  transform: translateY(-1px);
+  border-color: #97c0eb;
+  box-shadow: 0 8px 16px rgba(44, 91, 146, 0.1);
+}
+
+.portal-nav-link.active {
+  color: #123f6e;
+  border-color: #7eb2e5;
+  background: linear-gradient(130deg, #e6f3ff, #f3f9ff);
+}
+
+.portal-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.8rem;
+}
+
+.portal-stat {
+  border: 1px solid #cce0f6;
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.portal-stat-value {
+  margin: 0.15rem 0 0;
+  font-size: 1.12rem;
+  font-weight: 800;
+}
+
+.portal-stat-label {
+  margin: 0;
+  color: #54718d;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.quick-actions-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+}
+
+.quick-action-card {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid #cae0f7;
+  border-radius: 16px;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 10px 20px rgba(26, 67, 111, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.quick-action-card:hover {
+  transform: translateY(-2px);
+  border-color: #99c2ec;
+  box-shadow: 0 14px 24px rgba(26, 67, 111, 0.14);
+}
+
+.quick-action-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.quick-action-copy {
+  margin: 0;
+  color: #5a748f;
+  font-size: 0.9rem;
+}
+
+.quick-action-link {
+  margin-top: 0.1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #1d5d99;
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.flow-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #2c5f8f;
+  display: grid;
+  gap: 0.4rem;
+  font-weight: 600;
+}
+
+.request-panel-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+}
+
+.status-pill {
+  padding: 0.2rem 0.58rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.status-pill-pending {
+  background: #fff7db;
+  color: #9d7000;
+}
+
+.status-pill-approved {
+  background: #e4faed;
+  color: #0a7f3e;
+}
+
+.status-pill-rejected {
+  background: #ffe9e9;
+  color: #b72727;
 }
 
 .request-card-grid {

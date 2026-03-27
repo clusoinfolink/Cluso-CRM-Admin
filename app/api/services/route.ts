@@ -3,17 +3,32 @@ import { z } from "zod";
 import { getAdminAuthFromRequest } from "@/lib/auth";
 import { connectMongo } from "@/lib/mongodb";
 import Service from "@/lib/models/Service";
+import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
+
+const formFieldSchema = z.object({
+  question: z.string().trim().min(1).max(200),
+  fieldType: z.enum(["text", "number"]),
+});
 
 const createServiceSchema = z.object({
   name: z.string().min(2),
   description: z.string().optional().default(""),
   defaultPrice: z.coerce.number().min(0).optional(),
-  defaultCurrency: z.enum(["INR", "USD"]).optional().default("INR"),
+  defaultCurrency: z.enum(SUPPORTED_CURRENCIES).optional().default("INR"),
+  formFields: z.array(formFieldSchema).optional().default([]),
+});
+
+const updateServiceFormSchema = z.object({
+  serviceId: z.string().min(1),
+  formFields: z.array(formFieldSchema),
 });
 
 export async function GET(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
-  if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
+  if (
+    !auth ||
+    (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -27,6 +42,10 @@ export async function GET(req: NextRequest) {
       description: item.description ?? "",
       defaultPrice: typeof item.defaultPrice === "number" ? item.defaultPrice : null,
       defaultCurrency: item.defaultCurrency ?? "INR",
+      formFields: (item.formFields ?? []).map((field) => ({
+        question: field.question,
+        fieldType: field.fieldType,
+      })),
     })),
   });
 }
@@ -62,6 +81,7 @@ export async function POST(req: NextRequest) {
     description: parsed.data.description?.trim() ?? "",
     defaultPrice: parsed.data.defaultPrice,
     defaultCurrency: parsed.data.defaultCurrency,
+    formFields: parsed.data.formFields,
   });
 
   return NextResponse.json(
@@ -73,8 +93,55 @@ export async function POST(req: NextRequest) {
         description: service.description ?? "",
         defaultPrice: typeof service.defaultPrice === "number" ? service.defaultPrice : null,
         defaultCurrency: service.defaultCurrency ?? "INR",
+        formFields: (service.formFields ?? []).map((field) => ({
+          question: field.question,
+          fieldType: field.fieldType,
+        })),
       },
     },
     { status: 201 },
   );
+}
+
+export async function PATCH(req: NextRequest) {
+  const auth = await getAdminAuthFromRequest(req);
+  if (
+    !auth ||
+    (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
+  ) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await req.json();
+  const parsed = updateServiceFormSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid input." }, { status: 400 });
+  }
+
+  await connectMongo();
+
+  const updated = await Service.findByIdAndUpdate(
+    parsed.data.serviceId,
+    { formFields: parsed.data.formFields },
+    { new: true },
+  ).lean();
+
+  if (!updated) {
+    return NextResponse.json({ error: "Service not found." }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    message: "Service form updated.",
+    item: {
+      id: String(updated._id),
+      name: updated.name,
+      description: updated.description ?? "",
+      defaultPrice: typeof updated.defaultPrice === "number" ? updated.defaultPrice : null,
+      defaultCurrency: updated.defaultCurrency ?? "INR",
+      formFields: (updated.formFields ?? []).map((field) => ({
+        question: field.question,
+        fieldType: field.fieldType,
+      })),
+    },
+  });
 }

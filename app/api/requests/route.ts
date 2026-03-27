@@ -43,11 +43,15 @@ export async function GET(req: NextRequest) {
     .lean();
 
   const customerIds = [...new Set(items.map((item) => String(item.customer)))];
+  const creatorIds = [...new Set(items.map((item) => String(item.createdBy)))];
   const customers = await User.find({ _id: { $in: customerIds } }).lean();
+  const creators = await User.find({ _id: { $in: creatorIds } }).lean();
   const customerMap = new Map(customers.map((c) => [String(c._id), c]));
+  const creatorMap = new Map(creators.map((c) => [String(c._id), c]));
 
   const enriched = items.map((item) => {
     const customer = customerMap.get(String(item.customer));
+    const creator = creatorMap.get(String(item.createdBy));
 
     return {
       _id: String(item._id),
@@ -57,6 +61,7 @@ export async function GET(req: NextRequest) {
       status: item.status,
       rejectionNote: item.rejectionNote ?? "",
       createdAt: item.createdAt,
+      createdByName: creator?.name ?? "Unknown",
       customerName: customer?.name ?? "Unknown",
       customerEmail: customer?.email ?? "Unknown",
     };

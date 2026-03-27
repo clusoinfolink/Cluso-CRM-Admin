@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getAdminAuthFromRequest } from "@/lib/auth";
 import { connectMongo } from "@/lib/mongodb";
+import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
 import Service from "@/lib/models/Service";
 import User from "@/lib/models/User";
 
@@ -15,7 +16,7 @@ const schema = z.object({
       z.object({
         serviceId: z.string().min(1),
         price: z.coerce.number().min(0),
-        currency: z.enum(["INR", "USD"]),
+        currency: z.enum(SUPPORTED_CURRENCIES),
       }),
     )
     .optional()
@@ -29,7 +30,7 @@ const updateSchema = z.object({
       z.object({
         serviceId: z.string().min(1),
         price: z.coerce.number().min(0),
-        currency: z.enum(["INR", "USD"]),
+        currency: z.enum(SUPPORTED_CURRENCIES),
       }),
     )
     .optional()
