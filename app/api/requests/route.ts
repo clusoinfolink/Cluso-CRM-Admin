@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   await connectMongo();
 
-  let requestFilter: Record<string, unknown> = { candidateFormStatus: "submitted" };
+  let requestFilter: Record<string, unknown> = {};
 
   if (auth.role === "verifier") {
     const verifier = await User.findOne({ _id: auth.userId, role: "verifier" }).lean();
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ items: [] });
     }
 
-    requestFilter = { customer: { $in: assignedCompanies }, candidateFormStatus: "submitted" };
+    requestFilter = { customer: { $in: assignedCompanies } };
   }
 
   const items = await VerificationRequest.find(requestFilter)

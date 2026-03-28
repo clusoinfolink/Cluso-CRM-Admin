@@ -230,14 +230,26 @@ export default function RequestsPage() {
                     <div key={`${serviceResponse.serviceId}-${answerIndex}`}>
                       <span style={{ fontWeight: 600 }}>{answer.question}:</span>{" "}
                       {answer.fieldType === "file" && answer.fileData ? (
-                        <a
-                          href={answer.fileData}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: "#1f5ea2", fontWeight: 700 }}
-                        >
-                          {answer.fileName || "Open attachment"}
-                        </a>
+                        <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, color: "#1f5ea2" }}>
+                            {answer.fileName || "attachment"}
+                          </span>
+                          <a
+                            href={answer.fileData}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: "#1f5ea2", textDecoration: "underline" }}
+                          >
+                            Open
+                          </a>
+                          <a
+                            href={answer.fileData}
+                            download={answer.fileName || `attachment-${answerIndex}`}
+                            style={{ color: "#1f5ea2", textDecoration: "underline" }}
+                          >
+                            Download
+                          </a>
+                        </span>
                       ) : (
                         answer.value || "-"
                       )}
