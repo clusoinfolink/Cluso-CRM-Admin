@@ -23,6 +23,23 @@ export type RequestItem = {
   createdByName?: string;
   status: RequestStatus;
   rejectionNote: string;
+  candidateFormStatus?: "pending" | "submitted";
+  candidateSubmittedAt?: string | null;
+  selectedServices?: CompanyServiceSelection[];
+  candidateFormResponses?: Array<{
+    serviceId: string;
+    serviceName: string;
+    answers: Array<{
+      question: string;
+      fieldType: "text" | "long_text" | "number" | "file";
+      required?: boolean;
+      value: string;
+      fileName?: string;
+      fileMimeType?: string;
+      fileSize?: number | null;
+      fileData?: string;
+    }>;
+  }>;
   createdAt: string;
   customerName: string;
   customerEmail: string;
@@ -30,7 +47,8 @@ export type RequestItem = {
 
 export type ServiceFormField = {
   question: string;
-  fieldType: "text" | "number";
+  fieldType: "text" | "long_text" | "number" | "file";
+  required: boolean;
 };
 
 export type ServiceItem = {

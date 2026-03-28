@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo, useState } from "react";
 import {
   Archive,
   CheckCircle,
@@ -18,9 +19,30 @@ import { RequestItem } from "@/lib/types";
 
 type SectionType = "pending" | "approved" | "rejected" | "archived";
 
+const REQUESTS_QUERY_KEY = ["admin-requests"];
+const REQUESTS_STALE_TIME_MS = 5 * 60 * 1000;
+
+async function fetchRequests() {
+  const reqRes = await fetch("/api/requests", { cache: "no-store" });
+  if (!reqRes.ok) {
+    throw new Error("Could not load requests.");
+  }
+
+  const reqJson = (await reqRes.json()) as { items: RequestItem[] };
+  return reqJson.items ?? [];
+}
+
 export default function RequestsPage() {
   const { me, loading, logout } = useAdminSession();
-  const [requests, setRequests] = useState<RequestItem[]>([]);
+  const queryClient = useQueryClient();
+  const requestsQuery = useQuery<RequestItem[]>({
+    queryKey: REQUESTS_QUERY_KEY,
+    queryFn: fetchRequests,
+    staleTime: REQUESTS_STALE_TIME_MS,
+    enabled: Boolean(me),
+  });
+
+  const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const [searchText, setSearchText] = useState("");
   const [archivedSearchText, setArchivedSearchText] = useState("");
   const [message, setMessage] = useState("");
@@ -31,37 +53,15 @@ export default function RequestsPage() {
     rejected: false,
     archived: false,
   });
-  const [archiveCutoffMs, setArchiveCutoffMs] = useState(0);
-  const [loadingRequests, setLoadingRequests] = useState(true);
+  const [archiveCutoffMs] = useState(() => Date.now() - 14 * 24 * 60 * 60 * 1000);
 
-  async function loadRequests() {
-    setLoadingRequests(true);
-    const reqRes = await fetch("/api/requests", { cache: "no-store" });
-    if (reqRes.ok) {
-      const reqJson = (await reqRes.json()) as { items: RequestItem[] };
-      setRequests(reqJson.items);
-    }
-    setArchiveCutoffMs(Date.now() - 14 * 24 * 60 * 60 * 1000);
-    setLoadingRequests(false);
-  }
-
-  useEffect(() => {
-    if (!me) {
-      return;
-    }
-
-    let active = true;
-    (async () => {
-      await loadRequests();
-      if (!active) {
-        return;
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [me]);
+  const loadRequests = useCallback(async (force = true) => {
+    await queryClient.fetchQuery({
+      queryKey: REQUESTS_QUERY_KEY,
+      queryFn: fetchRequests,
+      staleTime: force ? 0 : REQUESTS_STALE_TIME_MS,
+    });
+  }, [queryClient]);
 
   async function updateStatus(requestId: string, status: "approved" | "rejected", rejectionNote?: string) {
     setMessage("");
@@ -188,6 +188,70 @@ export default function RequestsPage() {
   const approvedRequests = activeRequests.filter((item) => item.status === "approved");
   const rejectedRequests = activeRequests.filter((item) => item.status === "rejected");
 
+  function renderCandidateSubmission(item: RequestItem) {
+    return (
+      <>
+        <div className="request-card-label">Candidate Form Submitted</div>
+        <div className="request-card-value">
+          {item.candidateSubmittedAt
+            ? new Date(item.candidateSubmittedAt).toLocaleString()
+            : "Not submitted"}
+        </div>
+
+        <div className="request-card-label">Selected Services</div>
+        <div className="request-card-value">
+          {item.selectedServices && item.selectedServices.length > 0
+            ? item.selectedServices.map((service) => service.serviceName).join(", ")
+            : "-"}
+        </div>
+
+        <div className="request-card-label">Submitted Form Answers</div>
+        <div className="request-card-value" style={{ display: "grid", gap: "0.4rem" }}>
+          {!item.candidateFormResponses || item.candidateFormResponses.length === 0 ? (
+            <span>-</span>
+          ) : (
+            item.candidateFormResponses.map((serviceResponse) => (
+              <div
+                key={`${item._id}-${serviceResponse.serviceId}`}
+                style={{
+                  border: "1px solid #d7e5f4",
+                  borderRadius: "10px",
+                  padding: "0.55rem 0.6rem",
+                  background: "#f8fbff",
+                  display: "grid",
+                  gap: "0.35rem",
+                }}
+              >
+                <strong>{serviceResponse.serviceName}</strong>
+                {serviceResponse.answers.length === 0 ? (
+                  <span>-</span>
+                ) : (
+                  serviceResponse.answers.map((answer, answerIndex) => (
+                    <div key={`${serviceResponse.serviceId}-${answerIndex}`}>
+                      <span style={{ fontWeight: 600 }}>{answer.question}:</span>{" "}
+                      {answer.fieldType === "file" && answer.fileData ? (
+                        <a
+                          href={answer.fileData}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "#1f5ea2", fontWeight: 700 }}
+                        >
+                          {answer.fileName || "Open attachment"}
+                        </a>
+                      ) : (
+                        answer.value || "-"
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </>
+    );
+  }
+
   function renderRequestSection(
     title: string,
     items: RequestItem[],
@@ -260,6 +324,8 @@ export default function RequestsPage() {
 
                       <div className="request-card-label">Created</div>
                       <div className="request-card-value">{new Date(item.createdAt).toLocaleString()}</div>
+
+                      {renderCandidateSubmission(item)}
 
                       {(statusType === "pending" || statusType === "rejected" || (statusType === "approved" && me?.role === "superadmin")) && (
                         <div className="request-card-actions" style={{ marginTop: "0.35rem" }}>
@@ -370,6 +436,8 @@ export default function RequestsPage() {
                       <div className="request-card-label">Created</div>
                       <div className="request-card-value">{new Date(item.createdAt).toLocaleString()}</div>
 
+                      {renderCandidateSubmission(item)}
+
                       {item.status === "rejected" && (
                         <div className="request-card-actions" style={{ marginTop: "0.35rem" }}>
                           <button type="button" className="btn btn-secondary btn-outline-success" onClick={() => approveRequest(item._id)}>
@@ -389,7 +457,7 @@ export default function RequestsPage() {
     );
   }
 
-  if (loading || !me || loadingRequests) {
+  if (loading || !me || requestsQuery.isLoading) {
     return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
   }
 

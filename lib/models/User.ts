@@ -8,7 +8,15 @@ const UserSchema = new Schema(
     passwordHash: { type: String, required: true },
     role: {
       type: String,
-      enum: ["superadmin", "admin", "verifier", "customer", "delegate"],
+      enum: [
+        "superadmin",
+        "admin",
+        "verifier",
+        "customer",
+        "delegate",
+        "delegate_user",
+        "candidate",
+      ],
       required: true,
     },
     assignedCompanies: [
@@ -40,10 +48,18 @@ const UserSchema = new Schema(
 
 export type UserDocument = InferSchemaType<typeof UserSchema> & { _id: string };
 
+const existingUserRoleValues = models.User?.schema.path("role")?.options?.enum;
+const hasCandidateRole =
+  Array.isArray(existingUserRoleValues) && existingUserRoleValues.includes("candidate");
+const hasDelegateUserRole =
+  Array.isArray(existingUserRoleValues) && existingUserRoleValues.includes("delegate_user");
+
 if (
   models.User &&
   (!models.User.schema.path("selectedServices") ||
-    !models.User.schema.path("assignedCompanies"))
+    !models.User.schema.path("assignedCompanies") ||
+    !hasCandidateRole ||
+    !hasDelegateUserRole)
 ) {
   delete models.User;
 }

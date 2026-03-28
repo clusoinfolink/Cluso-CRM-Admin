@@ -6,7 +6,8 @@ import type { SupportedCurrency } from "@/lib/currencies";
 
 export type ServiceFormField = {
   question: string;
-  fieldType: "text" | "number";
+  fieldType: "text" | "long_text" | "number" | "file";
+  required: boolean;
 };
 
 export type ServiceItemForForm = {
@@ -46,7 +47,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
 
     setDrafts((prev) => ({
       ...prev,
-      [activeServiceId]: [...fields, { question: "", fieldType: "text" }],
+      [activeServiceId]: [...fields, { question: "", fieldType: "text", required: false }],
     }));
   }
 
@@ -63,7 +64,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
     }));
   }
 
-  function updateFieldType(index: number, fieldType: "text" | "number") {
+  function updateFieldType(index: number, fieldType: "text" | "long_text" | "number" | "file") {
     if (!activeServiceId) {
       return;
     }
@@ -72,6 +73,19 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
         idx === index ? { ...item, fieldType } : item,
+      ),
+    }));
+  }
+
+  function updateFieldRequired(index: number, required: boolean) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) =>
+        idx === index ? { ...item, required } : item,
       ),
     }));
   }
@@ -99,6 +113,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
     const cleaned = fields.map((item) => ({
       question: item.question.trim(),
       fieldType: item.fieldType,
+      required: Boolean(item.required),
     }));
 
     const hasEmptyQuestion = cleaned.some((item) => !item.question);
@@ -141,7 +156,11 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
         Service Form Builder
       </h2>
       <p style={{ color: "#5a748f", marginTop: 0 }}>
-        Create or edit the form structure for each service. Use question + field type (text or number).
+        Create or edit Google-Forms-style questions with short text, long text, number, file upload,
+        and required toggles.
+      </p>
+      <p style={{ color: "#4f6781", marginTop: 0, fontSize: "0.9rem" }}>
+        File upload questions accept only PDF, JPG, and PNG files up to 5MB.
       </p>
 
       {services.length === 0 ? (
@@ -181,7 +200,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
                   background: "#f8fbff",
                   display: "grid",
                   gap: "0.6rem",
-                  gridTemplateColumns: "minmax(220px, 1fr) minmax(140px, 180px) auto",
+                  gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 200px) minmax(120px, 140px) auto",
                   alignItems: "end",
                 }}
               >
@@ -200,11 +219,38 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
                   <select
                     className="input"
                     value={field.fieldType}
-                    onChange={(e) => updateFieldType(index, e.target.value as "text" | "number")}
+                    onChange={(e) =>
+                      updateFieldType(
+                        index,
+                        e.target.value as "text" | "long_text" | "number" | "file",
+                      )
+                    }
                   >
-                    <option value="text">Text Field</option>
-                    <option value="number">Number Field</option>
+                    <option value="text">Short Text</option>
+                    <option value="long_text">Long Text</option>
+                    <option value="number">Number</option>
+                    <option value="file">File Upload</option>
                   </select>
+                </div>
+                <div>
+                  <label className="label">Required</label>
+                  <label
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.45rem",
+                      fontWeight: 600,
+                      color: "#2a425d",
+                      minHeight: "2.6rem",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(field.required)}
+                      onChange={(e) => updateFieldRequired(index, e.target.checked)}
+                    />
+                    Must answer
+                  </label>
                 </div>
                 <button
                   type="button"
@@ -215,6 +261,22 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
                   <Trash2 size={16} />
                   Remove
                 </button>
+
+                {field.fieldType === "file" ? (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      color: "#476686",
+                      fontSize: "0.86rem",
+                      background: "#eef6ff",
+                      border: "1px solid #d2e6fb",
+                      borderRadius: "0.5rem",
+                      padding: "0.5rem 0.6rem",
+                    }}
+                  >
+                    Allowed files: PDF, JPG, PNG. Maximum size: 5MB.
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

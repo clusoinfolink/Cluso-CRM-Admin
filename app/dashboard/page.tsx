@@ -1,7 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Building, ListFilter, Package, Shield, ShieldAlert, UserCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  Archive,
+  ArrowRight,
+  Building,
+  CheckCircle2,
+  Clock,
+  ListFilter,
+  Package,
+  Shield,
+  ShieldAlert,
+  UserCheck,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import { RequestItem, ServiceItem } from "@/lib/types";
@@ -10,6 +24,8 @@ import { useEffect, useState } from "react";
 type CountCard = {
   label: string;
   value: number;
+  icon: LucideIcon;
+  tone: "sky" | "emerald" | "amber" | "rose" | "violet" | "cyan";
 };
 
 export default function AdminDashboardOverviewPage() {
@@ -121,20 +137,20 @@ export default function AdminDashboardOverviewPage() {
   const rejectedCount = requests.filter((item) => item.status === "rejected").length;
 
   const cards: CountCard[] = [
-    { label: "Pending Requests", value: pendingCount },
-    { label: "Approved Requests", value: approvedCount },
-    { label: "Rejected Requests", value: rejectedCount },
-    { label: "Archived Requests", value: archivedCount },
-    { label: "Services", value: servicesCount },
+    { label: "Pending Requests", value: pendingCount, icon: Clock, tone: "amber" },
+    { label: "Approved Requests", value: approvedCount, icon: CheckCircle2, tone: "emerald" },
+    { label: "Rejected Requests", value: rejectedCount, icon: AlertTriangle, tone: "rose" },
+    { label: "Archived Requests", value: archivedCount, icon: Archive, tone: "violet" },
+    { label: "Services", value: servicesCount, icon: Package, tone: "sky" },
   ];
 
   if (me.role === "admin" || me.role === "superadmin") {
-    cards.push({ label: "Companies", value: companiesCount });
-    cards.push({ label: "Verifiers", value: verifiersCount });
+    cards.push({ label: "Companies", value: companiesCount, icon: Building, tone: "cyan" });
+    cards.push({ label: "Verifiers", value: verifiersCount, icon: Users, tone: "sky" });
   }
 
   if (me.role === "superadmin") {
-    cards.push({ label: "Admins", value: adminsCount });
+    cards.push({ label: "Admins", value: adminsCount, icon: Shield, tone: "violet" });
   }
 
   return (
@@ -151,12 +167,20 @@ export default function AdminDashboardOverviewPage() {
       ) : null}
 
       <section className="portal-stats-grid" aria-label="Admin overview metrics">
-        {cards.map((item) => (
-          <article key={item.label} className="portal-stat">
-            <p className="portal-stat-label">{item.label}</p>
-            <p className="portal-stat-value">{item.value}</p>
-          </article>
-        ))}
+        {cards.map((item) => {
+          const Icon = item.icon;
+          return (
+            <article key={item.label} className={`portal-stat portal-stat-${item.tone}`}>
+              <div className="portal-stat-head">
+                <span className="portal-stat-icon" aria-hidden="true">
+                  <Icon size={18} />
+                </span>
+                <p className="portal-stat-value">{item.value}</p>
+              </div>
+              <p className="portal-stat-label">{item.label}</p>
+            </article>
+          );
+        })}
       </section>
 
       <section className="quick-actions-grid" aria-label="Admin quick actions">

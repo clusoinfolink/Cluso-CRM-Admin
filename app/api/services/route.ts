@@ -7,7 +7,8 @@ import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
 
 const formFieldSchema = z.object({
   question: z.string().trim().min(1).max(200),
-  fieldType: z.enum(["text", "number"]),
+  fieldType: z.enum(["text", "long_text", "number", "file"]),
+  required: z.boolean().optional().default(false),
 });
 
 const createServiceSchema = z.object({
@@ -45,6 +46,7 @@ export async function GET(req: NextRequest) {
       formFields: (item.formFields ?? []).map((field) => ({
         question: field.question,
         fieldType: field.fieldType,
+        required: Boolean(field.required),
       })),
     })),
   });
@@ -96,6 +98,7 @@ export async function POST(req: NextRequest) {
         formFields: (service.formFields ?? []).map((field) => ({
           question: field.question,
           fieldType: field.fieldType,
+          required: Boolean(field.required),
         })),
       },
     },
@@ -141,6 +144,7 @@ export async function PATCH(req: NextRequest) {
       formFields: (updated.formFields ?? []).map((field) => ({
         question: field.question,
         fieldType: field.fieldType,
+        required: Boolean(field.required),
       })),
     },
   });

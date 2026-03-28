@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { FormEvent, useCallback, useState } from "react";
 import { ChevronDown, ChevronUp, Package, Plus, Tag } from "lucide-react";
 import ServiceFormBuilder from "@/components/ServiceFormBuilder";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
@@ -9,9 +10,30 @@ import { SUPPORTED_CURRENCIES, SupportedCurrency } from "@/lib/currencies";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import { ServiceItem } from "@/lib/types";
 
+const SERVICES_QUERY_KEY = ["admin-services"];
+const SERVICES_STALE_TIME_MS = 5 * 60 * 1000;
+
+async function fetchServices() {
+  const serviceRes = await fetch("/api/services", { cache: "no-store" });
+  if (!serviceRes.ok) {
+    throw new Error("Could not load services.");
+  }
+
+  const serviceJson = (await serviceRes.json()) as { items: ServiceItem[] };
+  return serviceJson.items ?? [];
+}
+
 export default function ServicesPage() {
   const { me, loading, logout } = useAdminSession();
-  const [services, setServices] = useState<ServiceItem[]>([]);
+  const queryClient = useQueryClient();
+  const servicesQuery = useQuery<ServiceItem[]>({
+    queryKey: SERVICES_QUERY_KEY,
+    queryFn: fetchServices,
+    staleTime: SERVICES_STALE_TIME_MS,
+    enabled: Boolean(me),
+  });
+
+  const services = servicesQuery.data ?? [];
   const [message, setMessage] = useState("");
   const [newServiceName, setNewServiceName] = useState("");
   const [newServiceDescription, setNewServiceDescription] = useState("");
@@ -19,33 +41,13 @@ export default function ServicesPage() {
   const [newServiceDefaultCurrency, setNewServiceDefaultCurrency] = useState<SupportedCurrency>("INR");
   const [catalogServicesCollapsed, setCatalogServicesCollapsed] = useState(true);
 
-  async function loadServices() {
-    const serviceRes = await fetch("/api/services", { cache: "no-store" });
-    if (!serviceRes.ok) {
-      return;
-    }
-
-    const serviceJson = (await serviceRes.json()) as { items: ServiceItem[] };
-    setServices(serviceJson.items);
-  }
-
-  useEffect(() => {
-    if (!me) {
-      return;
-    }
-
-    let active = true;
-    (async () => {
-      await loadServices();
-      if (!active) {
-        return;
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [me]);
+  const loadServices = useCallback(async (force = true) => {
+    await queryClient.fetchQuery({
+      queryKey: SERVICES_QUERY_KEY,
+      queryFn: fetchServices,
+      staleTime: force ? 0 : SERVICES_STALE_TIME_MS,
+    });
+  }, [queryClient]);
 
   async function createService(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -92,7 +94,7 @@ export default function ServicesPage() {
     await loadServices();
   }
 
-  if (loading || !me) {
+  if (loading || servicesQuery.isLoading || !me) {
     return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
   }
 

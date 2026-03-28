@@ -1,11 +1,12 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import { SUPPORTED_CURRENCIES, type SupportedCurrency } from "@/lib/currencies";
 
-export type ServiceFormFieldType = "text" | "number";
+export type ServiceFormFieldType = "text" | "long_text" | "number" | "file";
 
 export type ServiceFormField = {
   question: string;
   fieldType: ServiceFormFieldType;
+  required: boolean;
 };
 
 export interface IService extends Document {
@@ -27,14 +28,26 @@ const serviceSchema = new Schema<IService>(
     formFields: [
       {
         question: { type: String, required: true },
-        fieldType: { type: String, enum: ["text", "number"], required: true },
+        fieldType: {
+          type: String,
+          enum: ["text", "long_text", "number", "file"],
+          required: true,
+        },
+        required: { type: Boolean, default: false },
       },
     ],
   },
   { timestamps: true },
 );
 
-if (mongoose.models.Service && !mongoose.models.Service.schema.path("formFields")) {
+const hasEnhancedServiceFields = Boolean(
+  mongoose.models.Service?.schema.path("formFields.required"),
+);
+
+if (
+  mongoose.models.Service &&
+  (!mongoose.models.Service.schema.path("formFields") || !hasEnhancedServiceFields)
+) {
   delete mongoose.models.Service;
 }
 

@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   await connectMongo();
 
-  let requestFilter = {};
+  let requestFilter: Record<string, unknown> = { candidateFormStatus: "submitted" };
 
   if (auth.role === "verifier") {
     const verifier = await User.findOne({ _id: auth.userId, role: "verifier" }).lean();
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ items: [] });
     }
 
-    requestFilter = { customer: { $in: assignedCompanies } };
+    requestFilter = { customer: { $in: assignedCompanies }, candidateFormStatus: "submitted" };
   }
 
   const items = await VerificationRequest.find(requestFilter)
@@ -60,6 +60,28 @@ export async function GET(req: NextRequest) {
       candidatePhone: item.candidatePhone,
       status: item.status,
       rejectionNote: item.rejectionNote ?? "",
+      candidateFormStatus: item.candidateFormStatus ?? "pending",
+      candidateSubmittedAt: item.candidateSubmittedAt ?? null,
+      selectedServices: (item.selectedServices ?? []).map((service) => ({
+        serviceId: String(service.serviceId),
+        serviceName: service.serviceName,
+        price: service.price,
+        currency: service.currency,
+      })),
+      candidateFormResponses: (item.candidateFormResponses ?? []).map((serviceResponse) => ({
+        serviceId: String(serviceResponse.serviceId),
+        serviceName: serviceResponse.serviceName,
+        answers: (serviceResponse.answers ?? []).map((answer) => ({
+          question: answer.question,
+          fieldType: answer.fieldType,
+          required: Boolean(answer.required),
+          value: answer.value,
+          fileName: answer.fileName ?? "",
+          fileMimeType: answer.fileMimeType ?? "",
+          fileSize: answer.fileSize ?? null,
+          fileData: answer.fileData ?? "",
+        })),
+      })),
       createdAt: item.createdAt,
       createdByName: creator?.name ?? "Unknown",
       customerName: customer?.name ?? "Unknown",
@@ -120,6 +142,21 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
+  const requestDoc = await VerificationRequest.findById(parsed.data.requestId)
+    .select("candidateFormStatus")
+    .lean();
+
+  if (!requestDoc) {
+    return NextResponse.json({ error: "Request not found." }, { status: 404 });
+  }
+
+  if (requestDoc.candidateFormStatus !== "submitted") {
+    return NextResponse.json(
+      { error: "Candidate form is not submitted yet." },
+      { status: 400 },
+    );
+  }
+
   const updateData =
     parsed.data.status === "approved"
       ? { status: "approved", rejectionNote: "" }
@@ -127,8 +164,14 @@ export async function PATCH(req: NextRequest) {
 
   const updated = await VerificationRequest.findByIdAndUpdate(
     parsed.data.requestId,
-    updateData,
-    { new: true },
+    {
+      ...updateData,
+      candidateFormStatus: "submitted",
+    },
+    {
+      new: true,
+      runValidators: true,
+    },
   ).lean();
 
   if (!updated) {
