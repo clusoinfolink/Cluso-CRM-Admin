@@ -26,6 +26,7 @@ type CountCard = {
   value: number;
   icon: LucideIcon;
   tone: "sky" | "emerald" | "amber" | "rose" | "violet" | "cyan";
+  href: string;
 };
 
 export default function AdminDashboardOverviewPage() {
@@ -137,20 +138,20 @@ export default function AdminDashboardOverviewPage() {
   const rejectedCount = requests.filter((item) => item.status === "rejected").length;
 
   const cards: CountCard[] = [
-    { label: "Pending Requests", value: pendingCount, icon: Clock, tone: "amber" },
-    { label: "Approved Requests", value: approvedCount, icon: CheckCircle2, tone: "emerald" },
-    { label: "Rejected Requests", value: rejectedCount, icon: AlertTriangle, tone: "rose" },
-    { label: "Archived Requests", value: archivedCount, icon: Archive, tone: "violet" },
-    { label: "Services", value: servicesCount, icon: Package, tone: "sky" },
+    { label: "Pending Requests", value: pendingCount, icon: Clock, tone: "amber", href: "/dashboard/requests" },
+    { label: "Approved Requests", value: approvedCount, icon: CheckCircle2, tone: "emerald", href: "/dashboard/requests" },
+    { label: "Rejected Requests", value: rejectedCount, icon: AlertTriangle, tone: "rose", href: "/dashboard/requests" },
+    { label: "Archived Requests", value: archivedCount, icon: Archive, tone: "violet", href: "/dashboard/requests" },
+    { label: "Services", value: servicesCount, icon: Package, tone: "sky", href: "/dashboard/services" },
   ];
 
   if (me.role === "admin" || me.role === "superadmin") {
-    cards.push({ label: "Companies", value: companiesCount, icon: Building, tone: "cyan" });
-    cards.push({ label: "Verifiers", value: verifiersCount, icon: Users, tone: "sky" });
+    cards.push({ label: "Companies", value: companiesCount, icon: Building, tone: "cyan", href: "/dashboard/companies" });
+    cards.push({ label: "Verifiers", value: verifiersCount, icon: Users, tone: "sky", href: "/dashboard/team" });
   }
 
   if (me.role === "superadmin") {
-    cards.push({ label: "Admins", value: adminsCount, icon: Shield, tone: "violet" });
+    cards.push({ label: "Admins", value: adminsCount, icon: Shield, tone: "violet", href: "/dashboard/team" });
   }
 
   return (
@@ -170,7 +171,12 @@ export default function AdminDashboardOverviewPage() {
         {cards.map((item) => {
           const Icon = item.icon;
           return (
-            <article key={item.label} className={`portal-stat portal-stat-${item.tone}`}>
+            <Link
+              key={item.label}
+              href={item.href}
+              className={`portal-stat portal-stat-link portal-stat-${item.tone}`}
+              aria-label={`Open ${item.label.toLowerCase()}`}
+            >
               <div className="portal-stat-head">
                 <span className="portal-stat-icon" aria-hidden="true">
                   <Icon size={18} />
@@ -178,7 +184,7 @@ export default function AdminDashboardOverviewPage() {
                 <p className="portal-stat-value">{item.value}</p>
               </div>
               <p className="portal-stat-label">{item.label}</p>
-            </article>
+            </Link>
           );
         })}
       </section>

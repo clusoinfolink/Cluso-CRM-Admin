@@ -60,7 +60,7 @@ export default function SettingsPage() {
           <KeyRound size={20} color="#4A90E2" />
           Change Password
         </h2>
-        <p style={{ color: "#5a748f", marginTop: 0 }}>
+        <p style={{ color: "#6C757D", marginTop: 0 }}>
           Use a strong password and avoid reusing previous credentials.
         </p>
 

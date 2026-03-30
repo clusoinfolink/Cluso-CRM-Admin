@@ -159,7 +159,7 @@ export default function VerifierManagement() {
         <UserCheck size={24} color="#4A90E2" />
         Verifier Management
       </h2>
-      <p style={{ color: "#5a748f" }}>
+      <p style={{ color: "#6C757D" }}>
         Create verifier (employee) accounts and assign only the company access they are allowed to review.
       </p>
 
@@ -167,8 +167,8 @@ export default function VerifierManagement() {
         <div
           style={{
             padding: "0.8rem",
-            background: "#f8fbff",
-            border: "1px solid #d4e2f2",
+            background: "#F8F9FA",
+            border: "1px solid #E0E0E0",
             borderRadius: "0.4rem",
             marginBottom: "1rem",
           }}
@@ -202,7 +202,7 @@ export default function VerifierManagement() {
         <div style={{ gridColumn: "1 / -1", display: "grid", gap: "0.5rem" }}>
           <label className="label">Grant Company Access At Creation</label>
           {companies.length === 0 && (
-            <div style={{ color: "#5a748f" }}>No companies found. Create company accounts first.</div>
+            <div style={{ color: "#6C757D" }}>No companies found. Create company accounts first.</div>
           )}
           {companies.map((company) => (
             <label key={`create-${company.id}`} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 500 }}>

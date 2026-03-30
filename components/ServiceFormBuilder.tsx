@@ -155,16 +155,16 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
         <ClipboardList size={24} color="#4A90E2" />
         Service Form Builder
       </h2>
-      <p style={{ color: "#5a748f", marginTop: 0 }}>
+      <p style={{ color: "#6C757D", marginTop: 0 }}>
         Create or edit Google-Forms-style questions with short text, long text, number, file upload,
         and required toggles.
       </p>
-      <p style={{ color: "#4f6781", marginTop: 0, fontSize: "0.9rem" }}>
+      <p style={{ color: "#6C757D", marginTop: 0, fontSize: "0.9rem" }}>
         File upload questions accept only PDF, JPG, and PNG files up to 5MB.
       </p>
 
       {services.length === 0 ? (
-        <p style={{ margin: 0, color: "#5a748f" }}>Add services in Service Catalog before creating forms.</p>
+        <p style={{ margin: 0, color: "#6C757D" }}>Add services in Service Catalog before creating forms.</p>
       ) : (
         <form onSubmit={saveForm} style={{ display: "grid", gap: "0.8rem" }}>
           <div>
@@ -185,7 +185,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
 
           <div style={{ display: "grid", gap: "0.6rem" }}>
             {fields.length === 0 && (
-              <div style={{ color: "#5a748f" }}>
+              <div style={{ color: "#6C757D" }}>
                 No fields yet. Click Add Field to start this service form.
               </div>
             )}
@@ -194,10 +194,10 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
               <div
                 key={`${activeServiceId}-${index}`}
                 style={{
-                  border: "1px solid #d4e2f2",
+                  border: "1px solid #E0E0E0",
                   borderRadius: "0.65rem",
                   padding: "0.75rem",
-                  background: "#f8fbff",
+                  background: "#F8F9FA",
                   display: "grid",
                   gap: "0.6rem",
                   gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 200px) minmax(120px, 140px) auto",
@@ -240,7 +240,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
                       alignItems: "center",
                       gap: "0.45rem",
                       fontWeight: 600,
-                      color: "#2a425d",
+                      color: "#2D405E",
                       minHeight: "2.6rem",
                     }}
                   >
@@ -266,10 +266,10 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
                   <div
                     style={{
                       gridColumn: "1 / -1",
-                      color: "#476686",
+                      color: "#6C757D",
                       fontSize: "0.86rem",
-                      background: "#eef6ff",
-                      border: "1px solid #d2e6fb",
+                      background: "#E8F0FE",
+                      border: "1px solid #E0E0E0",
                       borderRadius: "0.5rem",
                       padding: "0.5rem 0.6rem",
                     }}
@@ -306,7 +306,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
             <p
               style={{
                 margin: 0,
-                color: message.toLowerCase().includes("updated") ? "#0f7b3d" : "#b02525",
+                color: message.toLowerCase().includes("updated") ? "#5CB85C" : "#2D405E",
                 fontWeight: 600,
               }}
             >

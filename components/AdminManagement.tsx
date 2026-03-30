@@ -62,12 +62,12 @@ export default function AdminManagement() {
         <Shield size={24} color="#4A90E2" />
         Admin Management
       </h2>
-      <p style={{ color: "#5a748f" }}>
+      <p style={{ color: "#6C757D" }}>
         Create new administrative accounts. Superadmins can manage the whole system and create new admins.
       </p>
       
       {message && (
-        <div style={{ padding: "0.8rem", background: "#f8fbff", border: "1px solid #d4e2f2", borderRadius: "0.4rem", marginBottom: "1rem" }}>
+        <div style={{ padding: "0.8rem", background: "#F8F9FA", border: "1px solid #E0E0E0", borderRadius: "0.4rem", marginBottom: "1rem" }}>
           {message}
         </div>
       )}
@@ -113,11 +113,11 @@ export default function AdminManagement() {
           <h3 style={{ marginTop: "1rem", marginBottom: "0.5rem" }}>Existing Admins</h3>
           <div style={{ display: "grid", gap: "0.5rem" }}>
             {admins.map(a => (
-              <div key={a.id} style={{ border: "1px solid #d4e2f2", borderRadius: "0.65rem", padding: "0.65rem 0.8rem", background: "#f8fbff", display: "flex", gap: "0.8rem", alignItems: "center" }}>
-                <Shield size={18} color={a.role === "superadmin" ? "#eab308" : "#4A90E2"} />
+              <div key={a.id} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.65rem 0.8rem", background: "#F8F9FA", display: "flex", gap: "0.8rem", alignItems: "center" }}>
+                <Shield size={18} color={a.role === "superadmin" ? "#4A90E2" : "#4A90E2"} />
                 <div>
-                  <strong>{a.name}</strong> <span style={{ color: "#5a748f", fontSize: "0.9rem" }}>({a.email})</span>
-                  <div style={{ color: "#36516e", fontSize: "0.85rem", marginTop: "0.2rem", textTransform: "capitalize" }}>
+                  <strong>{a.name}</strong> <span style={{ color: "#6C757D", fontSize: "0.9rem" }}>({a.email})</span>
+                  <div style={{ color: "#2D405E", fontSize: "0.85rem", marginTop: "0.2rem", textTransform: "capitalize" }}>
                     Role: {a.role}
                   </div>
                 </div>

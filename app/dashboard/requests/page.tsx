@@ -214,10 +214,10 @@ export default function RequestsPage() {
               <div
                 key={`${item._id}-${serviceResponse.serviceId}`}
                 style={{
-                  border: "1px solid #d7e5f4",
+                  border: "1px solid #E0E0E0",
                   borderRadius: "10px",
                   padding: "0.55rem 0.6rem",
-                  background: "#f8fbff",
+                  background: "#F8F9FA",
                   display: "grid",
                   gap: "0.35rem",
                 }}
@@ -231,21 +231,21 @@ export default function RequestsPage() {
                       <span style={{ fontWeight: 600 }}>{answer.question}:</span>{" "}
                       {answer.fieldType === "file" && answer.fileData ? (
                         <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ fontWeight: 700, color: "#1f5ea2" }}>
+                          <span style={{ fontWeight: 700, color: "#4A90E2" }}>
                             {answer.fileName || "attachment"}
                           </span>
                           <a
                             href={answer.fileData}
                             target="_blank"
                             rel="noreferrer"
-                            style={{ color: "#1f5ea2", textDecoration: "underline" }}
+                            style={{ color: "#4A90E2", textDecoration: "underline" }}
                           >
                             Open
                           </a>
                           <a
                             href={answer.fileData}
                             download={answer.fileName || `attachment-${answerIndex}`}
-                            style={{ color: "#1f5ea2", textDecoration: "underline" }}
+                            style={{ color: "#4A90E2", textDecoration: "underline" }}
                           >
                             Download
                           </a>
@@ -275,7 +275,7 @@ export default function RequestsPage() {
     const StatusIcon =
       statusType === "pending" ? Clock : statusType === "approved" ? CheckCircle : XCircle;
 
-    const iconColor = statusType === "pending" ? "#eab308" : statusType === "approved" ? "#22c55e" : "#ef4444";
+    const iconColor = statusType === "pending" ? "#4A90E2" : statusType === "approved" ? "#5CB85C" : "#2D405E";
 
     return (
       <section className="glass-card" style={{ padding: "1.2rem", marginTop: "1.2rem" }}>
@@ -379,7 +379,7 @@ export default function RequestsPage() {
           aria-label={`${isCollapsed ? "Expand" : "Collapse"} Archived Requests`}
         >
           <h3 style={{ marginTop: 0, marginBottom: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <Archive size={20} color="#6366f1" />
+            <Archive size={20} color="#4A90E2" />
             Archived Requests ({items.length})
           </h3>
           <span style={{ display: "inline-flex", alignItems: "center" }}>
@@ -388,7 +388,7 @@ export default function RequestsPage() {
         </button>
 
         {!isCollapsed && (
-          <p style={{ color: "#5a748f", marginTop: 0 }}>
+          <p style={{ color: "#6C757D", marginTop: 0 }}>
             Requests older than 14 days are automatically moved here.
           </p>
         )}
@@ -487,7 +487,7 @@ export default function RequestsPage() {
           <ListFilter size={24} color="#4A90E2" />
           Verification Requests
         </h2>
-        <p style={{ color: "#5a748f", marginTop: 0 }}>
+        <p style={{ color: "#6C757D", marginTop: 0 }}>
           Search and manage requests across Pending, Approved, and Rejected sections.
         </p>
         <div className="search-input-wrap">

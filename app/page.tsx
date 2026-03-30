@@ -39,7 +39,7 @@ export default function AdminLoginPage() {
         style={{ maxWidth: 520, margin: "0 auto", padding: "2rem" }}
       >
         <h1 style={{ marginTop: 0 }}>Cluso Admin Login</h1>
-        <p style={{ color: "#486483" }}>
+        <p style={{ color: "#6C757D" }}>
           Admin portal to issue customer logins and approve requests.
         </p>
         <form onSubmit={onSubmit} style={{ display: "grid", gap: "1rem" }}>
@@ -69,7 +69,7 @@ export default function AdminLoginPage() {
               required
             />
           </div>
-          {error && <p style={{ margin: 0, color: "#c62828" }}>{error}</p>}
+          {error && <p style={{ margin: 0, color: "#6C757D" }}>{error}</p>}
           <button className="btn btn-primary" disabled={loading}>
             {loading ? "Signing in..." : "Sign In"}
           </button>

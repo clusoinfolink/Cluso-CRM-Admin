@@ -277,7 +277,7 @@ export default function CompaniesPage() {
           <UserPlus size={24} color="#4A90E2" />
           Issue Company Login ID
         </h2>
-        <p style={{ color: "#5a748f" }}>
+        <p style={{ color: "#6C757D" }}>
           Create a customer company account. Select services and set custom price per company.
         </p>
         <form
@@ -303,11 +303,11 @@ export default function CompaniesPage() {
 
           <div style={{ gridColumn: "1 / -1" }}>
             <label className="label">Assign Services With Company-Specific Price</label>
-            <p style={{ margin: "0.2rem 0 0.6rem", color: "#5a748f", fontSize: "0.9rem" }}>
+            <p style={{ margin: "0.2rem 0 0.6rem", color: "#6C757D", fontSize: "0.9rem" }}>
               Select service, then set both rate and currency for this company.
             </p>
             {services.length === 0 ? (
-              <div style={{ color: "#5a748f" }}>Add services in Service Catalog before creating company accounts.</div>
+              <div style={{ color: "#6C757D" }}>Add services in Service Catalog before creating company accounts.</div>
             ) : (
               <div style={{ display: "grid", gap: "0.75rem" }}>
                 <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "minmax(240px, 1fr) auto", alignItems: "end" }}>
@@ -321,17 +321,17 @@ export default function CompaniesPage() {
                   </button>
                 </div>
 
-                {!issueServicesCollapsed && filteredIssueServices.length === 0 && <div style={{ color: "#5a748f" }}>No services match your search.</div>}
+                {!issueServicesCollapsed && filteredIssueServices.length === 0 && <div style={{ color: "#6C757D" }}>No services match your search.</div>}
 
                 {!issueServicesCollapsed && filteredIssueServices.map((service) => {
                   const selected = selectedCompanyServices.find((item) => item.serviceId === service.id);
                   return (
-                    <div key={service.id} style={{ border: "1px solid #d4e2f2", borderRadius: "0.65rem", padding: "0.75rem", background: "#f8fbff" }}>
+                    <div key={service.id} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
                       <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600 }}>
                         <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleCompanyService(service, e.target.checked)} />
                         {service.name}
                       </label>
-                      <div style={{ color: "#5a748f", marginTop: "0.25rem" }}>{service.description || "No description"}</div>
+                      <div style={{ color: "#6C757D", marginTop: "0.25rem" }}>{service.description || "No description"}</div>
 
                       {selected ? (
                         <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
@@ -370,7 +370,7 @@ export default function CompaniesPage() {
           <Building size={24} color="#4A90E2" />
           Update Existing Company Services
         </h2>
-        <p style={{ color: "#5a748f" }}>
+        <p style={{ color: "#6C757D" }}>
           Use this for companies already created earlier.
         </p>
 
@@ -398,12 +398,12 @@ export default function CompaniesPage() {
                 </button>
               </div>
 
-              {!manageServicesCollapsed && filteredManageServices.length === 0 ? <div style={{ color: "#5a748f" }}>No services match your search.</div> : null}
+              {!manageServicesCollapsed && filteredManageServices.length === 0 ? <div style={{ color: "#6C757D" }}>No services match your search.</div> : null}
 
               {!manageServicesCollapsed && filteredManageServices.map((service) => {
                 const selected = manageCompanyServices.find((item) => item.serviceId === service.id);
                 return (
-                  <div key={`manage-${service.id}`} style={{ border: "1px solid #d4e2f2", borderRadius: "0.65rem", padding: "0.75rem", background: "#f8fbff" }}>
+                  <div key={`manage-${service.id}`} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
                     <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600 }}>
                       <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleManageCompanyService(service, e.target.checked)} />
                       {service.name}

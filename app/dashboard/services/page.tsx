@@ -113,7 +113,7 @@ export default function ServicesPage() {
             <Package size={24} color="#4A90E2" />
             Service Catalog
           </h2>
-          <p style={{ color: "#5a748f" }}>
+          <p style={{ color: "#6C757D" }}>
             Add reusable services first. Later, assign services and custom pricing per company account.
           </p>
 
@@ -189,10 +189,10 @@ export default function ServicesPage() {
                 <div
                   key={service.id}
                   style={{
-                    border: "1px solid #d4e2f2",
+                    border: "1px solid #E0E0E0",
                     borderRadius: "0.65rem",
                     padding: "0.65rem 0.8rem",
-                    background: "#f8fbff",
+                    background: "#F8F9FA",
                     display: "flex",
                     gap: "0.8rem",
                     alignItems: "flex-start",
@@ -203,11 +203,11 @@ export default function ServicesPage() {
                   </div>
                   <div>
                     <strong>{service.name}</strong>
-                    <div style={{ color: "#5a748f", fontSize: "0.9rem" }}>{service.description || "No description"}</div>
-                    <div style={{ color: "#36516e", fontSize: "0.88rem", marginTop: "0.2rem" }}>
+                    <div style={{ color: "#6C757D", fontSize: "0.9rem" }}>{service.description || "No description"}</div>
+                    <div style={{ color: "#2D405E", fontSize: "0.88rem", marginTop: "0.2rem" }}>
                       Default: {service.defaultPrice !== null ? `${service.defaultCurrency} ${service.defaultPrice}` : "Not set"}
                     </div>
-                    <div style={{ color: "#36516e", fontSize: "0.88rem", marginTop: "0.2rem" }}>
+                    <div style={{ color: "#2D405E", fontSize: "0.88rem", marginTop: "0.2rem" }}>
                       Form Fields: {service.formFields?.length ?? 0}
                     </div>
                   </div>
