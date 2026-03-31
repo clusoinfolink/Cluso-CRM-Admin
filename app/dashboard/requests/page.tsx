@@ -1,7 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Archive,
   CheckCircle,
@@ -10,6 +11,7 @@ import {
   Clock,
   ListFilter,
   Search,
+  X,
   XCircle,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
@@ -34,6 +36,7 @@ async function fetchRequests() {
 
 export default function RequestsPage() {
   const { me, loading, logout } = useAdminSession();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const requestsQuery = useQuery<RequestItem[]>({
     queryKey: REQUESTS_QUERY_KEY,
@@ -46,7 +49,8 @@ export default function RequestsPage() {
   const [searchText, setSearchText] = useState("");
   const [archivedSearchText, setArchivedSearchText] = useState("");
   const [message, setMessage] = useState("");
-  const [expandedRequestIds, setExpandedRequestIds] = useState<Record<string, boolean>>({});
+  const [highlightedRequestId, setHighlightedRequestId] = useState("");
+  const [activeResponseRequestId, setActiveResponseRequestId] = useState("");
   const [collapsedRequestSections, setCollapsedRequestSections] = useState<Record<SectionType, boolean>>({
     pending: false,
     approved: false,
@@ -54,6 +58,8 @@ export default function RequestsPage() {
     archived: false,
   });
   const [archiveCutoffMs] = useState(() => Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+  const focusRequestId = searchParams.get("requestId")?.trim() ?? "";
 
   const loadRequests = useCallback(async (force = true) => {
     await queryClient.fetchQuery({
@@ -111,13 +117,6 @@ export default function RequestsPage() {
     await updateStatus(requestId, "approved");
   }
 
-  function toggleRequestExpand(requestId: string) {
-    setExpandedRequestIds((prev) => ({
-      ...prev,
-      [requestId]: !prev[requestId],
-    }));
-  }
-
   function toggleRequestSection(statusType: SectionType) {
     setCollapsedRequestSections((prev) => ({
       ...prev,
@@ -143,6 +142,7 @@ export default function RequestsPage() {
           item.candidatePhone,
           item.status,
           item.rejectionNote,
+          (item.selectedServices ?? []).map((service) => service.serviceName).join(" "),
         ]
           .join(" ")
           .toLowerCase();
@@ -177,6 +177,7 @@ export default function RequestsPage() {
       item.candidatePhone,
       item.status,
       item.rejectionNote,
+      (item.selectedServices ?? []).map((service) => service.serviceName).join(" "),
     ]
       .join(" ")
       .toLowerCase();
@@ -188,79 +189,103 @@ export default function RequestsPage() {
   const approvedRequests = activeRequests.filter((item) => item.status === "approved");
   const rejectedRequests = activeRequests.filter((item) => item.status === "rejected");
 
-  function renderCandidateSubmission(item: RequestItem) {
+  useEffect(() => {
+    if (!focusRequestId || requests.length === 0) {
+      return;
+    }
+
+    const targetRequest = requests.find((item) => item._id === focusRequestId);
+    if (!targetRequest) {
+      return;
+    }
+
+    const targetCreatedAtMs = new Date(targetRequest.createdAt).getTime();
+    const shouldOpenArchived = !Number.isNaN(targetCreatedAtMs) && targetCreatedAtMs <= archiveCutoffMs;
+
+    setSearchText("");
+    setArchivedSearchText("");
+    setCollapsedRequestSections((prev) => ({
+      ...prev,
+      archived: shouldOpenArchived ? false : prev.archived,
+      pending: !shouldOpenArchived && targetRequest.status === "pending" ? false : prev.pending,
+      approved: !shouldOpenArchived && targetRequest.status === "approved" ? false : prev.approved,
+      rejected: !shouldOpenArchived && targetRequest.status === "rejected" ? false : prev.rejected,
+    }));
+    setHighlightedRequestId(focusRequestId);
+
+    const timer = window.setTimeout(() => {
+      document.getElementById(`request-${focusRequestId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 80);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [archiveCutoffMs, focusRequestId, requests]);
+
+  const activeResponseRequest = useMemo(
+    () => requests.find((item) => item._id === activeResponseRequestId) ?? null,
+    [activeResponseRequestId, requests],
+  );
+
+  function renderResponseContent(item: RequestItem) {
+    if (!item.candidateFormResponses || item.candidateFormResponses.length === 0) {
+      return <p style={{ margin: 0, color: "#667892" }}>Candidate has not submitted form responses yet.</p>;
+    }
+
     return (
-      <>
-        <div className="request-card-label">Candidate Form Submitted</div>
-        <div className="request-card-value">
-          {item.candidateSubmittedAt
-            ? new Date(item.candidateSubmittedAt).toLocaleString()
-            : "Not submitted"}
-        </div>
-
-        <div className="request-card-label">Selected Services</div>
-        <div className="request-card-value">
-          {item.selectedServices && item.selectedServices.length > 0
-            ? item.selectedServices.map((service) => service.serviceName).join(", ")
-            : "-"}
-        </div>
-
-        <div className="request-card-label">Submitted Form Answers</div>
-        <div className="request-card-value" style={{ display: "grid", gap: "0.4rem" }}>
-          {!item.candidateFormResponses || item.candidateFormResponses.length === 0 ? (
-            <span>-</span>
-          ) : (
-            item.candidateFormResponses.map((serviceResponse) => (
-              <div
-                key={`${item._id}-${serviceResponse.serviceId}`}
-                style={{
-                  border: "1px solid #E0E0E0",
-                  borderRadius: "10px",
-                  padding: "0.55rem 0.6rem",
-                  background: "#F8F9FA",
-                  display: "grid",
-                  gap: "0.35rem",
-                }}
-              >
-                <strong>{serviceResponse.serviceName}</strong>
-                {serviceResponse.answers.length === 0 ? (
-                  <span>-</span>
-                ) : (
-                  serviceResponse.answers.map((answer, answerIndex) => (
-                    <div key={`${serviceResponse.serviceId}-${answerIndex}`}>
-                      <span style={{ fontWeight: 600 }}>{answer.question}:</span>{" "}
-                      {answer.fieldType === "file" && answer.fileData ? (
-                        <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ fontWeight: 700, color: "#4A90E2" }}>
-                            {answer.fileName || "attachment"}
-                          </span>
-                          <a
-                            href={answer.fileData}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ color: "#4A90E2", textDecoration: "underline" }}
-                          >
-                            Open
-                          </a>
-                          <a
-                            href={answer.fileData}
-                            download={answer.fileName || `attachment-${answerIndex}`}
-                            style={{ color: "#4A90E2", textDecoration: "underline" }}
-                          >
-                            Download
-                          </a>
+      <div style={{ display: "grid", gap: "0.75rem" }}>
+        {item.candidateFormResponses.map((serviceResponse) => (
+          <div
+            key={`${item._id}-${serviceResponse.serviceId}`}
+            style={{
+              border: "1px solid #DDE5EF",
+              borderRadius: "10px",
+              padding: "0.7rem 0.75rem",
+              background: "#F8FAFD",
+            }}
+          >
+            <strong style={{ color: "#2D405E" }}>{serviceResponse.serviceName}</strong>
+            <div style={{ marginTop: "0.45rem", display: "grid", gap: "0.35rem" }}>
+              {serviceResponse.answers.length === 0 ? (
+                <span style={{ color: "#667892" }}>No answers available.</span>
+              ) : (
+                serviceResponse.answers.map((answer, answerIndex) => (
+                  <div key={`${serviceResponse.serviceId}-${answerIndex}`}>
+                    <span style={{ fontWeight: 600 }}>{answer.question}:</span>{" "}
+                    {answer.fieldType === "file" && answer.fileData ? (
+                      <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#4A90E2" }}>
+                          {answer.fileName || "attachment"}
                         </span>
-                      ) : (
-                        answer.value || "-"
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </>
+                        <a
+                          href={answer.fileData}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "#4A90E2", textDecoration: "underline" }}
+                        >
+                          Open
+                        </a>
+                        <a
+                          href={answer.fileData}
+                          download={answer.fileName || `attachment-${answerIndex}`}
+                          style={{ color: "#4A90E2", textDecoration: "underline" }}
+                        >
+                          Download
+                        </a>
+                      </span>
+                    ) : (
+                      answer.value || "-"
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     );
   }
 
@@ -268,17 +293,28 @@ export default function RequestsPage() {
     title: string,
     items: RequestItem[],
     emptyMessage: string,
-    statusType: "pending" | "approved" | "rejected",
+    statusType: SectionType,
   ) {
     const isCollapsed = collapsedRequestSections[statusType];
-
     const StatusIcon =
-      statusType === "pending" ? Clock : statusType === "approved" ? CheckCircle : XCircle;
-
-    const iconColor = statusType === "pending" ? "#4A90E2" : statusType === "approved" ? "#5CB85C" : "#2D405E";
+      statusType === "pending"
+        ? Clock
+        : statusType === "approved"
+          ? CheckCircle
+          : statusType === "rejected"
+            ? XCircle
+            : Archive;
+    const iconColor =
+      statusType === "pending"
+        ? "#4A90E2"
+        : statusType === "approved"
+          ? "#5CB85C"
+          : statusType === "rejected"
+            ? "#C0392B"
+            : "#2D405E";
 
     return (
-      <section className="glass-card" style={{ padding: "1.2rem", marginTop: "1.2rem" }}>
+      <section className="glass-card" style={{ padding: "1rem", marginTop: "1rem" }}>
         <button
           type="button"
           onClick={() => toggleRequestSection(statusType)}
@@ -295,105 +331,7 @@ export default function RequestsPage() {
           </span>
         </button>
 
-        {!isCollapsed && items.length === 0 && <p style={{ margin: 0 }}>{emptyMessage}</p>}
-
-        {!isCollapsed && items.length > 0 && (
-          <div className="request-accordion-list">
-            {items.map((item) => {
-              const expanded = Boolean(expandedRequestIds[item._id]);
-              return (
-                <article key={item._id} className="request-accordion-item">
-                  <button type="button" className="request-accordion-toggle" onClick={() => toggleRequestExpand(item._id)}>
-                    <div className="request-accordion-main">
-                      <div className="request-accordion-candidate">{item.candidateName}</div>
-                      <div className="request-accordion-status" style={{ textTransform: "capitalize", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                        <StatusIcon size={16} color={iconColor} />
-                        {item.status}
-                      </div>
-                    </div>
-                    <span className="request-accordion-arrow">{expanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}</span>
-                  </button>
-
-                  {expanded && (
-                    <div className="request-accordion-details">
-                      <div className="request-card-label">Company</div>
-                      <div className="request-card-value">{item.customerName}</div>
-
-                      <div className="request-card-label">Company Email</div>
-                      <div className="request-card-value">{item.customerEmail}</div>
-
-                      <div className="request-card-label">Candidate Email</div>
-                      <div className="request-card-value">{item.candidateEmail}</div>
-
-                      <div className="request-card-label">Submitted By</div>
-                      <div className="request-card-value">{item.createdByName || "Unknown"}</div>
-
-                      <div className="request-card-label">Phone</div>
-                      <div className="request-card-value">{item.candidatePhone || "-"}</div>
-
-                      <div className="request-card-label">Admin Note</div>
-                      <div className="request-card-value">{item.rejectionNote || "-"}</div>
-
-                      <div className="request-card-label">Created</div>
-                      <div className="request-card-value">{new Date(item.createdAt).toLocaleString()}</div>
-
-                      {renderCandidateSubmission(item)}
-
-                      {(statusType === "pending" || statusType === "rejected" || (statusType === "approved" && me?.role === "superadmin")) && (
-                        <div className="request-card-actions" style={{ marginTop: "0.35rem" }}>
-                          {(statusType === "pending" || statusType === "rejected") && (
-                            <button type="button" className="btn btn-secondary btn-outline-success" onClick={() => approveRequest(item._id)}>
-                              <CheckCircle size={16} style={{ marginRight: "0.4rem" }} />
-                              Approve
-                            </button>
-                          )}
-                          {(statusType === "pending" || (statusType === "approved" && me?.role === "superadmin")) && (
-                            <button type="button" className="btn btn-secondary btn-outline-danger" onClick={() => rejectWithNote(item._id)}>
-                              <XCircle size={16} style={{ marginRight: "0.4rem" }} />
-                              Reject
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
-    );
-  }
-
-  function renderArchivedSection(items: RequestItem[]) {
-    const isCollapsed = collapsedRequestSections.archived;
-
-    return (
-      <section className="glass-card" style={{ padding: "1.2rem", marginTop: "1.2rem" }}>
-        <button
-          type="button"
-          onClick={() => toggleRequestSection("archived")}
-          className="request-panel-header"
-          aria-expanded={!isCollapsed}
-          aria-label={`${isCollapsed ? "Expand" : "Collapse"} Archived Requests`}
-        >
-          <h3 style={{ marginTop: 0, marginBottom: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <Archive size={20} color="#4A90E2" />
-            Archived Requests ({items.length})
-          </h3>
-          <span style={{ display: "inline-flex", alignItems: "center" }}>
-            {isCollapsed ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
-          </span>
-        </button>
-
-        {!isCollapsed && (
-          <p style={{ color: "#6C757D", marginTop: 0 }}>
-            Requests older than 14 days are automatically moved here.
-          </p>
-        )}
-
-        {!isCollapsed && (
+        {statusType === "archived" && !isCollapsed ? (
           <div className="search-input-wrap" style={{ marginBottom: "0.8rem" }}>
             <span className="search-input-icon" aria-hidden="true" style={{ marginTop: "0.1rem" }}>
               <Search size={18} />
@@ -405,66 +343,125 @@ export default function RequestsPage() {
               onChange={(e) => setArchivedSearchText(e.target.value)}
             />
           </div>
-        )}
+        ) : null}
 
-        {!isCollapsed && items.length === 0 && <p style={{ margin: 0 }}>No archived requests found.</p>}
+        {!isCollapsed && items.length === 0 ? <p style={{ margin: 0 }}>{emptyMessage}</p> : null}
 
-        {!isCollapsed && items.length > 0 && (
-          <div className="request-accordion-list">
-            {items.map((item) => {
-              const expanded = Boolean(expandedRequestIds[item._id]);
-              return (
-                <article key={`archived-${item._id}`} className="request-accordion-item">
-                  <button type="button" className="request-accordion-toggle" onClick={() => toggleRequestExpand(item._id)}>
-                    <div className="request-accordion-main">
-                      <div className="request-accordion-candidate">{item.candidateName}</div>
-                      <div className={`status-pill status-pill-${item.status}`} style={{ textTransform: "capitalize" }}>
-                        {item.status}
-                      </div>
-                    </div>
-                    <span className="request-accordion-arrow">{expanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}</span>
-                  </button>
+        {!isCollapsed && items.length > 0 ? (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", minWidth: "1280px", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #DDE5EF", textAlign: "left" }}>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Candidate</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Company</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Contact</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Services</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Form</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Status</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Admin Note</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Created</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Responses</th>
+                  <th style={{ padding: "0.7rem 0.55rem" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const hasResponses = Boolean(item.candidateFormResponses && item.candidateFormResponses.length > 0);
+                  const formSubmitted = item.candidateFormStatus === "submitted";
+                  let canApprove = item.status === "pending" || item.status === "rejected";
+                  let canReject = item.status === "pending" || (item.status === "approved" && me?.role === "superadmin");
 
-                  {expanded && (
-                    <div className="request-accordion-details">
-                      <div className="request-card-label">Company</div>
-                      <div className="request-card-value">{item.customerName}</div>
+                  if (statusType === "archived") {
+                    canApprove = item.status === "rejected";
+                    canReject = false;
+                  }
 
-                      <div className="request-card-label">Company Email</div>
-                      <div className="request-card-value">{item.customerEmail}</div>
-
-                      <div className="request-card-label">Candidate Email</div>
-                      <div className="request-card-value">{item.candidateEmail}</div>
-
-                      <div className="request-card-label">Submitted By</div>
-                      <div className="request-card-value">{item.createdByName || "Unknown"}</div>
-
-                      <div className="request-card-label">Phone</div>
-                      <div className="request-card-value">{item.candidatePhone || "-"}</div>
-
-                      <div className="request-card-label">Admin Note</div>
-                      <div className="request-card-value">{item.rejectionNote || "-"}</div>
-
-                      <div className="request-card-label">Created</div>
-                      <div className="request-card-value">{new Date(item.createdAt).toLocaleString()}</div>
-
-                      {renderCandidateSubmission(item)}
-
-                      {item.status === "rejected" && (
-                        <div className="request-card-actions" style={{ marginTop: "0.35rem" }}>
-                          <button type="button" className="btn btn-secondary btn-outline-success" onClick={() => approveRequest(item._id)}>
-                            <CheckCircle size={16} style={{ marginRight: "0.4rem" }} />
-                            Approve
-                          </button>
+                  return (
+                    <tr
+                      key={`${statusType}-${item._id}`}
+                      id={`request-${item._id}`}
+                      style={{
+                        borderBottom: "1px solid #ECF0F5",
+                        background: highlightedRequestId === item._id ? "#EEF6FF" : "transparent",
+                      }}
+                    >
+                      <td style={{ padding: "0.75rem 0.55rem", fontWeight: 600, color: "#2D405E" }}>{item.candidateName}</td>
+                      <td style={{ padding: "0.75rem 0.55rem" }}>
+                        <div style={{ fontWeight: 600 }}>{item.customerName || "-"}</div>
+                        <div style={{ fontSize: "0.78rem", color: "#667892" }}>{item.customerEmail || "-"}</div>
+                      </td>
+                      <td style={{ padding: "0.75rem 0.55rem" }}>
+                        <div>{item.candidateEmail || "-"}</div>
+                        <div style={{ fontSize: "0.78rem", color: "#667892" }}>{item.candidatePhone || "-"}</div>
+                      </td>
+                      <td style={{ padding: "0.75rem 0.55rem", maxWidth: "230px" }}>
+                        <span style={{ display: "inline-block", lineHeight: 1.4 }}>
+                          {item.selectedServices && item.selectedServices.length > 0
+                            ? item.selectedServices.map((service) => service.serviceName).join(", ")
+                            : "-"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "0.75rem 0.55rem" }}>
+                        <div style={{ fontWeight: 600, color: formSubmitted ? "#2f6f3e" : "#8A6D3B" }}>
+                          {formSubmitted ? "Submitted" : "Pending"}
                         </div>
-                      )}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
+                        <div style={{ fontSize: "0.78rem", color: "#667892" }}>
+                          {item.candidateSubmittedAt ? new Date(item.candidateSubmittedAt).toLocaleString() : "-"}
+                        </div>
+                      </td>
+                      <td style={{ padding: "0.75rem 0.55rem" }}>
+                        <span className={`status-pill status-pill-${item.status}`} style={{ textTransform: "capitalize" }}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: "0.75rem 0.55rem", maxWidth: "220px" }}>{item.rejectionNote || "-"}</td>
+                      <td style={{ padding: "0.75rem 0.55rem", whiteSpace: "nowrap" }}>
+                        {new Date(item.createdAt).toLocaleString()}
+                      </td>
+                      <td style={{ padding: "0.75rem 0.55rem" }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setActiveResponseRequestId(item._id)}
+                          disabled={!hasResponses}
+                        >
+                          {hasResponses ? "View" : "No data"}
+                        </button>
+                      </td>
+                      <td style={{ padding: "0.75rem 0.55rem" }}>
+                        <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+                          {canApprove ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-outline-success"
+                              onClick={() => approveRequest(item._id)}
+                              disabled={!formSubmitted}
+                              title={formSubmitted ? "Approve request" : "Candidate form is not submitted yet"}
+                            >
+                              Approve
+                            </button>
+                          ) : null}
+                          {canReject ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-outline-danger"
+                              onClick={() => rejectWithNote(item._id)}
+                              disabled={!formSubmitted}
+                              title={formSubmitted ? "Reject request" : "Candidate form is not submitted yet"}
+                            >
+                              Reject
+                            </button>
+                          ) : null}
+                          {!canApprove && !canReject ? <span style={{ color: "#95A2B5" }}>-</span> : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        )}
+        ) : null}
       </section>
     );
   }
@@ -478,17 +475,17 @@ export default function RequestsPage() {
       me={me}
       onLogout={logout}
       title="Verification Requests"
-      subtitle="Focused queue for approvals, rejections, and archived review."
+      subtitle="Table-focused request management with faster scanning and actions."
     >
       {message ? <p className={`inline-alert ${getAlertTone(message)}`}>{message}</p> : null}
 
-      <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
+      <section className="glass-card" style={{ padding: "1.1rem", marginBottom: "1rem" }}>
         <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <ListFilter size={24} color="#4A90E2" />
           Verification Requests
         </h2>
         <p style={{ color: "#6C757D", marginTop: 0 }}>
-          Search and manage requests across Pending, Approved, and Rejected sections.
+          Tabular request view designed for wider layouts and quicker review.
         </p>
         <div className="search-input-wrap">
           <span className="search-input-icon" aria-hidden="true" style={{ marginTop: "0.1rem" }}>
@@ -496,7 +493,7 @@ export default function RequestsPage() {
           </span>
           <input
             className="input"
-            placeholder="Search by company, candidate, email, phone, status or note"
+            placeholder="Search by company, candidate, email, phone, service, status or note"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
           />
@@ -506,7 +503,50 @@ export default function RequestsPage() {
       {renderRequestSection("Pending Requests", pendingRequests, "No pending requests found.", "pending")}
       {renderRequestSection("Approved Requests", approvedRequests, "No approved requests found.", "approved")}
       {renderRequestSection("Rejected Requests", rejectedRequests, "No rejected requests found.", "rejected")}
-      {renderArchivedSection(archivedRequests)}
+      {renderRequestSection("Archived Requests", archivedRequests, "No archived requests found.", "archived")}
+
+      {activeResponseRequest ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Candidate responses"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(16, 24, 40, 0.45)",
+            zIndex: 1200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            className="glass-card"
+            style={{
+              width: "min(920px, calc(100vw - 2rem))",
+              maxHeight: "86vh",
+              overflowY: "auto",
+              padding: "1rem",
+              background: "#FFFFFF",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.8rem" }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Candidate Responses</h3>
+                <p style={{ margin: "0.25rem 0 0", color: "#667892" }}>
+                  {activeResponseRequest.candidateName} • {activeResponseRequest.customerName}
+                </p>
+              </div>
+              <button type="button" className="btn btn-secondary" onClick={() => setActiveResponseRequestId("")}>
+                <X size={16} />
+              </button>
+            </div>
+
+            {renderResponseContent(activeResponseRequest)}
+          </div>
+        </div>
+      ) : null}
     </AdminPortalFrame>
   );
 }

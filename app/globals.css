@@ -24,7 +24,7 @@ body {
 }
 
 .portal-shell {
-  width: min(1320px, 95vw);
+  width: min(1680px, calc(100vw - 2rem));
   margin: 0 auto;
   padding: 1.1rem 0 3rem;
 }

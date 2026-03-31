@@ -11,38 +11,52 @@ const schema = z.object({
 });
 
 export async function POST(req: Request) {
-  const body = await req.json();
+  let body: unknown;
+
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid input." }, { status: 400 });
+  }
+
   const parsed = schema.safeParse(body);
 
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input." }, { status: 400 });
   }
 
-  await connectMongo();
+  try {
+    await connectMongo();
 
-  const user = await User.findOne({ email: parsed.data.email.toLowerCase() }).lean();
-  if (!user || (user.role !== "admin" && user.role !== "superadmin" && user.role !== "verifier")) {
-    return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+    const user = await User.findOne({ email: parsed.data.email.toLowerCase() }).lean();
+    if (!user || (user.role !== "admin" && user.role !== "superadmin" && user.role !== "verifier")) {
+      return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+    }
+
+    const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
+    if (!ok) {
+      return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+    }
+
+    const token = signAdminToken({
+      userId: String(user._id),
+      role: user.role,
+    });
+
+    const res = NextResponse.json({ message: "Logged in" });
+    res.cookies.set(adminCookieName(), token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7,
+    });
+
+    return res;
+  } catch {
+    return NextResponse.json(
+      { error: "Unable to sign in right now. Please try again." },
+      { status: 500 },
+    );
   }
-
-  const ok = await bcrypt.compare(parsed.data.password, user.passwordHash);
-  if (!ok) {
-    return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
-  }
-
-  const token = signAdminToken({
-    userId: String(user._id),
-    role: user.role,
-  });
-
-  const res = NextResponse.json({ message: "Logged in" });
-  res.cookies.set(adminCookieName(), token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7,
-  });
-
-  return res;
 }
