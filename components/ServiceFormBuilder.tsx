@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { ClipboardList, Plus, Save, Trash2 } from "lucide-react";
 import type { SupportedCurrency } from "@/lib/currencies";
 
@@ -44,23 +44,18 @@ export default function ServiceFormBuilder({
   );
 
   const selectedRegularService = regularServices.some((service) => service.id === selectedServiceId);
-  const activeServiceId = selectedRegularService ? selectedServiceId : regularServices[0]?.id || "";
+  const preferredRegularService =
+    preferredServiceId && regularServices.some((service) => service.id === preferredServiceId)
+      ? preferredServiceId
+      : "";
+  const activeServiceId = selectedRegularService
+    ? selectedServiceId
+    : preferredRegularService || regularServices[0]?.id || "";
 
   const selectedService = useMemo(
     () => regularServices.find((service) => service.id === activeServiceId) ?? null,
     [activeServiceId, regularServices],
   );
-
-  useEffect(() => {
-    if (!preferredServiceId) {
-      return;
-    }
-
-    const exists = regularServices.some((service) => service.id === preferredServiceId);
-    if (exists) {
-      setSelectedServiceId(preferredServiceId);
-    }
-  }, [preferredServiceId, regularServices]);
 
   const fields = drafts[activeServiceId] ?? selectedService?.formFields ?? [];
 

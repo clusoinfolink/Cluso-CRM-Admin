@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -153,23 +154,31 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
   );
 
   useEffect(() => {
+    let nextClearedIds: string[] = [];
+
     try {
       const storedValue = localStorage.getItem(notificationStorageKey);
       if (!storedValue) {
-        setClearedNotificationIds([]);
-        return;
+        nextClearedIds = [];
+      } else {
+        const parsed = JSON.parse(storedValue);
+        if (!Array.isArray(parsed)) {
+          nextClearedIds = [];
+        } else {
+          nextClearedIds = parsed.filter((item): item is string => typeof item === "string");
+        }
       }
-
-      const parsed = JSON.parse(storedValue);
-      if (!Array.isArray(parsed)) {
-        setClearedNotificationIds([]);
-        return;
-      }
-
-      setClearedNotificationIds(parsed.filter((item): item is string => typeof item === "string"));
     } catch {
-      setClearedNotificationIds([]);
+      nextClearedIds = [];
     }
+
+    const timer = window.setTimeout(() => {
+      setClearedNotificationIds(nextClearedIds);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [notificationStorageKey]);
 
   useEffect(() => {
@@ -236,14 +245,21 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
       setIsNotificationOpen(false);
       router.push(`/dashboard/requests?requestId=${encodeURIComponent(requestId)}`);
     },
-    [router],
+    [router, setIsNotificationOpen],
   );
 
   return (
     <div className="admin-layout">
       <aside className="admin-sidebar" aria-label="Admin navigation menu">
         <div className="sidebar-brand flex items-center justify-center p-4">
-          <img src="/images/cluso-infolink-logo.png" alt="Cluso Infolink" className="h-10 w-auto object-contain" />
+          <Image
+            src="/images/cluso-infolink-logo.png"
+            alt="Cluso Infolink"
+            width={220}
+            height={40}
+            className="h-10 w-auto object-contain"
+            priority
+          />
         </div>
 
         <nav className="portal-nav" aria-label="Admin sections">
@@ -265,7 +281,12 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
 
       <main className="admin-main">
         <header className="admin-topbar">
-          <h1 className="admin-topbar-title">{title || "Admin Panel"}</h1>
+          <div style={{ display: "grid", gap: "0.15rem" }}>
+            <h1 className="admin-topbar-title">{title || "Admin Panel"}</h1>
+            {subtitle ? (
+              <p style={{ margin: 0, color: "#6B7A90", fontSize: "0.85rem" }}>{subtitle}</p>
+            ) : null}
+          </div>
           <div className="account-actions-wrap">
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 500 }}>
               <User size={18} />

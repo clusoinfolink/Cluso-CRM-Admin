@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { LockKeyhole, Mail, Sparkles } from "lucide-react";
 
 export default function AdminLoginPage() {
@@ -58,7 +59,14 @@ export default function AdminLoginPage() {
           {/* Vertical Text Section */}
           <div className="p-8 md:p-10 pb-4 shrink-0 flex flex-col z-10 relative">
             <div className="mb-6">
-              <img src="/images/cluso-infolink-logo.png" alt="Cluso Infolink Verification Network" className="h-10 w-auto object-contain" />
+              <Image
+                src="/images/cluso-infolink-logo.png"
+                alt="Cluso Infolink Verification Network"
+                width={220}
+                height={40}
+                className="h-10 w-auto object-contain"
+                priority
+              />
             </div>
             <h1 className="text-4xl font-extrabold tracking-tight text-[#171717] mb-4 leading-tight">
               Admin Workspace
@@ -70,10 +78,12 @@ export default function AdminLoginPage() {
           
           {/* Filled Image Section */}
           <div className="relative flex-1 w-full min-h-[350px]">
-            <img
+            <Image
               src="/images/20944201.jpg"
               alt="Admin Workspace"
-              className="absolute inset-0 w-full h-full object-contain object-bottom p-4"
+              fill
+              sizes="(min-width: 768px) 40vw, 100vw"
+              className="object-contain object-bottom p-4"
             />
           </div>
         </div>
@@ -85,7 +95,7 @@ export default function AdminLoginPage() {
           
           <div className="mb-8 relative z-10">
             <div className="inline-flex p-3 rounded-xl bg-gradient-to-br from-[#FFBDE0] to-[#FFE2C6] mb-6 shadow-[0_4px_14px_rgba(255,189,224,0.4)] border border-white/50">
-              <img src="/images/cluso-logo.png" alt="Cluso Logo" className="w-7 h-7 object-contain drop-shadow-sm" />
+              <Image src="/images/cluso-logo.png" alt="Cluso Logo" width={28} height={28} className="w-7 h-7 object-contain drop-shadow-sm" />
             </div>
             <h2 className="text-3xl font-bold text-[#171717] mb-2 tracking-tight">Access Portal</h2>
             <p className="text-[#666] text-sm leading-relaxed">Secured clearance exclusively for internal administrators.</p>

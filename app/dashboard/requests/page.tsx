@@ -202,18 +202,20 @@ export default function RequestsPage() {
     const targetCreatedAtMs = new Date(targetRequest.createdAt).getTime();
     const shouldOpenArchived = !Number.isNaN(targetCreatedAtMs) && targetCreatedAtMs <= archiveCutoffMs;
 
-    setSearchText("");
-    setArchivedSearchText("");
-    setCollapsedRequestSections((prev) => ({
-      ...prev,
-      archived: shouldOpenArchived ? false : prev.archived,
-      pending: !shouldOpenArchived && targetRequest.status === "pending" ? false : prev.pending,
-      approved: !shouldOpenArchived && targetRequest.status === "approved" ? false : prev.approved,
-      rejected: !shouldOpenArchived && targetRequest.status === "rejected" ? false : prev.rejected,
-    }));
-    setHighlightedRequestId(focusRequestId);
+    const stateUpdateTimer = window.setTimeout(() => {
+      setSearchText("");
+      setArchivedSearchText("");
+      setCollapsedRequestSections((prev) => ({
+        ...prev,
+        archived: shouldOpenArchived ? false : prev.archived,
+        pending: !shouldOpenArchived && targetRequest.status === "pending" ? false : prev.pending,
+        approved: !shouldOpenArchived && targetRequest.status === "approved" ? false : prev.approved,
+        rejected: !shouldOpenArchived && targetRequest.status === "rejected" ? false : prev.rejected,
+      }));
+      setHighlightedRequestId(focusRequestId);
+    }, 0);
 
-    const timer = window.setTimeout(() => {
+    const scrollTimer = window.setTimeout(() => {
       document.getElementById(`request-${focusRequestId}`)?.scrollIntoView({
         behavior: "smooth",
         block: "center",
@@ -221,7 +223,8 @@ export default function RequestsPage() {
     }, 80);
 
     return () => {
-      window.clearTimeout(timer);
+      window.clearTimeout(stateUpdateTimer);
+      window.clearTimeout(scrollTimer);
     };
   }, [archiveCutoffMs, focusRequestId, requests]);
 

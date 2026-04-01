@@ -33,7 +33,7 @@ export default function ServicesPage() {
     enabled: Boolean(me),
   });
 
-  const services = servicesQuery.data ?? [];
+  const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
   const [message, setMessage] = useState("");
   const [newServiceName, setNewServiceName] = useState("");
   const [newServiceDescription, setNewServiceDescription] = useState("");
@@ -309,7 +309,7 @@ export default function ServicesPage() {
               }}
             >
               <span style={{ color: "#2D405E", fontWeight: 600 }}>
-                Service "{pendingFormService.name}" created. Create its form now?
+                Service &quot;{pendingFormService.name}&quot; created. Create its form now?
               </span>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                 <button
