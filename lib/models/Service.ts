@@ -14,6 +14,8 @@ export interface IService extends Document {
   description: string;
   defaultPrice?: number;
   defaultCurrency: SupportedCurrency;
+  isPackage: boolean;
+  includedServiceIds: mongoose.Types.ObjectId[];
   formFields: ServiceFormField[];
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +27,8 @@ const serviceSchema = new Schema<IService>(
     description: { type: String, default: "" },
     defaultPrice: { type: Number },
     defaultCurrency: { type: String, enum: SUPPORTED_CURRENCIES, default: "INR" },
+    isPackage: { type: Boolean, default: false },
+    includedServiceIds: [{ type: Schema.Types.ObjectId, ref: "Service" }],
     formFields: [
       {
         question: { type: String, required: true },
@@ -40,13 +44,17 @@ const serviceSchema = new Schema<IService>(
   { timestamps: true },
 );
 
-const hasEnhancedServiceFields = Boolean(
-  mongoose.models.Service?.schema.path("formFields.required"),
+const hasEnhancedServiceFields = Boolean(mongoose.models.Service?.schema.path("formFields.required"));
+const hasPackageFields = Boolean(
+  mongoose.models.Service?.schema.path("isPackage") &&
+    mongoose.models.Service?.schema.path("includedServiceIds"),
 );
 
 if (
   mongoose.models.Service &&
-  (!mongoose.models.Service.schema.path("formFields") || !hasEnhancedServiceFields)
+  (!mongoose.models.Service.schema.path("formFields") ||
+    !hasEnhancedServiceFields ||
+    !hasPackageFields)
 ) {
   delete mongoose.models.Service;
 }

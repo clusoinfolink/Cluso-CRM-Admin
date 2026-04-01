@@ -16,6 +16,8 @@ const createServiceSchema = z.object({
   description: z.string().optional().default(""),
   defaultPrice: z.coerce.number().min(0).optional(),
   defaultCurrency: z.enum(SUPPORTED_CURRENCIES).optional().default("INR"),
+  isPackage: z.boolean().optional().default(false),
+  includedServiceIds: z.array(z.string().min(1)).optional().default([]),
   formFields: z.array(formFieldSchema).optional().default([]),
 });
 
@@ -43,6 +45,8 @@ export async function GET(req: NextRequest) {
       description: item.description ?? "",
       defaultPrice: typeof item.defaultPrice === "number" ? item.defaultPrice : null,
       defaultCurrency: item.defaultCurrency ?? "INR",
+      isPackage: Boolean(item.isPackage),
+      includedServiceIds: (item.includedServiceIds ?? []).map((id) => String(id)),
       formFields: (item.formFields ?? []).map((field) => ({
         question: field.question,
         fieldType: field.fieldType,
@@ -71,6 +75,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Service name is required." }, { status: 400 });
   }
 
+  const isPackage = Boolean(parsed.data.isPackage);
+  const includedServiceIds = [...new Set(parsed.data.includedServiceIds.map((id) => id.trim()).filter(Boolean))];
+
+  if (isPackage && includedServiceIds.length < 2) {
+    return NextResponse.json(
+      { error: "Package deal must include at least two services." },
+      { status: 400 },
+    );
+  }
+
   const existing = await Service.findOne({ name: normalizedName })
     .collation({ locale: "en", strength: 2 })
     .lean();
@@ -78,11 +92,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Service already exists." }, { status: 409 });
   }
 
+  if (isPackage && includedServiceIds.length > 0) {
+    const includedServices = await Service.find({ _id: { $in: includedServiceIds } })
+      .select("_id isPackage")
+      .lean();
+
+    if (includedServices.length !== includedServiceIds.length) {
+      return NextResponse.json(
+        { error: "One or more package services are invalid." },
+        { status: 400 },
+      );
+    }
+
+    if (includedServices.some((service) => Boolean(service.isPackage))) {
+      return NextResponse.json(
+        { error: "Package deals can only include regular services." },
+        { status: 400 },
+      );
+    }
+  }
+
   const service = await Service.create({
     name: normalizedName,
     description: parsed.data.description?.trim() ?? "",
     defaultPrice: parsed.data.defaultPrice,
     defaultCurrency: parsed.data.defaultCurrency,
+    isPackage,
+    includedServiceIds: isPackage ? includedServiceIds : [],
     formFields: parsed.data.formFields,
   });
 
@@ -95,6 +131,8 @@ export async function POST(req: NextRequest) {
         description: service.description ?? "",
         defaultPrice: typeof service.defaultPrice === "number" ? service.defaultPrice : null,
         defaultCurrency: service.defaultCurrency ?? "INR",
+        isPackage: Boolean(service.isPackage),
+        includedServiceIds: (service.includedServiceIds ?? []).map((id) => String(id)),
         formFields: (service.formFields ?? []).map((field) => ({
           question: field.question,
           fieldType: field.fieldType,
@@ -141,6 +179,8 @@ export async function PATCH(req: NextRequest) {
       description: updated.description ?? "",
       defaultPrice: typeof updated.defaultPrice === "number" ? updated.defaultPrice : null,
       defaultCurrency: updated.defaultCurrency ?? "INR",
+      isPackage: Boolean(updated.isPackage),
+      includedServiceIds: (updated.includedServiceIds ?? []).map((id) => String(id)),
       formFields: (updated.formFields ?? []).map((field) => ({
         question: field.question,
         fieldType: field.fieldType,

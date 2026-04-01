@@ -57,6 +57,8 @@ export type ServiceItem = {
   description: string;
   defaultPrice: number | null;
   defaultCurrency: SupportedCurrency;
+  isPackage: boolean;
+  includedServiceIds: string[];
   formFields: ServiceFormField[];
 };
 

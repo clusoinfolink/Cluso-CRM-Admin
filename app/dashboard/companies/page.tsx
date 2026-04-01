@@ -331,6 +331,11 @@ export default function CompaniesPage() {
                         <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleCompanyService(service, e.target.checked)} />
                         {service.name}
                       </label>
+                      {service.isPackage ? (
+                        <div style={{ marginTop: "0.2rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.84rem" }}>
+                          Package deal ({service.includedServiceIds.length} services)
+                        </div>
+                      ) : null}
                       <div style={{ color: "#6C757D", marginTop: "0.25rem" }}>{service.description || "No description"}</div>
 
                       {selected ? (
@@ -408,6 +413,11 @@ export default function CompaniesPage() {
                       <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleManageCompanyService(service, e.target.checked)} />
                       {service.name}
                     </label>
+                    {service.isPackage ? (
+                      <div style={{ marginTop: "0.2rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.84rem" }}>
+                        Package deal ({service.includedServiceIds.length} services)
+                      </div>
+                    ) : null}
 
                     {selected ? (
                       <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>

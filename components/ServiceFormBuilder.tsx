@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ClipboardList, Plus, Save, Trash2 } from "lucide-react";
 import type { SupportedCurrency } from "@/lib/currencies";
 
@@ -16,6 +16,7 @@ export type ServiceItemForForm = {
   description: string;
   defaultPrice: number | null;
   defaultCurrency: SupportedCurrency;
+  isPackage: boolean;
   formFields: ServiceFormField[];
 };
 
@@ -23,20 +24,43 @@ type Props = {
   services: ServiceItemForForm[];
   canManage: boolean;
   onSaved: () => Promise<void>;
+  preferredServiceId?: string;
 };
 
-export default function ServiceFormBuilder({ services, canManage, onSaved }: Props) {
+export default function ServiceFormBuilder({
+  services,
+  canManage,
+  onSaved,
+  preferredServiceId,
+}: Props) {
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [drafts, setDrafts] = useState<Record<string, ServiceFormField[]>>({});
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
-  const activeServiceId = selectedServiceId || services[0]?.id || "";
+  const regularServices = useMemo(
+    () => services.filter((service) => !service.isPackage),
+    [services],
+  );
+
+  const selectedRegularService = regularServices.some((service) => service.id === selectedServiceId);
+  const activeServiceId = selectedRegularService ? selectedServiceId : regularServices[0]?.id || "";
 
   const selectedService = useMemo(
-    () => services.find((service) => service.id === activeServiceId) ?? null,
-    [activeServiceId, services],
+    () => regularServices.find((service) => service.id === activeServiceId) ?? null,
+    [activeServiceId, regularServices],
   );
+
+  useEffect(() => {
+    if (!preferredServiceId) {
+      return;
+    }
+
+    const exists = regularServices.some((service) => service.id === preferredServiceId);
+    if (exists) {
+      setSelectedServiceId(preferredServiceId);
+    }
+  }, [preferredServiceId, regularServices]);
 
   const fields = drafts[activeServiceId] ?? selectedService?.formFields ?? [];
 
@@ -163,8 +187,10 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
         File upload questions accept only PDF, JPG, and PNG files up to 5MB.
       </p>
 
-      {services.length === 0 ? (
-        <p style={{ margin: 0, color: "#6C757D" }}>Add services in Service Catalog before creating forms.</p>
+      {regularServices.length === 0 ? (
+        <p style={{ margin: 0, color: "#6C757D" }}>
+          Add regular services in Service Catalog before creating forms. Package deals use included service forms.
+        </p>
       ) : (
         <form onSubmit={saveForm} style={{ display: "grid", gap: "0.8rem" }}>
           <div>
@@ -175,7 +201,7 @@ export default function ServiceFormBuilder({ services, canManage, onSaved }: Pro
               onChange={(e) => setSelectedServiceId(e.target.value)}
               required
             >
-              {services.map((service) => (
+              {regularServices.map((service) => (
                 <option key={service.id} value={service.id}>
                   {service.name}
                 </option>
