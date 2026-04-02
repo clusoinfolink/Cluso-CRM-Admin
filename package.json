@@ -6,11 +6,13 @@
     "dev": "next dev --port 3010",
     "build": "next build",
     "start": "next start --port 3010",
-    "lint": "eslint"
+    "lint": "eslint",
+    "google:token": "node scripts/generate-google-refresh-token.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.95.2",
     "bcryptjs": "^3.0.3",
+    "googleapis": "^171.4.0",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.577.0",
     "mongoose": "^9.2.4",
