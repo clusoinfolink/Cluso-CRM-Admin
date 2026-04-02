@@ -67,6 +67,13 @@ async function fetchRequestsForNotifications() {
 }
 
 function getAdminNotificationContent(item: RequestItem) {
+  if (item.status === "verified") {
+    return {
+      title: "Request verified",
+      detail: `${item.candidateName} - ${item.customerName}`,
+    };
+  }
+
   if (item.status === "approved") {
     return {
       title: "Request approved",
@@ -397,7 +404,9 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
                     ) : (
                       unreadNotifications.map((notification) => {
                         const tone =
-                          notification.status === "approved"
+                          notification.status === "verified"
+                            ? { border: "#9DDCCB", background: "#E8F8F3" }
+                            : notification.status === "approved"
                             ? { border: "#BFE8C9", background: "#ECF8EF" }
                             : notification.status === "rejected"
                               ? { border: "#F5C2C7", background: "#FDF2F3" }

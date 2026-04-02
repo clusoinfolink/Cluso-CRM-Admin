@@ -135,11 +135,13 @@ export default function AdminDashboardOverviewPage() {
 
   const pendingCount = requests.filter((item) => item.status === "pending").length;
   const approvedCount = requests.filter((item) => item.status === "approved").length;
+  const verifiedCount = requests.filter((item) => item.status === "verified").length;
   const rejectedCount = requests.filter((item) => item.status === "rejected").length;
 
   const cards: CountCard[] = [
     { label: "Pending Requests", value: pendingCount, icon: Clock, tone: "amber", href: "/dashboard/requests" },
     { label: "Approved Requests", value: approvedCount, icon: CheckCircle2, tone: "emerald", href: "/dashboard/requests" },
+    { label: "Verified Requests", value: verifiedCount, icon: Shield, tone: "cyan", href: "/dashboard/requests" },
     { label: "Rejected Requests", value: rejectedCount, icon: AlertTriangle, tone: "rose", href: "/dashboard/requests" },
     { label: "Archived Requests", value: archivedCount, icon: Archive, tone: "violet", href: "/dashboard/requests" },
     { label: "Services", value: servicesCount, icon: Package, tone: "sky", href: "/dashboard/services" },

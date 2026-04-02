@@ -1,12 +1,30 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { Building, ChevronDown, ChevronUp, Plus, Save, UserPlus } from "lucide-react";
+import {
+  Building,
+  ChevronDown,
+  ChevronUp,
+  FileText,
+  Mail,
+  MapPin,
+  Phone,
+  Plus,
+  Save,
+  UserCircle2,
+  UserPlus,
+} from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import { getAlertTone } from "@/lib/alerts";
 import { SUPPORTED_CURRENCIES, SupportedCurrency } from "@/lib/currencies";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
-import { CompanyItem, CompanyServiceSelection, ServiceItem } from "@/lib/types";
+import {
+  CompanyItem,
+  CompanyPartnerProfile,
+  CompanyServiceSelection,
+  ServiceItem,
+} from "@/lib/types";
 
 export default function CompaniesPage() {
   const { me, loading, logout } = useAdminSession();
@@ -21,11 +39,26 @@ export default function CompaniesPage() {
 
   const [manageCompanyId, setManageCompanyId] = useState("");
   const [manageCompanyServices, setManageCompanyServices] = useState<CompanyServiceSelection[]>([]);
+  const [viewCompanyId, setViewCompanyId] = useState("");
 
   const [issueServiceSearch, setIssueServiceSearch] = useState("");
   const [manageServiceSearch, setManageServiceSearch] = useState("");
-  const [issueServicesCollapsed, setIssueServicesCollapsed] = useState(false);
-  const [manageServicesCollapsed, setManageServicesCollapsed] = useState(true);
+  const [issueServicesCollapsed, setIssueServicesCollapsed] = useState(true);  
+  const [manageServicesCollapsed, setManageServicesCollapsed] = useState(true); 
+
+  const [profilePanelsCollapsed, setProfilePanelsCollapsed] = useState({
+    company: true,
+    invoicing: true,
+    contact: true,
+    questions: true,
+  });
+
+  const toggleProfilePanel = (panel: keyof typeof profilePanelsCollapsed) => {
+    setProfilePanelsCollapsed((prev) => ({
+      ...prev,
+      [panel]: !prev[panel],
+    }));
+  };
 
   const loadData = useCallback(async () => {
     const [serviceRes, companyRes] = await Promise.all([
@@ -61,6 +94,59 @@ export default function CompaniesPage() {
       active = false;
     };
   }, [me, loadData]);
+
+  useEffect(() => {
+    if (companies.length === 0) {
+      if (viewCompanyId) {
+        setViewCompanyId("");
+      }
+      return;
+    }
+
+    const stillExists = companies.some((company) => company.id === viewCompanyId);
+    if (!stillExists) {
+      setViewCompanyId(companies[0].id);
+    }
+  }, [companies, viewCompanyId]);
+
+  function formatAddress(address: CompanyPartnerProfile["companyInformation"]["address"]) {
+    const parts = [address.line1, address.line2, address.city, address.state, address.postalCode, address.country]
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    return parts.length > 0 ? parts.join(", ") : "-";
+  }
+
+  function formatPhone(phone: CompanyPartnerProfile["primaryContactInformation"]["mobilePhone"]) {
+    const countryCode = phone.countryCode.trim();
+    const number = phone.number.trim();
+    if (!countryCode && !number) {
+      return "-";
+    }
+
+    return [countryCode, number].filter(Boolean).join(" ");
+  }
+
+  function hasPartnerProfileData(profile: CompanyPartnerProfile) {
+    return Boolean(
+      profile.companyInformation.companyName.trim() ||
+        profile.companyInformation.gstin.trim() ||
+        profile.companyInformation.cinRegistrationNumber.trim() ||
+        formatAddress(profile.companyInformation.address) !== "-" ||
+        profile.companyInformation.documents.length > 0 ||
+        profile.invoicingInformation.invoiceEmail.trim() ||
+        formatAddress(profile.invoicingInformation.address) !== "-" ||
+        profile.primaryContactInformation.firstName.trim() ||
+        profile.primaryContactInformation.lastName.trim() ||
+        profile.primaryContactInformation.designation.trim() ||
+        profile.primaryContactInformation.email.trim() ||
+        profile.additionalQuestions.heardAboutUs.trim() ||
+        profile.additionalQuestions.referredBy.trim() ||
+        profile.additionalQuestions.yearlyBackgroundsExpected.trim() ||
+        profile.additionalQuestions.promoCode.trim() ||
+        profile.additionalQuestions.primaryIndustry.trim(),
+    );
+  }
 
   function toggleCompanyService(service: ServiceItem, checked: boolean) {
     if (checked) {
@@ -150,6 +236,7 @@ export default function CompaniesPage() {
 
   function pickCompanyForServiceUpdate(companyId: string) {
     setManageCompanyId(companyId);
+    setViewCompanyId(companyId);
     const found = companies.find((item) => item.id === companyId);
     setManageCompanyServices(found?.selectedServices ?? []);
   }
@@ -262,6 +349,10 @@ export default function CompaniesPage() {
     const searchable = `${service.name} ${service.description}`.toLowerCase();
     return searchable.includes(normalizedManageServiceSearch);
   });
+
+  const selectedCompanyForInfo = companies.find((company) => company.id === viewCompanyId) ?? null;
+  const selectedCompanyProfile = selectedCompanyForInfo?.partnerProfile ?? null;
+  const canShowProfile = selectedCompanyProfile ? hasPartnerProfileData(selectedCompanyProfile) : false;
 
   return (
     <AdminPortalFrame
@@ -382,14 +473,13 @@ export default function CompaniesPage() {
         <form onSubmit={updateCompanyServices} style={{ display: "grid", gap: "0.8rem" }}>
           <div>
             <label className="label">Select Company</label>
-            <select className="input" value={manageCompanyId} onChange={(e) => pickCompanyForServiceUpdate(e.target.value)} required>
-              <option value="">Choose company</option>
-              {companies.map((company) => (
-                <option key={company.id} value={company.id}>{company.name} ({company.email})</option>
-              ))}
-            </select>
-          </div>
-
+              <SearchableSelect
+                value={manageCompanyId}
+                onChange={(val) => pickCompanyForServiceUpdate(val)}
+                options={companies.map((c) => ({ value: c.id, label: `${c.name} (${c.email})` }))}
+                placeholder="Choose company..."
+              />
+            </div>
           {manageCompanyId && services.length > 0 ? (
             <div style={{ display: "grid", gap: "0.75rem" }}>
               <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "minmax(240px, 1fr) auto", alignItems: "end" }}>
@@ -448,6 +538,141 @@ export default function CompaniesPage() {
             </button>
           </div>
         </form>
+      </section>
+
+      <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
+        <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <Building size={24} color="#4A90E2" />
+          Company Information Access
+        </h2>
+        <p style={{ color: "#6C757D", marginTop: "0.2rem" }}>
+          View company profile details submitted from partner settings.
+        </p>
+
+        <div
+          style={{
+            display: "grid",
+            gap: "0.7rem",
+            gridTemplateColumns: "minmax(250px, 420px) auto",
+            alignItems: "end",
+            marginTop: "0.75rem",
+          }}
+        >
+          <div>
+            <label className="label">Select Company</label>
+              <SearchableSelect
+                value={viewCompanyId}
+                onChange={(val) => setViewCompanyId(val)}
+                options={companies.map((company) => ({ value: company.id, label: `${company.name} (${company.email})` }))}
+                placeholder="Choose company..."
+              />
+            </div>
+          {selectedCompanyProfile?.updatedAt ? (
+            <span className="neo-badge" style={{ justifySelf: "start" }}>
+              Profile updated {new Date(selectedCompanyProfile.updatedAt).toLocaleString()}
+            </span>
+          ) : null}
+        </div>
+
+        {!selectedCompanyForInfo ? (
+          <p style={{ color: "#6C757D", margin: "0.9rem 0 0" }}>No company selected.</p>
+        ) : !selectedCompanyProfile || !canShowProfile ? (
+          <p className="inline-alert inline-alert-warning" style={{ marginTop: "0.9rem" }}>
+            {selectedCompanyForInfo.name} has not filled their profile information yet.
+          </p>
+        ) : (
+          <div
+            style={{
+              marginTop: "0.9rem",
+              display: "grid",
+              gap: "0.75rem",
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            }}
+          >
+            <article className="glass-card" style={{ padding: "0.85rem" }}>
+              <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <Building size={16} color="#4A90E2" /> Company Information
+              </h3>
+              <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                <div><strong>Company Name:</strong> {selectedCompanyProfile.companyInformation.companyName || selectedCompanyForInfo.name}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                  <Mail size={14} color="#5E7A9A" />
+                  <span><strong>Login Email:</strong> {selectedCompanyForInfo.email}</span>
+                </div>
+                <div><strong>GSTIN:</strong> {selectedCompanyProfile.companyInformation.gstin || "-"}</div>
+                <div><strong>CIN / Registration:</strong> {selectedCompanyProfile.companyInformation.cinRegistrationNumber || "-"}</div>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "0.35rem" }}>
+                  <MapPin size={14} color="#5E7A9A" style={{ marginTop: "0.18rem" }} />
+                  <span><strong>Address:</strong> {formatAddress(selectedCompanyProfile.companyInformation.address)}</span>
+                </div>
+
+                <div style={{ marginTop: "0.3rem" }}>
+                  <strong>Documents:</strong>
+                  {selectedCompanyProfile.companyInformation.documents.length > 0 ? (
+                    <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.1rem", display: "grid", gap: "0.2rem" }}>
+                      {selectedCompanyProfile.companyInformation.documents.map((doc, index) => (
+                        <li key={`${doc.fileName}-${doc.fileSize}-${index}`} style={{ display: "flex", alignItems: "center", gap: "0.32rem" }}>
+                          <FileText size={14} color="#5E7A9A" />
+                          <span>
+                            {doc.fileName} ({(doc.fileSize / 1024 / 1024).toFixed(2)} MB)
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span> -</span>
+                  )}
+                </div>
+              </div>
+            </article>
+
+            <article className="glass-card" style={{ padding: "0.85rem" }}>
+              <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E" }}>Invoicing Information</h3>
+              <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                <div><strong>Invoice Email:</strong> {selectedCompanyProfile.invoicingInformation.invoiceEmail || "-"}</div>
+                <div><strong>Billing same as company:</strong> {selectedCompanyProfile.invoicingInformation.billingSameAsCompany ? "Yes" : "No"}</div>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "0.35rem" }}>
+                  <MapPin size={14} color="#5E7A9A" style={{ marginTop: "0.18rem" }} />
+                  <span><strong>Billing Address:</strong> {formatAddress(selectedCompanyProfile.invoicingInformation.address)}</span>
+                </div>
+              </div>
+            </article>
+
+            <article className="glass-card" style={{ padding: "0.85rem" }}>
+              <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <UserCircle2 size={16} color="#4A90E2" /> Primary Contact Information
+              </h3>
+              <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                <div><strong>Name:</strong> {`${selectedCompanyProfile.primaryContactInformation.firstName} ${selectedCompanyProfile.primaryContactInformation.lastName}`.trim() || "-"}</div>
+                <div><strong>Designation:</strong> {selectedCompanyProfile.primaryContactInformation.designation || "-"}</div>
+                <div><strong>Email:</strong> {selectedCompanyProfile.primaryContactInformation.email || "-"}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                  <Phone size={14} color="#5E7A9A" />
+                  <span><strong>Office:</strong> {formatPhone(selectedCompanyProfile.primaryContactInformation.officePhone)}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                  <Phone size={14} color="#5E7A9A" />
+                  <span><strong>Mobile:</strong> {formatPhone(selectedCompanyProfile.primaryContactInformation.mobilePhone)}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                  <Phone size={14} color="#5E7A9A" />
+                  <span><strong>WhatsApp:</strong> {formatPhone(selectedCompanyProfile.primaryContactInformation.whatsappPhone)}</span>
+                </div>
+              </div>
+            </article>
+
+            <article className="glass-card" style={{ padding: "0.85rem" }}>
+              <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E" }}>Additional Questions</h3>
+              <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                <div><strong>How did you hear about us:</strong> {selectedCompanyProfile.additionalQuestions.heardAboutUs || "-"}</div>
+                <div><strong>Referred By:</strong> {selectedCompanyProfile.additionalQuestions.referredBy || "-"}</div>
+                <div><strong>Expected Backgrounds / Year:</strong> {selectedCompanyProfile.additionalQuestions.yearlyBackgroundsExpected || "-"}</div>
+                <div><strong>Promo Code:</strong> {selectedCompanyProfile.additionalQuestions.promoCode || "-"}</div>
+                <div><strong>Primary Industry:</strong> {selectedCompanyProfile.additionalQuestions.primaryIndustry || "-"}</div>
+              </div>
+            </article>
+          </div>
+        )}
       </section>
     </AdminPortalFrame>
   );

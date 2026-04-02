@@ -5,11 +5,98 @@ import { connectMongo } from "@/lib/mongodb";
 import Service from "@/lib/models/Service";
 import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
 
-const formFieldSchema = z.object({
-  question: z.string().trim().min(1).max(200),
-  fieldType: z.enum(["text", "long_text", "number", "file"]),
-  required: z.boolean().optional().default(false),
-});
+const formFieldTypeSchema = z.enum(["text", "long_text", "number", "file", "date"]);
+
+const nullableLengthSchema = z.preprocess(
+  (value) => {
+    if (value === "" || value === null || value === undefined) {
+      return null;
+    }
+
+    return value;
+  },
+  z.coerce.number().int().min(1).max(5000).nullable(),
+);
+
+const formFieldSchema = z
+  .object({
+    question: z.string().trim().min(1).max(200),
+    fieldType: formFieldTypeSchema,
+    required: z.boolean().optional().default(false),
+    minLength: nullableLengthSchema.optional(),
+    maxLength: nullableLengthSchema.optional(),
+    forceUppercase: z.boolean().optional().default(false),
+  })
+  .superRefine((field, ctx) => {
+    const supportsTextConstraints =
+      field.fieldType === "text" || field.fieldType === "long_text";
+
+    if (
+      supportsTextConstraints &&
+      field.minLength !== null &&
+      field.minLength !== undefined &&
+      field.maxLength !== null &&
+      field.maxLength !== undefined &&
+      field.minLength > field.maxLength
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minLength"],
+        message: "Minimum length cannot be greater than maximum length.",
+      });
+    }
+  });
+
+type ParsedFormField = z.infer<typeof formFieldSchema>;
+
+function normalizeFormField(field: ParsedFormField) {
+  const supportsTextConstraints =
+    field.fieldType === "text" || field.fieldType === "long_text";
+
+  return {
+    question: field.question.trim(),
+    fieldType: field.fieldType,
+    required: Boolean(field.required),
+    minLength: supportsTextConstraints
+      ? typeof field.minLength === "number"
+        ? field.minLength
+        : null
+      : null,
+    maxLength: supportsTextConstraints
+      ? typeof field.maxLength === "number"
+        ? field.maxLength
+        : null
+      : null,
+    forceUppercase: supportsTextConstraints ? Boolean(field.forceUppercase) : false,
+  };
+}
+
+function serializeFormField(field: {
+  question: string;
+  fieldType: "text" | "long_text" | "number" | "file" | "date";
+  required?: boolean;
+  minLength?: number | null;
+  maxLength?: number | null;
+  forceUppercase?: boolean;
+}) {
+  const supportsTextConstraints =
+    field.fieldType === "text" || field.fieldType === "long_text";
+
+  return {
+    question: field.question,
+    fieldType: field.fieldType,
+    required: Boolean(field.required),
+    minLength:
+      supportsTextConstraints && typeof field.minLength === "number"
+        ? field.minLength
+        : null,
+    maxLength:
+      supportsTextConstraints && typeof field.maxLength === "number"
+        ? field.maxLength
+        : null,
+    forceUppercase: supportsTextConstraints ? Boolean(field.forceUppercase) : false,
+  };
+}
 
 const createServiceSchema = z.object({
   name: z.string().min(2),
@@ -47,11 +134,16 @@ export async function GET(req: NextRequest) {
       defaultCurrency: item.defaultCurrency ?? "INR",
       isPackage: Boolean(item.isPackage),
       includedServiceIds: (item.includedServiceIds ?? []).map((id) => String(id)),
-      formFields: (item.formFields ?? []).map((field) => ({
-        question: field.question,
-        fieldType: field.fieldType,
-        required: Boolean(field.required),
-      })),
+      formFields: (item.formFields ?? []).map((field) =>
+        serializeFormField({
+          question: field.question,
+          fieldType: field.fieldType,
+          required: field.required,
+          minLength: field.minLength,
+          maxLength: field.maxLength,
+          forceUppercase: field.forceUppercase,
+        }),
+      ),
     })),
   });
 }
@@ -77,6 +169,7 @@ export async function POST(req: NextRequest) {
 
   const isPackage = Boolean(parsed.data.isPackage);
   const includedServiceIds = [...new Set(parsed.data.includedServiceIds.map((id) => id.trim()).filter(Boolean))];
+  const normalizedFormFields = parsed.data.formFields.map((field) => normalizeFormField(field));
 
   if (isPackage && includedServiceIds.length < 2) {
     return NextResponse.json(
@@ -119,7 +212,7 @@ export async function POST(req: NextRequest) {
     defaultCurrency: parsed.data.defaultCurrency,
     isPackage,
     includedServiceIds: isPackage ? includedServiceIds : [],
-    formFields: parsed.data.formFields,
+    formFields: normalizedFormFields,
   });
 
   return NextResponse.json(
@@ -133,11 +226,16 @@ export async function POST(req: NextRequest) {
         defaultCurrency: service.defaultCurrency ?? "INR",
         isPackage: Boolean(service.isPackage),
         includedServiceIds: (service.includedServiceIds ?? []).map((id) => String(id)),
-        formFields: (service.formFields ?? []).map((field) => ({
-          question: field.question,
-          fieldType: field.fieldType,
-          required: Boolean(field.required),
-        })),
+        formFields: (service.formFields ?? []).map((field) =>
+          serializeFormField({
+            question: field.question,
+            fieldType: field.fieldType,
+            required: field.required,
+            minLength: field.minLength,
+            maxLength: field.maxLength,
+            forceUppercase: field.forceUppercase,
+          }),
+        ),
       },
     },
     { status: 201 },
@@ -159,11 +257,13 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Invalid input." }, { status: 400 });
   }
 
+  const normalizedFormFields = parsed.data.formFields.map((field) => normalizeFormField(field));
+
   await connectMongo();
 
   const updated = await Service.findByIdAndUpdate(
     parsed.data.serviceId,
-    { formFields: parsed.data.formFields },
+    { formFields: normalizedFormFields },
     { new: true },
   ).lean();
 
@@ -181,11 +281,40 @@ export async function PATCH(req: NextRequest) {
       defaultCurrency: updated.defaultCurrency ?? "INR",
       isPackage: Boolean(updated.isPackage),
       includedServiceIds: (updated.includedServiceIds ?? []).map((id) => String(id)),
-      formFields: (updated.formFields ?? []).map((field) => ({
-        question: field.question,
-        fieldType: field.fieldType,
-        required: Boolean(field.required),
-      })),
+      formFields: (updated.formFields ?? []).map((field) =>
+        serializeFormField({
+          question: field.question,
+          fieldType: field.fieldType,
+          required: field.required,
+          minLength: field.minLength,
+          maxLength: field.maxLength,
+          forceUppercase: field.forceUppercase,
+        }),
+      ),
     },
   });
+}
+
+export async function DELETE(req: NextRequest) {
+  const auth = await getAdminAuthFromRequest(req);
+  if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const id = searchParams.get("id");
+
+  if (!id) {
+    return NextResponse.json({ error: "Service ID is required." }, { status: 400 });
+  }
+
+  await connectMongo();
+
+  const deleted = await Service.findByIdAndDelete(id);
+
+  if (!deleted) {
+    return NextResponse.json({ error: "Service not found." }, { status: 404 });
+  }
+
+  return NextResponse.json({ message: "Service deleted successfully." });
 }

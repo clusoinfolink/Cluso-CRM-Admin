@@ -7,7 +7,7 @@ import User from "@/lib/models/User";
 
 const patchSchema = z.object({
   requestId: z.string().min(1),
-  status: z.enum(["approved", "rejected"]),
+  status: z.enum(["approved", "rejected", "verified"]),
   rejectionNote: z.string().trim().max(500).optional(),
 });
 
@@ -143,7 +143,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   const requestDoc = await VerificationRequest.findById(parsed.data.requestId)
-    .select("candidateFormStatus")
+    .select("candidateFormStatus status")
     .lean();
 
   if (!requestDoc) {
@@ -157,10 +157,31 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
-  const updateData =
-    parsed.data.status === "approved"
-      ? { status: "approved", rejectionNote: "" }
-      : { status: "rejected", rejectionNote: parsed.data.rejectionNote };
+  if (parsed.data.status === "verified" && requestDoc.status !== "approved") {
+    return NextResponse.json(
+      { error: "Only approved requests can be marked as verified." },
+      { status: 400 },
+    );
+  }
+
+  let updateData: { status: "approved" | "rejected" | "verified"; rejectionNote: string };
+
+  if (parsed.data.status === "rejected") {
+    updateData = {
+      status: "rejected",
+      rejectionNote: parsed.data.rejectionNote ?? "",
+    };
+  } else if (parsed.data.status === "verified") {
+    updateData = {
+      status: "verified",
+      rejectionNote: "",
+    };
+  } else {
+    updateData = {
+      status: "approved",
+      rejectionNote: "",
+    };
+  }
 
   const updated = await VerificationRequest.findByIdAndUpdate(
     parsed.data.requestId,

@@ -3,11 +3,17 @@
 import { FormEvent, useMemo, useState } from "react";
 import { ClipboardList, Plus, Save, Trash2 } from "lucide-react";
 import type { SupportedCurrency } from "@/lib/currencies";
+import { SearchableSelect } from "@/components/SearchableSelect";
+
+type ServiceFormFieldType = "text" | "long_text" | "number" | "file" | "date";
 
 export type ServiceFormField = {
   question: string;
-  fieldType: "text" | "long_text" | "number" | "file";
+  fieldType: ServiceFormFieldType;
   required: boolean;
+  minLength?: number | null;
+  maxLength?: number | null;
+  forceUppercase?: boolean;
 };
 
 export type ServiceItemForForm = {
@@ -26,6 +32,23 @@ type Props = {
   onSaved: () => Promise<void>;
   preferredServiceId?: string;
 };
+
+function supportsTextConstraints(fieldType: ServiceFormFieldType) {
+  return fieldType === "text" || fieldType === "long_text";
+}
+
+function normalizeLengthValue(raw: string) {
+  if (!raw.trim()) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.trunc(parsed);
+}
 
 export default function ServiceFormBuilder({
   services,
@@ -57,7 +80,12 @@ export default function ServiceFormBuilder({
     [activeServiceId, regularServices],
   );
 
-  const fields = drafts[activeServiceId] ?? selectedService?.formFields ?? [];
+  const fields = (drafts[activeServiceId] ?? selectedService?.formFields ?? []).map((field) => ({
+    ...field,
+    minLength: typeof field.minLength === "number" ? field.minLength : null,
+    maxLength: typeof field.maxLength === "number" ? field.maxLength : null,
+    forceUppercase: Boolean(field.forceUppercase),
+  }));
 
   function addField() {
     if (!activeServiceId) {
@@ -66,7 +94,17 @@ export default function ServiceFormBuilder({
 
     setDrafts((prev) => ({
       ...prev,
-      [activeServiceId]: [...fields, { question: "", fieldType: "text", required: false }],
+      [activeServiceId]: [
+        ...fields,
+        {
+          question: "",
+          fieldType: "text",
+          required: false,
+          minLength: null,
+          maxLength: null,
+          forceUppercase: false,
+        },
+      ],
     }));
   }
 
@@ -83,7 +121,7 @@ export default function ServiceFormBuilder({
     }));
   }
 
-  function updateFieldType(index: number, fieldType: "text" | "long_text" | "number" | "file") {
+  function updateFieldType(index: number, fieldType: ServiceFormFieldType) {
     if (!activeServiceId) {
       return;
     }
@@ -91,7 +129,17 @@ export default function ServiceFormBuilder({
     setDrafts((prev) => ({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
-        idx === index ? { ...item, fieldType } : item,
+        idx === index
+          ? {
+              ...item,
+              fieldType,
+              minLength: supportsTextConstraints(fieldType) ? item.minLength ?? null : null,
+              maxLength: supportsTextConstraints(fieldType) ? item.maxLength ?? null : null,
+              forceUppercase: supportsTextConstraints(fieldType)
+                ? Boolean(item.forceUppercase)
+                : false,
+            }
+          : item,
       ),
     }));
   }
@@ -105,6 +153,49 @@ export default function ServiceFormBuilder({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
         idx === index ? { ...item, required } : item,
+      ),
+    }));
+  }
+
+  function updateFieldMinLength(index: number, minLength: string) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    const nextMinLength = normalizeLengthValue(minLength);
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) =>
+        idx === index ? { ...item, minLength: nextMinLength } : item,
+      ),
+    }));
+  }
+
+  function updateFieldMaxLength(index: number, maxLength: string) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    const nextMaxLength = normalizeLengthValue(maxLength);
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) =>
+        idx === index ? { ...item, maxLength: nextMaxLength } : item,
+      ),
+    }));
+  }
+
+  function updateFieldForceUppercase(index: number, forceUppercase: boolean) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) =>
+        idx === index ? { ...item, forceUppercase } : item,
       ),
     }));
   }
@@ -129,15 +220,43 @@ export default function ServiceFormBuilder({
       return;
     }
 
-    const cleaned = fields.map((item) => ({
-      question: item.question.trim(),
-      fieldType: item.fieldType,
-      required: Boolean(item.required),
-    }));
+    const cleaned = fields.map((item) => {
+      const minLength =
+        supportsTextConstraints(item.fieldType) && typeof item.minLength === "number"
+          ? item.minLength
+          : null;
+      const maxLength =
+        supportsTextConstraints(item.fieldType) && typeof item.maxLength === "number"
+          ? item.maxLength
+          : null;
+
+      return {
+        question: item.question.trim(),
+        fieldType: item.fieldType,
+        required: Boolean(item.required),
+        minLength,
+        maxLength,
+        forceUppercase: supportsTextConstraints(item.fieldType)
+          ? Boolean(item.forceUppercase)
+          : false,
+      };
+    });
 
     const hasEmptyQuestion = cleaned.some((item) => !item.question);
     if (hasEmptyQuestion) {
       setMessage("Each form field must include a question.");
+      return;
+    }
+
+    const invalidLengthField = cleaned.find(
+      (item) =>
+        item.minLength !== null &&
+        item.maxLength !== null &&
+        item.minLength > item.maxLength,
+    );
+
+    if (invalidLengthField) {
+      setMessage(`"${invalidLengthField.question}" has min length greater than max length.`);
       return;
     }
 
@@ -175,11 +294,11 @@ export default function ServiceFormBuilder({
         Service Form Builder
       </h2>
       <p style={{ color: "#6C757D", marginTop: 0 }}>
-        Create or edit Google-Forms-style questions with short text, long text, number, file upload,
+        Create or edit Google-Forms-style questions with short text, long text, number, date, file upload,
         and required toggles.
       </p>
       <p style={{ color: "#6C757D", marginTop: 0, fontSize: "0.9rem" }}>
-        File upload questions accept only PDF, JPG, and PNG files up to 5MB.
+        Add constraints for text fields like min/max length and force ALL CAPS. File uploads accept PDF/JPG/PNG up to 5MB.
       </p>
 
       {regularServices.length === 0 ? (
@@ -190,18 +309,12 @@ export default function ServiceFormBuilder({
         <form onSubmit={saveForm} style={{ display: "grid", gap: "0.8rem" }}>
           <div>
             <label className="label">Service</label>
-            <select
-              className="input"
+            <SearchableSelect
               value={activeServiceId}
-              onChange={(e) => setSelectedServiceId(e.target.value)}
-              required
-            >
-              {regularServices.map((service) => (
-                <option key={service.id} value={service.id}>
-                  {service.name}
-                </option>
-              ))}
-            </select>
+              onChange={(val) => setSelectedServiceId(val)}
+              options={regularServices.map((s) => ({ value: s.id, label: s.name }))}
+              placeholder="Select a service..."
+            />
           </div>
 
           <div style={{ display: "grid", gap: "0.6rem" }}>
@@ -243,13 +356,14 @@ export default function ServiceFormBuilder({
                     onChange={(e) =>
                       updateFieldType(
                         index,
-                        e.target.value as "text" | "long_text" | "number" | "file",
+                        e.target.value as ServiceFormFieldType,
                       )
                     }
                   >
                     <option value="text">Short Text</option>
                     <option value="long_text">Long Text</option>
                     <option value="number">Number</option>
+                    <option value="date">Date</option>
                     <option value="file">File Upload</option>
                   </select>
                 </div>
@@ -282,6 +396,90 @@ export default function ServiceFormBuilder({
                   <Trash2 size={16} />
                   Remove
                 </button>
+
+                {supportsTextConstraints(field.fieldType) ? (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      border: "1px solid #DDE5EF",
+                      borderRadius: "0.5rem",
+                      background: "#EEF6FF",
+                      padding: "0.6rem 0.65rem",
+                      display: "grid",
+                      gap: "0.6rem",
+                    }}
+                  >
+                    <strong style={{ color: "#2D405E", fontSize: "0.88rem" }}>
+                      Field Constraints
+                    </strong>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                        gap: "0.55rem",
+                        alignItems: "end",
+                      }}
+                    >
+                      <div>
+                        <label className="label">Min Length</label>
+                        <input
+                          className="input"
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={field.minLength ?? ""}
+                          onChange={(e) => updateFieldMinLength(index, e.target.value)}
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <div>
+                        <label className="label">Max Length</label>
+                        <input
+                          className="input"
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={field.maxLength ?? ""}
+                          onChange={(e) => updateFieldMaxLength(index, e.target.value)}
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.45rem",
+                          fontWeight: 600,
+                          color: "#2D405E",
+                          minHeight: "2.6rem",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(field.forceUppercase)}
+                          onChange={(e) => updateFieldForceUppercase(index, e.target.checked)}
+                        />
+                        Force ALL CAPS
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
+
+                {field.fieldType === "date" ? (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      color: "#6C757D",
+                      fontSize: "0.86rem",
+                      background: "#EFF8FF",
+                      border: "1px solid #DDE5EF",
+                      borderRadius: "0.5rem",
+                      padding: "0.5rem 0.6rem",
+                    }}
+                  >
+                    Candidates will see a calendar picker for this field.
+                  </div>
+                ) : null}
 
                 {field.fieldType === "file" ? (
                   <div

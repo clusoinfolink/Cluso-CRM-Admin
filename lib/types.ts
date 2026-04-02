@@ -13,7 +13,7 @@ export type MeResponse = {
   user: AdminUser;
 };
 
-export type RequestStatus = "pending" | "approved" | "rejected";
+export type RequestStatus = "pending" | "approved" | "rejected" | "verified";
 
 export type RequestItem = {
   _id: string;
@@ -31,7 +31,7 @@ export type RequestItem = {
     serviceName: string;
     answers: Array<{
       question: string;
-      fieldType: "text" | "long_text" | "number" | "file";
+      fieldType: "text" | "long_text" | "number" | "file" | "date";
       required?: boolean;
       value: string;
       fileName?: string;
@@ -47,8 +47,11 @@ export type RequestItem = {
 
 export type ServiceFormField = {
   question: string;
-  fieldType: "text" | "long_text" | "number" | "file";
+  fieldType: "text" | "long_text" | "number" | "file" | "date";
   required: boolean;
+  minLength?: number | null;
+  maxLength?: number | null;
+  forceUppercase?: boolean;
 };
 
 export type ServiceItem = {
@@ -69,9 +72,62 @@ export type CompanyServiceSelection = {
   currency: SupportedCurrency;
 };
 
+export type CompanyProfileAddress = {
+  line1: string;
+  line2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+};
+
+export type CompanyProfilePhone = {
+  countryCode: string;
+  number: string;
+};
+
+export type CompanyProfileDocument = {
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+};
+
+export type CompanyPartnerProfile = {
+  companyInformation: {
+    companyName: string;
+    gstin: string;
+    cinRegistrationNumber: string;
+    address: CompanyProfileAddress;
+    documents: CompanyProfileDocument[];
+  };
+  invoicingInformation: {
+    billingSameAsCompany: boolean;
+    invoiceEmail: string;
+    address: CompanyProfileAddress;
+  };
+  primaryContactInformation: {
+    firstName: string;
+    lastName: string;
+    designation: string;
+    email: string;
+    officePhone: CompanyProfilePhone;
+    mobilePhone: CompanyProfilePhone;
+    whatsappPhone: CompanyProfilePhone;
+  };
+  additionalQuestions: {
+    heardAboutUs: string;
+    referredBy: string;
+    yearlyBackgroundsExpected: string;
+    promoCode: string;
+    primaryIndustry: string;
+  };
+  updatedAt: string | null;
+};
+
 export type CompanyItem = {
   id: string;
   name: string;
   email: string;
   selectedServices: CompanyServiceSelection[];
+  partnerProfile: CompanyPartnerProfile;
 };

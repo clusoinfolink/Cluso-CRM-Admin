@@ -6,6 +6,7 @@ import { connectMongo } from "@/lib/mongodb";
 import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
 import Service from "@/lib/models/Service";
 import User from "@/lib/models/User";
+import type { CompanyPartnerProfile } from "@/lib/types";
 
 const schema = z.object({
   name: z.string().min(2),
@@ -37,6 +38,126 @@ const updateSchema = z.object({
     .default([]),
 });
 
+function asString(value: unknown, fallback = "") {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  return value;
+}
+
+function normalizeAddress(value: unknown): CompanyPartnerProfile["companyInformation"]["address"] {
+  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  return {
+    line1: asString(raw.line1),
+    line2: asString(raw.line2),
+    city: asString(raw.city),
+    state: asString(raw.state),
+    postalCode: asString(raw.postalCode),
+    country: asString(raw.country),
+  };
+}
+
+function normalizePhone(value: unknown): CompanyPartnerProfile["primaryContactInformation"]["mobilePhone"] {
+  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  return {
+    countryCode: asString(raw.countryCode, "India (+91)"),
+    number: asString(raw.number),
+  };
+}
+
+function normalizeDocuments(value: unknown): CompanyPartnerProfile["companyInformation"]["documents"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      const raw = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+      if (!raw) {
+        return null;
+      }
+
+      const fileName = asString(raw.fileName).trim();
+      const fileType = asString(raw.fileType).trim();
+      const fileSize =
+        typeof raw.fileSize === "number" && Number.isFinite(raw.fileSize)
+          ? Math.max(0, Math.trunc(raw.fileSize))
+          : 0;
+
+      if (!fileName || !fileType || fileSize <= 0) {
+        return null;
+      }
+
+      return { fileName, fileType, fileSize };
+    })
+    .filter((entry): entry is CompanyPartnerProfile["companyInformation"]["documents"][number] =>
+      Boolean(entry),
+    );
+}
+
+function normalizePartnerProfile(value: unknown): CompanyPartnerProfile {
+  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const companyInformation =
+    raw.companyInformation && typeof raw.companyInformation === "object"
+      ? (raw.companyInformation as Record<string, unknown>)
+      : {};
+  const invoicingInformation =
+    raw.invoicingInformation && typeof raw.invoicingInformation === "object"
+      ? (raw.invoicingInformation as Record<string, unknown>)
+      : {};
+  const primaryContactInformation =
+    raw.primaryContactInformation && typeof raw.primaryContactInformation === "object"
+      ? (raw.primaryContactInformation as Record<string, unknown>)
+      : {};
+  const additionalQuestions =
+    raw.additionalQuestions && typeof raw.additionalQuestions === "object"
+      ? (raw.additionalQuestions as Record<string, unknown>)
+      : {};
+
+  const updatedAtRaw = raw.updatedAt;
+  const updatedAt =
+    updatedAtRaw instanceof Date
+      ? updatedAtRaw.toISOString()
+      : typeof updatedAtRaw === "string" && updatedAtRaw
+        ? updatedAtRaw
+        : null;
+
+  return {
+    companyInformation: {
+      companyName: asString(companyInformation.companyName),
+      gstin: asString(companyInformation.gstin),
+      cinRegistrationNumber: asString(companyInformation.cinRegistrationNumber),
+      address: normalizeAddress(companyInformation.address),
+      documents: normalizeDocuments(companyInformation.documents),
+    },
+    invoicingInformation: {
+      billingSameAsCompany: Boolean(invoicingInformation.billingSameAsCompany),
+      invoiceEmail: asString(invoicingInformation.invoiceEmail),
+      address: normalizeAddress(invoicingInformation.address),
+    },
+    primaryContactInformation: {
+      firstName: asString(primaryContactInformation.firstName),
+      lastName: asString(primaryContactInformation.lastName),
+      designation: asString(primaryContactInformation.designation),
+      email: asString(primaryContactInformation.email),
+      officePhone: normalizePhone(primaryContactInformation.officePhone),
+      mobilePhone: normalizePhone(primaryContactInformation.mobilePhone),
+      whatsappPhone: normalizePhone(primaryContactInformation.whatsappPhone),
+    },
+    additionalQuestions: {
+      heardAboutUs: asString(additionalQuestions.heardAboutUs),
+      referredBy: asString(additionalQuestions.referredBy),
+      yearlyBackgroundsExpected: asString(additionalQuestions.yearlyBackgroundsExpected),
+      promoCode: asString(additionalQuestions.promoCode),
+      primaryIndustry: asString(additionalQuestions.primaryIndustry),
+    },
+    updatedAt,
+  };
+}
+
 export async function GET(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
   if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
@@ -57,6 +178,7 @@ export async function GET(req: NextRequest) {
         price: service.price,
         currency: service.currency,
       })),
+      partnerProfile: normalizePartnerProfile(item.partnerProfile),
     })),
   });
 }

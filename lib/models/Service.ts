@@ -1,12 +1,15 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 import { SUPPORTED_CURRENCIES, type SupportedCurrency } from "@/lib/currencies";
 
-export type ServiceFormFieldType = "text" | "long_text" | "number" | "file";
+export type ServiceFormFieldType = "text" | "long_text" | "number" | "file" | "date";
 
 export type ServiceFormField = {
   question: string;
   fieldType: ServiceFormFieldType;
   required: boolean;
+  minLength?: number | null;
+  maxLength?: number | null;
+  forceUppercase?: boolean;
 };
 
 export interface IService extends Document {
@@ -34,17 +37,25 @@ const serviceSchema = new Schema<IService>(
         question: { type: String, required: true },
         fieldType: {
           type: String,
-          enum: ["text", "long_text", "number", "file"],
+          enum: ["text", "long_text", "number", "file", "date"],
           required: true,
         },
         required: { type: Boolean, default: false },
+        minLength: { type: Number, default: null },
+        maxLength: { type: Number, default: null },
+        forceUppercase: { type: Boolean, default: false },
       },
     ],
   },
   { timestamps: true },
 );
 
-const hasEnhancedServiceFields = Boolean(mongoose.models.Service?.schema.path("formFields.required"));
+const hasEnhancedServiceFields = Boolean(
+  mongoose.models.Service?.schema.path("formFields.required") &&
+    mongoose.models.Service?.schema.path("formFields.minLength") &&
+    mongoose.models.Service?.schema.path("formFields.maxLength") &&
+    mongoose.models.Service?.schema.path("formFields.forceUppercase"),
+);
 const hasPackageFields = Boolean(
   mongoose.models.Service?.schema.path("isPackage") &&
     mongoose.models.Service?.schema.path("includedServiceIds"),

@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Package, Plus, Tag } from "lucide-react";
+import { ChevronDown, ChevronUp, Package, Plus, Tag, Trash } from "lucide-react";
 import ServiceFormBuilder from "@/components/ServiceFormBuilder";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { getAlertTone } from "@/lib/alerts";
@@ -75,6 +75,33 @@ export default function ServicesPage() {
 
       return prev.filter((id) => id !== serviceId);
     });
+  }
+
+  async function handleDeleteService(serviceId: string, serviceName: string) {
+    if (!window.confirm(`Are you sure you want to delete the service "${serviceName}"?\n\nThis will permanently remove it from the catalog. Existing orders may still hold historic data, but the service cannot be selected in the future.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/services?id=${encodeURIComponent(serviceId)}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || "Failed to delete service.");
+        return;
+      }
+
+      queryClient.setQueryData<ServiceItem[]>(
+        SERVICES_QUERY_KEY,
+        (old) => (old ? old.filter((s) => s.id !== serviceId) : [])
+      );
+      alert("Service deleted successfully.");
+    } catch (err) {
+      console.error(err);
+      alert("An unexpected error occurred while deleting the service.");
+    }
   }
 
   async function createService(e: FormEvent<HTMLFormElement>) {
@@ -357,34 +384,59 @@ export default function ServicesPage() {
                     padding: "0.65rem 0.8rem",
                     background: "#F8F9FA",
                     display: "flex",
-                    gap: "0.8rem",
+                    justifyContent: "space-between",
                     alignItems: "flex-start",
                   }}
                 >
-                  <div style={{ marginTop: "0.15rem" }}>
-                    <Tag size={18} color="#4A90E2" />
-                  </div>
-                  <div>
-                    <strong>{service.name}</strong>
-                    {service.isPackage ? (
-                      <div style={{ marginTop: "0.25rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.85rem" }}>
-                        Package Deal
+                  <div style={{ display: "flex", gap: "0.8rem", alignItems: "flex-start" }}>
+                    <div style={{ marginTop: "0.15rem" }}>
+                      <Tag size={18} color="#4A90E2" />
+                    </div>
+                    <div>
+                      <strong>{service.name}</strong>
+                      {service.isPackage ? (
+                        <div style={{ marginTop: "0.25rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.85rem" }}>
+                          Package Deal
+                        </div>
+                      ) : null}
+                      <div style={{ color: "#6C757D", fontSize: "0.9rem" }}>{service.description || "No description"}</div>
+                      <div style={{ color: "#2D405E", fontSize: "0.88rem", marginTop: "0.2rem" }}>
+                        Default: {service.defaultPrice !== null ? `${service.defaultCurrency} ${service.defaultPrice}` : "Not set"}
                       </div>
-                    ) : null}
-                    <div style={{ color: "#6C757D", fontSize: "0.9rem" }}>{service.description || "No description"}</div>
-                    <div style={{ color: "#2D405E", fontSize: "0.88rem", marginTop: "0.2rem" }}>
-                      Default: {service.defaultPrice !== null ? `${service.defaultCurrency} ${service.defaultPrice}` : "Not set"}
-                    </div>
-                    <div style={{ color: "#2D405E", fontSize: "0.88rem", marginTop: "0.2rem" }}>
-                      {service.isPackage
-                        ? `Includes: ${
-                            service.includedServiceIds
-                              .map((serviceId) => serviceNameById.get(serviceId) ?? "Unknown service")
-                              .join(", ") || "No linked services"
-                          }`
-                        : `Form Fields: ${service.formFields?.length ?? 0}`}
+                      <div style={{ color: "#2D405E", fontSize: "0.88rem", marginTop: "0.2rem" }}>
+                        {service.isPackage
+                          ? `Includes: ${
+                              service.includedServiceIds
+                                .map((serviceId) => serviceNameById.get(serviceId) ?? "Unknown service")
+                                .join(", ") || "No linked services"
+                            }`
+                          : `Form Fields: ${service.formFields?.length ?? 0}`}
+                      </div>
                     </div>
                   </div>
+                  
+                  {(me.role === "admin" || me.role === "superadmin") && (
+                    <button
+                      type="button"
+                      title="Delete Service"
+                      onClick={() => handleDeleteService(service.id, service.name)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#dc3545",
+                        cursor: "pointer",
+                        padding: "0.4rem",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "0.25rem",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "#FBE2E5"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      <Trash size={18} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
