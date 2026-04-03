@@ -15,7 +15,10 @@ export async function GET(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
   if (
     !auth ||
-    (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
+    (auth.role !== "admin" &&
+      auth.role !== "superadmin" &&
+      auth.role !== "manager" &&
+      auth.role !== "verifier")
   ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -23,6 +26,7 @@ export async function GET(req: NextRequest) {
   await connectMongo();
 
   let requestFilter: Record<string, unknown> = {};
+  let scopedVerifiers: Array<{ name: string; assignedCompanies?: unknown[] }> = [];
 
   if (auth.role === "verifier") {
     const verifier = await User.findOne({ _id: auth.userId, role: "verifier" }).lean();
@@ -36,6 +40,47 @@ export async function GET(req: NextRequest) {
     }
 
     requestFilter = { customer: { $in: assignedCompanies } };
+    scopedVerifiers = [
+      {
+        name: verifier.name,
+        assignedCompanies: verifier.assignedCompanies,
+      },
+    ];
+  }
+
+  if (auth.role === "manager") {
+    const manager = await User.findOne({ _id: auth.userId, role: "manager" }).lean();
+    if (!manager) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const managedVerifiers = await User.find({
+      role: "verifier",
+      manager: manager._id,
+    }).lean();
+
+    const scopedCompanySet = new Set<string>(
+      (manager.assignedCompanies ?? []).map((item) => String(item)),
+    );
+    for (const verifier of managedVerifiers) {
+      for (const companyId of verifier.assignedCompanies ?? []) {
+        scopedCompanySet.add(String(companyId));
+      }
+    }
+
+    if (scopedCompanySet.size === 0) {
+      return NextResponse.json({ items: [] });
+    }
+
+    requestFilter = { customer: { $in: [...scopedCompanySet] } };
+    scopedVerifiers = managedVerifiers.map((verifier) => ({
+      name: verifier.name,
+      assignedCompanies: verifier.assignedCompanies,
+    }));
+    scopedVerifiers.push({
+      name: manager.name,
+      assignedCompanies: manager.assignedCompanies,
+    });
   }
 
   const items = await VerificationRequest.find(requestFilter)
@@ -46,6 +91,45 @@ export async function GET(req: NextRequest) {
   const creatorIds = [...new Set(items.map((item) => String(item.createdBy)))];
   const customers = await User.find({ _id: { $in: customerIds } }).lean();
   const creators = await User.find({ _id: { $in: creatorIds } }).lean();
+  const customerIdSet = new Set(customerIds);
+
+  if (auth.role === "admin" || auth.role === "superadmin") {
+    const verifiers = await User.find({
+      role: "verifier",
+      assignedCompanies: { $in: customerIds },
+    }).lean();
+
+    scopedVerifiers = verifiers.map((verifier) => ({
+      name: verifier.name,
+      assignedCompanies: verifier.assignedCompanies,
+    }));
+  }
+
+  const verifierNamesByCompany = new Map<string, string[]>();
+  for (const verifier of scopedVerifiers) {
+    const trimmedName = verifier.name?.trim() ?? "";
+    if (!trimmedName) {
+      continue;
+    }
+
+    for (const companyIdRaw of verifier.assignedCompanies ?? []) {
+      const companyId = String(companyIdRaw);
+      if (!customerIdSet.has(companyId)) {
+        continue;
+      }
+
+      const existing = verifierNamesByCompany.get(companyId);
+      if (!existing) {
+        verifierNamesByCompany.set(companyId, [trimmedName]);
+        continue;
+      }
+
+      if (!existing.includes(trimmedName)) {
+        existing.push(trimmedName);
+      }
+    }
+  }
+
   const customerMap = new Map(customers.map((c) => [String(c._id), c]));
   const creatorMap = new Map(creators.map((c) => [String(c._id), c]));
 
@@ -58,6 +142,7 @@ export async function GET(req: NextRequest) {
       candidateName: item.candidateName,
       candidateEmail: item.candidateEmail,
       candidatePhone: item.candidatePhone,
+      verifierNames: verifierNamesByCompany.get(String(item.customer)) ?? [],
       status: item.status,
       rejectionNote: item.rejectionNote ?? "",
       candidateFormStatus: item.candidateFormStatus ?? "pending",
@@ -75,6 +160,7 @@ export async function GET(req: NextRequest) {
           question: answer.question,
           fieldType: answer.fieldType,
           required: Boolean(answer.required),
+          repeatable: Boolean(answer.repeatable),
           value: answer.value,
           fileName: answer.fileName ?? "",
           fileMimeType: answer.fileMimeType ?? "",
@@ -96,7 +182,10 @@ export async function PATCH(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
   if (
     !auth ||
-    (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
+    (auth.role !== "admin" &&
+      auth.role !== "superadmin" &&
+      auth.role !== "manager" &&
+      auth.role !== "verifier")
   ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -117,27 +206,56 @@ export async function PATCH(req: NextRequest) {
 
   await connectMongo();
 
-  if (auth.role === "verifier") {
-    const verifier = await User.findOne({ _id: auth.userId, role: "verifier" }).lean();
-    if (!verifier) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (auth.role === "verifier" || auth.role === "manager") {
+    const assignedCompanies = new Set<string>();
+
+    if (auth.role === "verifier") {
+      const verifier = await User.findOne({ _id: auth.userId, role: "verifier" }).lean();
+      if (!verifier) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+
+      for (const companyId of verifier.assignedCompanies ?? []) {
+        assignedCompanies.add(String(companyId));
+      }
     }
 
-    const assignedCompanies = new Set(
-      (verifier.assignedCompanies ?? []).map((item) => String(item)),
-    );
+    if (auth.role === "manager") {
+      const manager = await User.findOne({ _id: auth.userId, role: "manager" }).lean();
+      if (!manager) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+
+      for (const companyId of manager.assignedCompanies ?? []) {
+        assignedCompanies.add(String(companyId));
+      }
+
+      const managedVerifiers = await User.find({
+        role: "verifier",
+        manager: manager._id,
+      })
+        .select("assignedCompanies")
+        .lean();
+
+      for (const verifier of managedVerifiers) {
+        for (const companyId of verifier.assignedCompanies ?? []) {
+          assignedCompanies.add(String(companyId));
+        }
+      }
+    }
+
     if (assignedCompanies.size === 0) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const requestDoc = await VerificationRequest.findById(parsed.data.requestId)
+    const scopedRequest = await VerificationRequest.findById(parsed.data.requestId)
       .select("customer")
       .lean();
-    if (!requestDoc) {
+    if (!scopedRequest) {
       return NextResponse.json({ error: "Request not found." }, { status: 404 });
     }
 
-    if (!assignedCompanies.has(String(requestDoc.customer))) {
+    if (!assignedCompanies.has(String(scopedRequest.customer))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }

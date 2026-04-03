@@ -52,7 +52,10 @@ export default function AdminDashboardOverviewPage() {
       setLoadingOverview(true);
 
       const requestPromise = fetch("/api/requests", { cache: "no-store" });
-      const servicePromise = fetch("/api/services", { cache: "no-store" });
+      const includeServices = currentMe.role !== "manager";
+      const servicePromise = includeServices
+        ? fetch("/api/services", { cache: "no-store" })
+        : Promise.resolve(null);
 
       const extraPromises: Promise<Response>[] = [];
 
@@ -80,9 +83,11 @@ export default function AdminDashboardOverviewPage() {
         setRequests(data.items ?? []);
       }
 
-      if (serviceRes.ok) {
+      if (serviceRes?.ok) {
         const data = (await serviceRes.json()) as { items: ServiceItem[] };
         setServicesCount(data.items?.length ?? 0);
+      } else if (!includeServices) {
+        setServicesCount(0);
       }
 
       let offset = 0;
@@ -144,8 +149,11 @@ export default function AdminDashboardOverviewPage() {
     { label: "Verified Requests", value: verifiedCount, icon: Shield, tone: "cyan", href: "/dashboard/requests" },
     { label: "Rejected Requests", value: rejectedCount, icon: AlertTriangle, tone: "rose", href: "/dashboard/requests" },
     { label: "Archived Requests", value: archivedCount, icon: Archive, tone: "violet", href: "/dashboard/requests" },
-    { label: "Services", value: servicesCount, icon: Package, tone: "sky", href: "/dashboard/services" },
   ];
+
+  if (me.role !== "manager") {
+    cards.push({ label: "Services", value: servicesCount, icon: Package, tone: "sky", href: "/dashboard/services" });
+  }
 
   if (me.role === "admin" || me.role === "superadmin") {
     cards.push({ label: "Companies", value: companiesCount, icon: Building, tone: "cyan", href: "/dashboard/companies" });
@@ -212,14 +220,16 @@ export default function AdminDashboardOverviewPage() {
           </Link>
         )}
 
-        <Link href="/dashboard/services" className="quick-action-card" aria-label="Open services workspace">
-          <div className="quick-action-head">
-            <Package size={16} />
-            <strong>Configure Services</strong>
-          </div>
-          <p className="quick-action-copy">Add service catalog entries and maintain service form structures.</p>
-          <span className="quick-action-link">Open Services <ArrowRight size={14} /></span>
-        </Link>
+        {me.role !== "manager" && (
+          <Link href="/dashboard/services" className="quick-action-card" aria-label="Open services workspace">
+            <div className="quick-action-head">
+              <Package size={16} />
+              <strong>Configure Services</strong>
+            </div>
+            <p className="quick-action-copy">Add service catalog entries and maintain service form structures.</p>
+            <span className="quick-action-link">Open Services <ArrowRight size={14} /></span>
+          </Link>
+        )}
 
         {(me.role === "admin" || me.role === "superadmin") && (
           <Link href="/dashboard/team" className="quick-action-card" aria-label="Open team workspace">

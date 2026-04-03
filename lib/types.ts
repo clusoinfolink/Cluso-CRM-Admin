@@ -1,6 +1,6 @@
 import type { SupportedCurrency } from "@/lib/currencies";
 
-export type AdminRole = "admin" | "superadmin" | "verifier";
+export type AdminRole = "admin" | "superadmin" | "manager" | "verifier";
 
 export type AdminUser = {
   id: string;
@@ -20,6 +20,7 @@ export type RequestItem = {
   candidateName: string;
   candidateEmail: string;
   candidatePhone: string;
+  verifierNames?: string[];
   createdByName?: string;
   status: RequestStatus;
   rejectionNote: string;
@@ -33,6 +34,7 @@ export type RequestItem = {
       question: string;
       fieldType: "text" | "long_text" | "number" | "file" | "date";
       required?: boolean;
+      repeatable?: boolean;
       value: string;
       fileName?: string;
       fileMimeType?: string;
@@ -49,6 +51,7 @@ export type ServiceFormField = {
   question: string;
   fieldType: "text" | "long_text" | "number" | "file" | "date";
   required: boolean;
+  repeatable?: boolean;
   minLength?: number | null;
   maxLength?: number | null;
   forceUppercase?: boolean;
@@ -130,4 +133,10 @@ export type CompanyItem = {
   email: string;
   selectedServices: CompanyServiceSelection[];
   partnerProfile: CompanyPartnerProfile;
+  stats?: {
+    totalRequests: number;
+    assignedVerifiers: string[];
+    lastRequestDate: string | null;
+    lastRequestStatus: string | null;
+  };
 };

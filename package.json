@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start --port 3010",
     "lint": "eslint",
-    "google:token": "node scripts/generate-google-refresh-token.mjs"
+    "google:token": "node scripts/generate-google-refresh-token.mjs",
+    "team:assign-managers": "node scripts/assign-verifiers-to-managers.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.95.2",

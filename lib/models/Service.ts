@@ -7,6 +7,7 @@ export type ServiceFormField = {
   question: string;
   fieldType: ServiceFormFieldType;
   required: boolean;
+  repeatable?: boolean;
   minLength?: number | null;
   maxLength?: number | null;
   forceUppercase?: boolean;
@@ -41,6 +42,7 @@ const serviceSchema = new Schema<IService>(
           required: true,
         },
         required: { type: Boolean, default: false },
+        repeatable: { type: Boolean, default: false },
         minLength: { type: Number, default: null },
         maxLength: { type: Number, default: null },
         forceUppercase: { type: Boolean, default: false },
@@ -52,6 +54,7 @@ const serviceSchema = new Schema<IService>(
 
 const hasEnhancedServiceFields = Boolean(
   mongoose.models.Service?.schema.path("formFields.required") &&
+    mongoose.models.Service?.schema.path("formFields.repeatable") &&
     mongoose.models.Service?.schema.path("formFields.minLength") &&
     mongoose.models.Service?.schema.path("formFields.maxLength") &&
     mongoose.models.Service?.schema.path("formFields.forceUppercase"),

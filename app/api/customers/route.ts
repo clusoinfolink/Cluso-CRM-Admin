@@ -8,6 +8,8 @@ import Service from "@/lib/models/Service";
 import User from "@/lib/models/User";
 import type { CompanyPartnerProfile } from "@/lib/types";
 
+import VerificationRequest from "@/lib/models/VerificationRequest";
+
 const schema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
@@ -167,19 +169,70 @@ export async function GET(req: NextRequest) {
   await connectMongo();
   const items = await User.find({ role: "customer" }).sort({ createdAt: -1 }).lean();
 
+  const customerIds = items.map((i) => i._id);
+
+  const [verifiers, requests] = await Promise.all([
+    User.find({ role: "verifier", assignedCompanies: { $in: customerIds } }, { name: 1, assignedCompanies: 1 }).lean(),
+    VerificationRequest.aggregate([
+      { $match: { customer: { $in: customerIds } } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: "$customer",
+          totalRequests: { $sum: 1 },
+          lastRequestDate: { $first: "$createdAt" },
+          lastRequestStatus: { $first: "$status" },
+        },
+      },
+    ]),
+  ]);
+
+  const requestStatsMap = Object.fromEntries(
+    requests.map((r) => [
+      String(r._id),
+      {
+        totalRequests: r.totalRequests,
+        lastRequestDate: r.lastRequestDate,
+        lastRequestStatus: r.lastRequestStatus,
+      },
+    ])
+  );
+
+  const verifiersMap = new Map<string, string[]>();
+  for (const v of verifiers) {
+    if (Array.isArray(v.assignedCompanies)) {
+      for (const cid of v.assignedCompanies) {
+        const idStr = String(cid);
+        if (!verifiersMap.has(idStr)) {
+          verifiersMap.set(idStr, []);
+        }
+        verifiersMap.get(idStr)!.push(v.name);
+      }
+    }
+  }
+
   return NextResponse.json({
-    items: items.map((item) => ({
-      id: String(item._id),
-      name: item.name,
-      email: item.email,
-      selectedServices: (item.selectedServices ?? []).map((service) => ({
-        serviceId: String(service.serviceId),
-        serviceName: service.serviceName,
-        price: service.price,
-        currency: service.currency,
-      })),
-      partnerProfile: normalizePartnerProfile(item.partnerProfile),
-    })),
+    items: items.map((item) => {
+      const idStr = String(item._id);
+      return {
+        id: idStr,
+        name: item.name,
+        email: item.email,
+        selectedServices: (item.selectedServices ?? []).map((service) => ({
+          serviceId: String(service.serviceId),
+          serviceName: service.serviceName,
+          price: service.price,
+          currency: service.currency,
+        })),
+        partnerProfile: normalizePartnerProfile(item.partnerProfile),
+        stats: {
+          totalRequests: requestStatsMap[idStr]?.totalRequests || 0,
+          assignedVerifiers: verifiersMap.get(idStr) || [],
+          lastRequestDate: requestStatsMap[idStr]?.lastRequestDate || null,
+          lastRequestStatus: requestStatsMap[idStr]?.lastRequestStatus || null,
+        },
+      };
+    }),
   });
 }
 

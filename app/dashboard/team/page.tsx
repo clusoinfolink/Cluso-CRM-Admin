@@ -22,7 +22,7 @@ export default function TeamPage() {
       >
         <section className="glass-card" style={{ padding: "1.2rem" }}>
           <p className="inline-alert inline-alert-warning" style={{ margin: 0 }}>
-            You do not have permission to manage admin or verifier accounts.
+            You do not have permission to manage team account creation.
           </p>
         </section>
       </AdminPortalFrame>
@@ -34,10 +34,18 @@ export default function TeamPage() {
       me={me}
       onLogout={logout}
       title="Team Management"
-      subtitle="Create and manage admin and verifier access in a dedicated workspace."
+      subtitle={
+        me.role === "manager"
+          ? "Assign your company access to your verifiers."
+          : "Create admin and manager accounts, assign verifiers to managers at creation, and review reporting roster."
+      }
     >
       {me.role === "superadmin" ? <AdminManagement /> : null}
-      <VerifierManagement />
+      <VerifierManagement
+        viewerRole={
+          me.role === "superadmin" ? "superadmin" : me.role === "manager" ? "manager" : "admin"
+        }
+      />
     </AdminPortalFrame>
   );
 }

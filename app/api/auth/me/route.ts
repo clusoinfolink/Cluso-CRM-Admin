@@ -20,7 +20,13 @@ export async function GET() {
   await connectMongo();
   const user = await User.findById(payload.userId).lean();
 
-  if (!user || (user.role !== "admin" && user.role !== "superadmin" && user.role !== "verifier")) {
+  if (
+    !user ||
+    (user.role !== "admin" &&
+      user.role !== "superadmin" &&
+      user.role !== "manager" &&
+      user.role !== "verifier")
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

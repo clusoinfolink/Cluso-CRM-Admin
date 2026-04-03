@@ -8,7 +8,6 @@ import {
   CheckCircle,
   ChevronDown,
   ChevronUp,
-  Clock,
   ListFilter,
   Search,
   SlidersHorizontal,
@@ -58,6 +57,30 @@ function companyGroupKey(item: Pick<RequestItem, "customerName" | "customerEmail
   return `${companyName}::${companyEmail}`;
 }
 
+function parseRepeatableAnswerValues(rawValue: string, repeatable?: boolean) {
+  if (!repeatable) {
+    return [];
+  }
+
+  const trimmedValue = rawValue.trim();
+  if (!trimmedValue.startsWith("[")) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedValue);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 function RequestsPageContent() {
   const { me, loading, logout } = useAdminSession();
   const searchParams = useSearchParams();
@@ -70,6 +93,11 @@ function RequestsPageContent() {
   });
 
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
+  const canManageStatuses =
+    me?.role === "admin" ||
+    me?.role === "superadmin" ||
+    me?.role === "manager" ||
+    me?.role === "verifier";
   const [searchText, setSearchText] = useState("");
   const [message, setMessage] = useState("");
   const [highlightedRequestId, setHighlightedRequestId] = useState("");
@@ -361,44 +389,56 @@ function RequestsPageContent() {
                       </tr>
                     </thead>
                     <tbody>
-                      {serviceResponse.answers.map((answer, answerIndex) => (
-                        <tr key={`${serviceResponse.serviceId}-${answerIndex}`}>
-                          <td style={{ padding: "0.75rem 1rem", color: "#334155", fontSize: "0.9rem", fontWeight: 500, borderBottom: answerIndex === serviceResponse.answers.length - 1 ? "none" : "1px solid #F1F5F9", verticalAlign: "top" }}>
-                            {answer.question}
-                          </td>
-                          <td style={{ padding: "0.75rem 1rem", color: "#1E293B", fontSize: "0.9rem", borderBottom: answerIndex === serviceResponse.answers.length - 1 ? "none" : "1px solid #F1F5F9" }}>
-                            {answer.fieldType === "file" && answer.fileData ? (
-                              <span style={{ display: "inline-flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap", background: "#EFF6FF", padding: "0.25rem 0.75rem", borderRadius: "8px", border: "1px solid #BFDBFE" }}>
-                                <span style={{ fontWeight: 600, color: "#1D4ED8", fontSize: "0.85rem" }}>
-                                  {answer.fileName || "Attachment"}
+                      {serviceResponse.answers.map((answer, answerIndex) => {
+                        const repeatableValues = parseRepeatableAnswerValues(answer.value, answer.repeatable);
+
+                        return (
+                          <tr key={`${serviceResponse.serviceId}-${answerIndex}`}>
+                            <td style={{ padding: "0.75rem 1rem", color: "#334155", fontSize: "0.9rem", fontWeight: 500, borderBottom: answerIndex === serviceResponse.answers.length - 1 ? "none" : "1px solid #F1F5F9", verticalAlign: "top" }}>
+                              {answer.question}
+                            </td>
+                            <td style={{ padding: "0.75rem 1rem", color: "#1E293B", fontSize: "0.9rem", borderBottom: answerIndex === serviceResponse.answers.length - 1 ? "none" : "1px solid #F1F5F9" }}>
+                              {answer.fieldType === "file" && answer.fileData ? (
+                                <span style={{ display: "inline-flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap", background: "#EFF6FF", padding: "0.25rem 0.75rem", borderRadius: "8px", border: "1px solid #BFDBFE" }}>
+                                  <span style={{ fontWeight: 600, color: "#1D4ED8", fontSize: "0.85rem" }}>
+                                    {answer.fileName || "Attachment"}
+                                  </span>
+                                  <div style={{ width: "1px", height: "14px", background: "#93C5FD" }} />
+                                  <a
+                                    href={answer.fileData}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ color: "#2563EB", textDecoration: "none", fontSize: "0.85rem", fontWeight: 500 }}
+                                    onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
+                                    onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
+                                  >
+                                    View File
+                                  </a>
+                                  <a
+                                    href={answer.fileData}
+                                    download={answer.fileName || `attachment-${answerIndex}`}
+                                    style={{ color: "#2563EB", textDecoration: "none", fontSize: "0.85rem", fontWeight: 500 }}
+                                    onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
+                                    onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
+                                  >
+                                    Download
+                                  </a>
                                 </span>
-                                <div style={{ width: "1px", height: "14px", background: "#93C5FD" }} />
-                                <a
-                                  href={answer.fileData}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  style={{ color: "#2563EB", textDecoration: "none", fontSize: "0.85rem", fontWeight: 500 }}
-                                  onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
-                                  onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
-                                >
-                                  View File
-                                </a>
-                                <a
-                                  href={answer.fileData}
-                                  download={answer.fileName || `attachment-${answerIndex}`}
-                                  style={{ color: "#2563EB", textDecoration: "none", fontSize: "0.85rem", fontWeight: 500 }}
-                                  onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
-                                  onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
-                                >
-                                  Download
-                                </a>
-                              </span>
-                            ) : (
-                              answer.value || <span style={{ color: "#94A3B8", fontStyle: "italic" }}>Not provided</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                              ) : repeatableValues.length > 0 ? (
+                                <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "grid", gap: "0.25rem" }}>
+                                  {repeatableValues.map((entry, entryIndex) => (
+                                    <li key={`${serviceResponse.serviceId}-${answerIndex}-entry-${entryIndex}`} style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                      {entry}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                answer.value || <span style={{ color: "#94A3B8", fontStyle: "italic" }}>Not provided</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -456,6 +496,7 @@ function RequestsPageContent() {
                 <tr style={{ textAlign: "left" }}>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Candidate</th>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Contact</th>
+                  <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Verifier Activity</th>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Services</th>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Form Status</th>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Validation</th>
@@ -469,9 +510,15 @@ function RequestsPageContent() {
                 {group.items.map((item, index) => {
                   const hasResponses = Boolean(item.candidateFormResponses && item.candidateFormResponses.length > 0);
                   const formSubmitted = item.candidateFormStatus === "submitted";
-                  const canApprove = item.status === "pending" || item.status === "rejected";
-                  const canReject = item.status === "pending" || (item.status === "approved" && me?.role === "superadmin");
-                  const canVerify = item.status === "approved";
+                  const canApprove = canManageStatuses && (item.status === "pending" || item.status === "rejected");
+                  const canReject =
+                    canManageStatuses &&
+                    (item.status === "pending" || (item.status === "approved" && me?.role === "superadmin"));
+                  const canVerify = canManageStatuses && item.status === "approved";
+                  const verifierActivity =
+                    item.verifierNames && item.verifierNames.length > 0
+                      ? item.verifierNames.join(", ")
+                      : "No verifier assigned";
 
                   return (
                     <tr
@@ -490,6 +537,9 @@ function RequestsPageContent() {
                       <td style={{ padding: "1rem", borderBottom: "1px solid #F1F5F9" }}>
                         <div style={{ color: "#334155", fontSize: "0.9rem" }}>{item.candidateEmail || "-"}</div>
                         <div style={{ fontSize: "0.8rem", color: "#64748B", marginTop: "0.2rem" }}>{item.candidatePhone || "-"}</div>
+                      </td>
+                      <td style={{ padding: "1rem", maxWidth: "220px", borderBottom: "1px solid #F1F5F9", color: "#475569", fontSize: "0.85rem" }}>
+                        {verifierActivity}
                       </td>
                       <td style={{ padding: "1rem", maxWidth: "260px", borderBottom: "1px solid #F1F5F9" }}>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
@@ -622,7 +672,11 @@ function RequestsPageContent() {
       me={me}
       onLogout={logout}
       title="Verification Requests"
-      subtitle="View, track, and manage verification tasks"
+      subtitle={
+        me.role === "manager"
+          ? "Manage requests across manager-assigned companies and subordinate verifier companies."
+          : "View, track, and manage verification tasks"
+      }
     >
       {message ? <p className={`inline-alert ${getAlertTone(message)}`}>{message}</p> : null}
 

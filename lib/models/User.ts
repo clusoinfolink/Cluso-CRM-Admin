@@ -75,6 +75,7 @@ const UserSchema = new Schema(
       enum: [
         "superadmin",
         "admin",
+        "manager",
         "verifier",
         "customer",
         "delegate",
@@ -82,6 +83,11 @@ const UserSchema = new Schema(
         "candidate",
       ],
       required: true,
+    },
+    manager: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
     },
     assignedCompanies: [
       {
@@ -121,7 +127,10 @@ const hasCandidateRole =
   Array.isArray(existingUserRoleValues) && existingUserRoleValues.includes("candidate");
 const hasDelegateUserRole =
   Array.isArray(existingUserRoleValues) && existingUserRoleValues.includes("delegate_user");
+const hasManagerRole =
+  Array.isArray(existingUserRoleValues) && existingUserRoleValues.includes("manager");
 const hasPartnerProfilePath = Boolean(models.User?.schema.path("partnerProfile"));
+const hasManagerPath = Boolean(models.User?.schema.path("manager"));
 
 if (
   models.User &&
@@ -129,7 +138,9 @@ if (
     !models.User.schema.path("assignedCompanies") ||
     !hasCandidateRole ||
     !hasDelegateUserRole ||
-    !hasPartnerProfilePath)
+    !hasManagerRole ||
+    !hasPartnerProfilePath ||
+    !hasManagerPath)
 ) {
   delete models.User;
 }

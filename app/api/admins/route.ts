@@ -12,7 +12,7 @@ export async function GET() {
   }
 
   await connectMongo();
-  const admins = await User.find({ role: { $in: ["admin", "superadmin"] } })
+  const admins = await User.find({ role: { $in: ["admin", "superadmin", "manager"] } })
     .sort({ createdAt: -1 })
     .lean();
 
@@ -31,7 +31,7 @@ const createAdminSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(6),
-  role: z.enum(["admin", "superadmin"]).default("admin"),
+  role: z.enum(["admin", "superadmin", "manager"]).default("admin"),
 });
 
 export async function POST(req: Request) {

@@ -12,7 +12,13 @@ const schema = z.object({
 
 export async function POST(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
-  if (!auth || (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")) {
+  if (
+    !auth ||
+    (auth.role !== "admin" &&
+      auth.role !== "superadmin" &&
+      auth.role !== "manager" &&
+      auth.role !== "verifier")
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -32,7 +38,13 @@ export async function POST(req: NextRequest) {
   await connectMongo();
 
   const user = await User.findById(auth.userId);
-  if (!user || (user.role !== "admin" && user.role !== "superadmin" && user.role !== "verifier")) {
+  if (
+    !user ||
+    (user.role !== "admin" &&
+      user.role !== "superadmin" &&
+      user.role !== "manager" &&
+      user.role !== "verifier")
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

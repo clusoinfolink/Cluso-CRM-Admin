@@ -674,6 +674,72 @@ export default function CompaniesPage() {
           </div>
         )}
       </section>
+
+      <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
+        <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          Company Request Roster
+        </h2>
+        <div style={{ overflowX: "auto", border: "1px solid #E2E8F0", borderRadius: "10px", background: "#fff", marginTop: "1rem" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "0.9rem" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #E2E8F0", background: "#F8FAFC", color: "#475569" }}>
+                <th style={{ padding: "0.8rem", fontWeight: 600 }}>Company</th>
+                <th style={{ padding: "0.8rem", fontWeight: 600 }}>Requests Volume</th>
+                <th style={{ padding: "0.8rem", fontWeight: 600 }}>Latest Request Date</th>
+                <th style={{ padding: "0.8rem", fontWeight: 600 }}>Profile Status</th>
+                <th style={{ padding: "0.8rem", fontWeight: 600 }}>Assigned Verifiers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {companies.map((company) => (
+                <tr key={company.id} style={{ borderBottom: "1px solid #E2E8F0" }}>
+                  <td style={{ padding: "0.8rem" }}>
+                    <strong style={{ color: "#1E293B" }}>{company.name}</strong>
+                    <div style={{ fontSize: "0.8rem", color: "#64748B" }}>{company.email}</div>
+                  </td>
+                  <td style={{ padding: "0.8rem" }}>
+                    <span style={{ padding: "0.2rem 0.6rem", background: company.stats?.totalRequests ? "#DBEAFE" : "#F1F5F9", color: company.stats?.totalRequests ? "#1D4ED8" : "#64748B", borderRadius: "999px", fontWeight: 600, fontSize: "0.85rem" }}>
+                      {company.stats?.totalRequests || 0}
+                    </span>
+                  </td>
+                  <td style={{ padding: "0.8rem" }}>{company.stats?.lastRequestDate ? new Date(company.stats.lastRequestDate).toLocaleDateString() : <span style={{ color: "#94A3B8", fontStyle: "italic" }}>None</span>}</td>
+                  <td style={{ padding: "0.8rem" }}>
+                    {company.partnerProfile && hasPartnerProfileData(company.partnerProfile) ? (
+                      <span style={{ padding: "0.25rem 0.5rem", background: "#f0fdf4", color: "#166534", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 600, border: "1px solid #bbf7d0" }}>
+                        Submitted
+                      </span>
+                    ) : (
+                      <span style={{ padding: "0.25rem 0.5rem", background: "#fef2f2", color: "#991b1b", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 600, border: "1px solid #fecaca" }}>
+                        Pending
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: "0.8rem" }}>
+                    {company.stats?.assignedVerifiers?.length ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                        {company.stats.assignedVerifiers.map((v, i) => (
+                          <span key={i} style={{ padding: "0.2rem 0.5rem", background: "#F8FAFC", border: "1px solid #CBD5E1", borderRadius: "4px", fontSize: "0.8rem", color: "#334155" }}>
+                            {v}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span style={{ color: "#94A3B8", fontStyle: "italic", fontSize: "0.85rem" }}>Unassigned</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {companies.length === 0 && (
+                <tr>
+                  <td colSpan={5} style={{ padding: "2rem", textAlign: "center", color: "#64748B" }}>
+                    No partner companies found in the database.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </AdminPortalFrame>
   );
 }

@@ -11,6 +11,7 @@ export type ServiceFormField = {
   question: string;
   fieldType: ServiceFormFieldType;
   required: boolean;
+  repeatable?: boolean;
   minLength?: number | null;
   maxLength?: number | null;
   forceUppercase?: boolean;
@@ -35,6 +36,10 @@ type Props = {
 
 function supportsTextConstraints(fieldType: ServiceFormFieldType) {
   return fieldType === "text" || fieldType === "long_text";
+}
+
+function supportsRepeatable(fieldType: ServiceFormFieldType) {
+  return fieldType !== "file";
 }
 
 function normalizeLengthValue(raw: string) {
@@ -82,6 +87,7 @@ export default function ServiceFormBuilder({
 
   const fields = (drafts[activeServiceId] ?? selectedService?.formFields ?? []).map((field) => ({
     ...field,
+    repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
     minLength: typeof field.minLength === "number" ? field.minLength : null,
     maxLength: typeof field.maxLength === "number" ? field.maxLength : null,
     forceUppercase: Boolean(field.forceUppercase),
@@ -100,6 +106,7 @@ export default function ServiceFormBuilder({
           question: "",
           fieldType: "text",
           required: false,
+          repeatable: false,
           minLength: null,
           maxLength: null,
           forceUppercase: false,
@@ -133,6 +140,9 @@ export default function ServiceFormBuilder({
           ? {
               ...item,
               fieldType,
+              repeatable: supportsRepeatable(fieldType)
+                ? Boolean(item.repeatable)
+                : false,
               minLength: supportsTextConstraints(fieldType) ? item.minLength ?? null : null,
               maxLength: supportsTextConstraints(fieldType) ? item.maxLength ?? null : null,
               forceUppercase: supportsTextConstraints(fieldType)
@@ -153,6 +163,24 @@ export default function ServiceFormBuilder({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
         idx === index ? { ...item, required } : item,
+      ),
+    }));
+  }
+
+  function updateFieldRepeatable(index: number, repeatable: boolean) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) =>
+        idx === index
+          ? {
+              ...item,
+              repeatable: supportsRepeatable(item.fieldType) ? repeatable : false,
+            }
+          : item,
       ),
     }));
   }
@@ -234,6 +262,7 @@ export default function ServiceFormBuilder({
         question: item.question.trim(),
         fieldType: item.fieldType,
         required: Boolean(item.required),
+        repeatable: supportsRepeatable(item.fieldType) ? Boolean(item.repeatable) : false,
         minLength,
         maxLength,
         forceUppercase: supportsTextConstraints(item.fieldType)
@@ -288,7 +317,7 @@ export default function ServiceFormBuilder({
   }
 
   return (
-    <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
+    <section style={{ marginBottom: "1.2rem", animation: "fadeIn 0.3s ease" }}>
       <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
         <ClipboardList size={24} color="#4A90E2" />
         Service Form Builder
@@ -298,7 +327,7 @@ export default function ServiceFormBuilder({
         and required toggles.
       </p>
       <p style={{ color: "#6C757D", marginTop: 0, fontSize: "0.9rem" }}>
-        Add constraints for text fields like min/max length and force ALL CAPS. File uploads accept PDF/JPG/PNG up to 5MB.
+        Add constraints for text fields like min/max length and force ALL CAPS. You can also mark a field as dynamic so candidates can use + to add multiple entries (for example, multiple employments).
       </p>
 
       {regularServices.length === 0 ? (
@@ -306,9 +335,9 @@ export default function ServiceFormBuilder({
           Add regular services in Service Catalog before creating forms. Package deals use included service forms.
         </p>
       ) : (
-        <form onSubmit={saveForm} style={{ display: "grid", gap: "0.8rem" }}>
-          <div>
-            <label className="label">Service</label>
+        <form onSubmit={saveForm} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <label className="label" style={{ marginBottom: 0 }}>Service</label>
             <SearchableSelect
               value={activeServiceId}
               onChange={(val) => setSelectedServiceId(val)}
@@ -330,16 +359,16 @@ export default function ServiceFormBuilder({
                 style={{
                   border: "1px solid #E0E0E0",
                   borderRadius: "0.65rem",
-                  padding: "0.75rem",
+                  padding: "1rem",
                   background: "#F8F9FA",
                   display: "grid",
-                  gap: "0.6rem",
+                  gap: "0.8rem",
                   gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 200px) minmax(120px, 140px) auto",
-                  alignItems: "end",
+                  alignItems: "stretch",
                 }}
               >
-                <div>
-                  <label className="label">Question</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Question</label>
                   <input
                     className="input"
                     value={field.question}
@@ -348,8 +377,8 @@ export default function ServiceFormBuilder({
                     required
                   />
                 </div>
-                <div>
-                  <label className="label">Field Type</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Field Type</label>
                   <select
                     className="input"
                     value={field.fieldType}
@@ -367,8 +396,8 @@ export default function ServiceFormBuilder({
                     <option value="file">File Upload</option>
                   </select>
                 </div>
-                <div>
-                  <label className="label">Required</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Required</label>
                   <label
                     style={{
                       display: "inline-flex",
@@ -387,15 +416,51 @@ export default function ServiceFormBuilder({
                     Must answer
                   </label>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => removeField(index)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
-                >
-                  <Trash2 size={16} />
-                  Remove
-                </button>
+                <div style={{ display: "flex", alignItems: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => removeField(index)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", height: "fit-content" }}
+                  >
+                    <Trash2 size={16} />
+                    Remove
+                  </button>
+                </div>
+
+                {supportsRepeatable(field.fieldType) ? (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      border: "1px solid #DDE5EF",
+                      borderRadius: "0.5rem",
+                      background: "#F4F9FF",
+                      padding: "0.55rem 0.6rem",
+                      display: "grid",
+                      gap: "0.35rem",
+                    }}
+                  >
+                    <label
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "0.45rem",
+                        fontWeight: 600,
+                        color: "#2D405E",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(field.repeatable)}
+                        onChange={(e) => updateFieldRepeatable(index, e.target.checked)}
+                      />
+                      Dynamic field (+ allow multiple entries)
+                    </label>
+                    <span style={{ color: "#667892", fontSize: "0.82rem" }}>
+                      Candidates can add one or more values for this question.
+                    </span>
+                  </div>
+                ) : null}
 
                 {supportsTextConstraints(field.fieldType) ? (
                   <div
@@ -416,12 +481,12 @@ export default function ServiceFormBuilder({
                       style={{
                         display: "grid",
                         gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                        gap: "0.55rem",
-                        alignItems: "end",
+                        gap: "0.8rem",
+                        alignItems: "stretch",
                       }}
                     >
-                      <div>
-                        <label className="label">Min Length</label>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                        <label className="label" style={{ marginBottom: 0 }}>Min Length</label>
                         <input
                           className="input"
                           type="number"
@@ -432,8 +497,8 @@ export default function ServiceFormBuilder({
                           placeholder="Optional"
                         />
                       </div>
-                      <div>
-                        <label className="label">Max Length</label>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                        <label className="label" style={{ marginBottom: 0 }}>Max Length</label>
                         <input
                           className="input"
                           type="number"

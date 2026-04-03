@@ -23,6 +23,7 @@ const formFieldSchema = z
     question: z.string().trim().min(1).max(200),
     fieldType: formFieldTypeSchema,
     required: z.boolean().optional().default(false),
+    repeatable: z.boolean().optional().default(false),
     minLength: nullableLengthSchema.optional(),
     maxLength: nullableLengthSchema.optional(),
     forceUppercase: z.boolean().optional().default(false),
@@ -45,6 +46,14 @@ const formFieldSchema = z
         message: "Minimum length cannot be greater than maximum length.",
       });
     }
+
+    if (field.fieldType === "file" && field.repeatable) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["repeatable"],
+        message: "File upload fields cannot be repeatable.",
+      });
+    }
   });
 
 type ParsedFormField = z.infer<typeof formFieldSchema>;
@@ -57,6 +66,7 @@ function normalizeFormField(field: ParsedFormField) {
     question: field.question.trim(),
     fieldType: field.fieldType,
     required: Boolean(field.required),
+    repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
     minLength: supportsTextConstraints
       ? typeof field.minLength === "number"
         ? field.minLength
@@ -75,6 +85,7 @@ function serializeFormField(field: {
   question: string;
   fieldType: "text" | "long_text" | "number" | "file" | "date";
   required?: boolean;
+  repeatable?: boolean;
   minLength?: number | null;
   maxLength?: number | null;
   forceUppercase?: boolean;
@@ -86,6 +97,7 @@ function serializeFormField(field: {
     question: field.question,
     fieldType: field.fieldType,
     required: Boolean(field.required),
+    repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
     minLength:
       supportsTextConstraints && typeof field.minLength === "number"
         ? field.minLength
@@ -139,6 +151,7 @@ export async function GET(req: NextRequest) {
           question: field.question,
           fieldType: field.fieldType,
           required: field.required,
+          repeatable: field.repeatable,
           minLength: field.minLength,
           maxLength: field.maxLength,
           forceUppercase: field.forceUppercase,
@@ -231,6 +244,7 @@ export async function POST(req: NextRequest) {
             question: field.question,
             fieldType: field.fieldType,
             required: field.required,
+            repeatable: field.repeatable,
             minLength: field.minLength,
             maxLength: field.maxLength,
             forceUppercase: field.forceUppercase,
@@ -286,6 +300,7 @@ export async function PATCH(req: NextRequest) {
           question: field.question,
           fieldType: field.fieldType,
           required: field.required,
+          repeatable: field.repeatable,
           minLength: field.minLength,
           maxLength: field.maxLength,
           forceUppercase: field.forceUppercase,

@@ -36,12 +36,12 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard, roles: ["admin", "superadmin", "verifier"] },
-  { href: "/dashboard/requests", label: "Requests", icon: ShieldCheck, roles: ["admin", "superadmin", "verifier"] },
+  { href: "/dashboard", label: "Overview", icon: LayoutDashboard, roles: ["admin", "superadmin", "manager", "verifier"] },
+  { href: "/dashboard/requests", label: "Requests", icon: ShieldCheck, roles: ["admin", "superadmin", "manager", "verifier"] },
   { href: "/dashboard/companies", label: "Companies", icon: Building2, roles: ["admin", "superadmin"] },
   { href: "/dashboard/services", label: "Services", icon: BriefcaseBusiness, roles: ["admin", "superadmin", "verifier"] },
-  { href: "/dashboard/team", label: "Team", icon: Users, roles: ["admin", "superadmin"] },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings, roles: ["admin", "superadmin", "verifier"] },
+  { href: "/dashboard/team", label: "Team", icon: Users, roles: ["admin", "superadmin", "manager"] },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings, roles: ["admin", "superadmin", "manager", "verifier"] },
 ];
 
 const REQUESTS_QUERY_KEY = ["admin-requests"];
