@@ -72,7 +72,7 @@ export default function AdminLoginPage() {
               Admin Workspace
             </h1>
             <p className="text-[#666] text-base leading-relaxed pr-8">
-              Oversee the global network, issue partner credentials, and systematically verify compliance scopes across the infrastructure.
+              Oversee the global network, issue enterprise credentials, and systematically verify compliance scopes across the infrastructure.
             </p>
           </div>
           

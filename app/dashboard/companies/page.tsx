@@ -258,7 +258,7 @@ export default function CompaniesPage() {
 
     const data = (await res.json()) as { message?: string; error?: string };
     if (!res.ok) {
-      setMessage(data.error ?? "Could not create customer account.");
+      setMessage(data.error ?? "Could not create enterprise account.");
       return;
     }
 
@@ -266,7 +266,7 @@ export default function CompaniesPage() {
     setCompanyEmail("");
     setCompanyPassword("");
     setSelectedCompanyServices([]);
-    setMessage(data.message ?? "Customer account created.");
+    setMessage(data.message ?? "Enterprise account created.");
     await loadData();
   }
 
@@ -369,7 +369,7 @@ export default function CompaniesPage() {
           Issue Company Login ID
         </h2>
         <p style={{ color: "#6C757D" }}>
-          Create a customer company account. Select services and set custom price per company.
+          Create an enterprise company account. Select services and set custom price per company.
         </p>
         <form
           onSubmit={createCustomer}
@@ -546,7 +546,7 @@ export default function CompaniesPage() {
           Company Information Access
         </h2>
         <p style={{ color: "#6C757D", marginTop: "0.2rem" }}>
-          View company profile details submitted from partner settings.
+          View company profile details submitted from enterprise settings.
         </p>
 
         <div
@@ -732,7 +732,7 @@ export default function CompaniesPage() {
               {companies.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ padding: "2rem", textAlign: "center", color: "#64748B" }}>
-                    No partner companies found in the database.
+                    No enterprise companies found in the database.
                   </td>
                 </tr>
               )}

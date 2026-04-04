@@ -28,7 +28,8 @@ async function run() {
   const output = [];
 
   const addLog = (role, email, pw) => {
-    output.push(`Role: ${role}\nEmail: ${email}\nPassword: ${pw}\n----------------------`);
+    const displayRole = role === "customer" ? "enterprise" : role;
+    output.push(`Role: ${displayRole}\nEmail: ${email}\nPassword: ${pw}\n----------------------`);
   };
 
   const createAccount = async (name, email, password, role, parentCustomer = null) => {
@@ -47,7 +48,7 @@ async function run() {
 
   await createAccount("Super Admin Test", "superadmin@cluso.com", "admin123", "superadmin");
   await createAccount("Admin Test", "admin@cluso.com", "admin123", "admin");
-  const customer = await createAccount("Customer Tech Corp", "customer@techcorp.com", "cust123", "customer");
+  const customer = await createAccount("Enterprise Tech Corp", "enterprise@techcorp.com", "cust123", "customer");
   await createAccount("Delegate Jane", "delegate@techcorp.com", "del123", "delegate", customer._id);
 
   const txtContent = "=== Cluso Test Credentials ===\n\n" + output.join("\n");

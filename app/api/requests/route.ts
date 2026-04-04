@@ -6,10 +6,91 @@ import VerificationRequest from "@/lib/models/VerificationRequest";
 import User from "@/lib/models/User";
 
 const patchSchema = z.object({
+  action: z.literal("verify-service"),
   requestId: z.string().min(1),
-  status: z.enum(["approved", "rejected", "verified"]),
-  rejectionNote: z.string().trim().max(500).optional(),
+  serviceId: z.string().min(1),
+  serviceStatus: z.enum(["verified", "unverified"]),
+  verificationMode: z.string().trim().max(120).optional().default("manual"),
+  comment: z.string().trim().max(500).optional().default(""),
 });
+
+type SelectedServiceLike = {
+  serviceId: unknown;
+  serviceName: string;
+  price?: number;
+  currency?: string;
+};
+
+type ServiceVerificationLike = {
+  serviceId: unknown;
+  serviceName: string;
+  status?: "pending" | "verified" | "unverified";
+  verificationMode?: string;
+  comment?: string;
+  attempts?: Array<{
+    status?: "verified" | "unverified";
+    verificationMode?: string;
+    comment?: string;
+    attemptedAt?: Date;
+    verifierId?: unknown;
+    verifierName?: string;
+    managerId?: unknown;
+    managerName?: string;
+  }>;
+};
+
+function buildDefaultServiceVerifications(selectedServices: SelectedServiceLike[] = []) {
+  return selectedServices.map((service) => ({
+    serviceId: String(service.serviceId),
+    serviceName: service.serviceName,
+    status: "pending" as const,
+    verificationMode: "",
+    comment: "",
+    attempts: [] as Array<{
+      status: "verified" | "unverified";
+      verificationMode: string;
+      comment: string;
+      attemptedAt: Date;
+      verifierId: string | null;
+      verifierName: string;
+      managerId: string | null;
+      managerName: string;
+    }>,
+  }));
+}
+
+function normalizeServiceVerifications(
+  selectedServices: SelectedServiceLike[] = [],
+  existingVerifications: ServiceVerificationLike[] = [],
+) {
+  const defaults = buildDefaultServiceVerifications(selectedServices);
+  const serviceMap = new Map(defaults.map((entry) => [entry.serviceId, entry]));
+
+  for (const verification of existingVerifications) {
+    const serviceId = String(verification.serviceId);
+    const normalized = {
+      serviceId,
+      serviceName: verification.serviceName,
+      status: verification.status ?? "pending",
+      verificationMode: verification.verificationMode ?? "",
+      comment: verification.comment ?? "",
+      attempts: (verification.attempts ?? []).map((attempt) => ({
+        status: attempt.status ?? "verified",
+        verificationMode: attempt.verificationMode ?? "",
+        comment: attempt.comment ?? "",
+        attemptedAt: attempt.attemptedAt ? new Date(attempt.attemptedAt) : new Date(),
+        verifierId: attempt.verifierId ? String(attempt.verifierId) : null,
+        verifierName: attempt.verifierName ?? "",
+        managerId: attempt.managerId ? String(attempt.managerId) : null,
+        managerName: attempt.managerName ?? "",
+      })),
+    };
+
+    serviceMap.set(serviceId, normalized);
+  }
+
+  return [...serviceMap.values()];
+}
 
 export async function GET(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
@@ -136,6 +217,16 @@ export async function GET(req: NextRequest) {
   const enriched = items.map((item) => {
     const customer = customerMap.get(String(item.customer));
     const creator = creatorMap.get(String(item.createdBy));
+    const selectedServices = (item.selectedServices ?? []).map((service) => ({
+      serviceId: String(service.serviceId),
+      serviceName: service.serviceName,
+      price: service.price,
+      currency: service.currency,
+    }));
+    const serviceVerifications = normalizeServiceVerifications(
+      selectedServices,
+      (item.serviceVerifications ?? []) as ServiceVerificationLike[],
+    );
 
     return {
       _id: String(item._id),
@@ -147,12 +238,13 @@ export async function GET(req: NextRequest) {
       rejectionNote: item.rejectionNote ?? "",
       candidateFormStatus: item.candidateFormStatus ?? "pending",
       candidateSubmittedAt: item.candidateSubmittedAt ?? null,
-      selectedServices: (item.selectedServices ?? []).map((service) => ({
-        serviceId: String(service.serviceId),
-        serviceName: service.serviceName,
-        price: service.price,
-        currency: service.currency,
-      })),
+      enterpriseApprovedAt: item.enterpriseApprovedAt ?? null,
+      enterpriseDecisionLockedAt: item.enterpriseDecisionLockedAt ?? null,
+      selectedServices,
+      serviceVerifications,
+      reportMetadata: item.reportMetadata ?? null,
+      reportData: item.reportData ?? null,
+      invoiceSnapshot: item.invoiceSnapshot ?? null,
       candidateFormResponses: (item.candidateFormResponses ?? []).map((serviceResponse) => ({
         serviceId: String(serviceResponse.serviceId),
         serviceName: serviceResponse.serviceName,
@@ -194,12 +286,8 @@ export async function PATCH(req: NextRequest) {
   const parsed = patchSchema.safeParse(body);
 
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid input." }, { status: 400 });
-  }
-
-  if (parsed.data.status === "rejected" && !parsed.data.rejectionNote) {
     return NextResponse.json(
-      { error: "Rejection note is required when rejecting a request." },
+      { error: "Invalid input. Expected verify-service action payload." },
       { status: 400 },
     );
   }
@@ -261,7 +349,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   const requestDoc = await VerificationRequest.findById(parsed.data.requestId)
-    .select("candidateFormStatus status")
+    .select("candidateFormStatus status selectedServices serviceVerifications")
     .lean();
 
   if (!requestDoc) {
@@ -275,37 +363,78 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
-  if (parsed.data.status === "verified" && requestDoc.status !== "approved") {
+  if (requestDoc.status !== "approved" && requestDoc.status !== "verified") {
     return NextResponse.json(
-      { error: "Only approved requests can be marked as verified." },
+      {
+        error:
+          "Request must be approved by enterprise before verification attempts can be logged.",
+      },
       { status: 400 },
     );
   }
 
-  let updateData: { status: "approved" | "rejected" | "verified"; rejectionNote: string };
+  const normalizedServiceVerifications = normalizeServiceVerifications(
+    (requestDoc.selectedServices ?? []) as SelectedServiceLike[],
+    (requestDoc.serviceVerifications ?? []) as ServiceVerificationLike[],
+  );
 
-  if (parsed.data.status === "rejected") {
-    updateData = {
-      status: "rejected",
-      rejectionNote: parsed.data.rejectionNote ?? "",
-    };
-  } else if (parsed.data.status === "verified") {
-    updateData = {
-      status: "verified",
-      rejectionNote: "",
-    };
-  } else {
-    updateData = {
-      status: "approved",
-      rejectionNote: "",
-    };
+  const targetIndex = normalizedServiceVerifications.findIndex(
+    (service) => service.serviceId === parsed.data.serviceId,
+  );
+  if (targetIndex === -1) {
+    return NextResponse.json(
+      { error: "Selected service does not belong to this request." },
+      { status: 400 },
+    );
   }
+
+  const actor = await User.findById(auth.userId)
+    .select("name role manager")
+    .lean();
+  const verifierName = actor?.name ?? "Unknown";
+
+  let managerId: string | null = null;
+  let managerName = "";
+
+  if (auth.role === "manager") {
+    managerId = auth.userId;
+    managerName = verifierName;
+  } else if (auth.role === "admin" || auth.role === "superadmin") {
+    managerId = auth.userId;
+    managerName = verifierName;
+  } else if (auth.role === "verifier" && actor?.manager) {
+    managerId = String(actor.manager);
+    const manager = await User.findById(actor.manager).select("name").lean();
+    managerName = manager?.name ?? "";
+  }
+
+  const target = normalizedServiceVerifications[targetIndex];
+  target.status = parsed.data.serviceStatus;
+  target.verificationMode = parsed.data.verificationMode;
+  target.comment = parsed.data.comment;
+  target.attempts.push({
+    status: parsed.data.serviceStatus,
+    verificationMode: parsed.data.verificationMode,
+    comment: parsed.data.comment,
+    attemptedAt: new Date(),
+    verifierId: auth.userId,
+    verifierName,
+    managerId,
+    managerName,
+  });
+
+  const isVerificationComplete = normalizedServiceVerifications.every(
+    (service) => service.status === "verified" || service.status === "unverified",
+  );
+  const nextStatus = isVerificationComplete ? "verified" : "approved";
 
   const updated = await VerificationRequest.findByIdAndUpdate(
     parsed.data.requestId,
     {
-      ...updateData,
+      status: nextStatus,
+      rejectionNote: "",
       candidateFormStatus: "submitted",
+      serviceVerifications: normalizedServiceVerifications,
     },
     {
       new: true,
@@ -317,5 +446,8 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Request not found." }, { status: 404 });
   }
 
-  return NextResponse.json({ message: `Request ${parsed.data.status}.` });
+  return NextResponse.json({
+    message: `Service verification attempt logged (${parsed.data.serviceStatus}).`,
+    requestStatus: nextStatus,
+  });
 }

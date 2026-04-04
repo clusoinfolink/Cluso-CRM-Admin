@@ -4,7 +4,7 @@ This app is intentionally isolated under `cluso-new-suite` so it does not clash 
 
 ## Scope implemented
 - Admin login only
-- Issue company login IDs (customer accounts)
+- Issue company login IDs (enterprise accounts)
 - Receive and view candidate verification requests
 - Approve/reject requests
 

@@ -5,19 +5,17 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
-  CheckCircle,
   ChevronDown,
   ChevronUp,
   ListFilter,
   Search,
   SlidersHorizontal,
   X,
-  XCircle,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { getAlertTone } from "@/lib/alerts";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
-import { RequestItem } from "@/lib/types";
+import { RequestItem, ServiceVerification } from "@/lib/types";
 
 type CompanyRequestGroup = {
   key: string;
@@ -40,6 +38,14 @@ type CompanyFilterOption = {
 
 const REQUESTS_QUERY_KEY = ["admin-requests"];
 const REQUESTS_STALE_TIME_MS = 5 * 60 * 1000;
+const CUSTOM_VERIFICATION_MODE_STORAGE_KEY = "cluso-admin-custom-verification-modes";
+const CUSTOM_VERIFICATION_MODE_SENTINEL = "__add_custom_mode__";
+const DEFAULT_VERIFICATION_MODE_OPTIONS = [
+  { value: "manual", label: "Manual" },
+  { value: "document", label: "Document Check" },
+  { value: "database", label: "Database Check" },
+  { value: "field", label: "Field Verification" },
+] as const;
 
 async function fetchRequests() {
   const reqRes = await fetch("/api/requests", { cache: "no-store" });
@@ -81,6 +87,61 @@ function parseRepeatableAnswerValues(rawValue: string, repeatable?: boolean) {
   }
 }
 
+function normalizeVerificationModeInput(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function loadStoredCustomVerificationModes() {
+  if (typeof window === "undefined") {
+    return [] as string[];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_VERIFICATION_MODE_STORAGE_KEY);
+    if (!raw) {
+      return [] as string[];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [] as string[];
+    }
+
+    const dedupedModes: string[] = [];
+    for (const modeEntry of parsed) {
+      if (typeof modeEntry !== "string") {
+        continue;
+      }
+
+      const normalizedMode = normalizeVerificationModeInput(modeEntry);
+      if (!normalizedMode) {
+        continue;
+      }
+
+      const normalizedModeLower = normalizedMode.toLowerCase();
+      const isDefault = DEFAULT_VERIFICATION_MODE_OPTIONS.some(
+        (option) =>
+          option.value.toLowerCase() === normalizedModeLower ||
+          option.label.toLowerCase() === normalizedModeLower,
+      );
+      if (isDefault) {
+        continue;
+      }
+
+      const alreadyAdded = dedupedModes.some(
+        (existingMode) => existingMode.toLowerCase() === normalizedModeLower,
+      );
+      if (!alreadyAdded) {
+        dedupedModes.push(normalizedMode);
+      }
+    }
+
+    return dedupedModes;
+  } catch {
+    return [] as string[];
+  }
+}
+
 function RequestsPageContent() {
   const { me, loading, logout } = useAdminSession();
   const searchParams = useSearchParams();
@@ -93,15 +154,25 @@ function RequestsPageContent() {
   });
 
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
-  const canManageStatuses =
+  const canVerifyWorkflow =
     me?.role === "admin" ||
     me?.role === "superadmin" ||
     me?.role === "manager" ||
     me?.role === "verifier";
+  const canGenerateReport =
+    me?.role === "admin" || me?.role === "superadmin" || me?.role === "manager";
   const [searchText, setSearchText] = useState("");
   const [message, setMessage] = useState("");
   const [highlightedRequestId, setHighlightedRequestId] = useState("");
   const [activeResponseRequestId, setActiveResponseRequestId] = useState("");
+  const [serviceDraftsByRequest, setServiceDraftsByRequest] = useState<
+    Record<string, Record<string, { status: "verified" | "unverified"; verificationMode: string; comment: string }>>
+  >({});
+  const [customVerificationModes, setCustomVerificationModes] = useState<string[]>(loadStoredCustomVerificationModes);
+  const [showCustomModeInputByService, setShowCustomModeInputByService] = useState<Record<string, boolean>>({});
+  const [customModeInputByService, setCustomModeInputByService] = useState<Record<string, string>>({});
+  const [verifyingServiceKey, setVerifyingServiceKey] = useState("");
+  const [reportingRequestId, setReportingRequestId] = useState("");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [companyFilter, setCompanyFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | RequestItem["status"]>("all");
@@ -121,65 +192,236 @@ function RequestsPageContent() {
     [queryClient],
   );
 
-  async function updateStatus(
+  const verificationModeOptions = useMemo(
+    () => [
+      ...DEFAULT_VERIFICATION_MODE_OPTIONS,
+      ...customVerificationModes.map((mode) => ({ value: mode, label: mode })),
+    ],
+    [customVerificationModes],
+  );
+
+  function getServiceVerifications(item: RequestItem): ServiceVerification[] {
+    if (item.serviceVerifications && item.serviceVerifications.length > 0) {
+      return item.serviceVerifications;
+    }
+
+    return (item.selectedServices ?? []).map((service) => ({
+      serviceId: service.serviceId,
+      serviceName: service.serviceName,
+      status: "pending",
+      verificationMode: "",
+      comment: "",
+      attempts: [],
+    }));
+  }
+
+  function openVerificationModal(item: RequestItem) {
+    const services = getServiceVerifications(item);
+
+    setServiceDraftsByRequest((prev) => {
+      if (prev[item._id]) {
+        return prev;
+      }
+
+      const requestDraft: Record<
+        string,
+        { status: "verified" | "unverified"; verificationMode: string; comment: string }
+      > = {};
+
+      for (const service of services) {
+        requestDraft[service.serviceId] = {
+          status: service.status === "unverified" ? "unverified" : "verified",
+          verificationMode: service.verificationMode || "manual",
+          comment: service.comment || "",
+        };
+      }
+
+      return {
+        ...prev,
+        [item._id]: requestDraft,
+      };
+    });
+
+    setActiveResponseRequestId(item._id);
+  }
+
+  function updateServiceDraft(
     requestId: string,
-    status: "approved" | "rejected" | "verified",
-    rejectionNote?: string,
+    serviceId: string,
+    patch: Partial<{ status: "verified" | "unverified"; verificationMode: string; comment: string }>,
   ) {
+    setServiceDraftsByRequest((prev) => {
+      const requestDraft = prev[requestId] ?? {};
+      const existing = requestDraft[serviceId] ?? {
+        status: "verified" as const,
+        verificationMode: "manual",
+        comment: "",
+      };
+
+      return {
+        ...prev,
+        [requestId]: {
+          ...requestDraft,
+          [serviceId]: {
+            ...existing,
+            ...patch,
+          },
+        },
+      };
+    });
+  }
+
+  function resolveVerificationMode(rawMode: string) {
+    const normalizedInput = normalizeVerificationModeInput(rawMode);
+    if (!normalizedInput) {
+      return { mode: "", added: false };
+    }
+
+    const normalizedInputLower = normalizedInput.toLowerCase();
+    const defaultMatch = DEFAULT_VERIFICATION_MODE_OPTIONS.find(
+      (option) =>
+        option.value.toLowerCase() === normalizedInputLower ||
+        option.label.toLowerCase() === normalizedInputLower,
+    );
+    if (defaultMatch) {
+      return { mode: defaultMatch.value, added: false };
+    }
+
+    const existingCustom = customVerificationModes.find(
+      (mode) => mode.toLowerCase() === normalizedInputLower,
+    );
+    if (existingCustom) {
+      return { mode: existingCustom, added: false };
+    }
+
+    const nextModes = [...customVerificationModes, normalizedInput];
+    setCustomVerificationModes(nextModes);
+
+    try {
+      window.localStorage.setItem(
+        CUSTOM_VERIFICATION_MODE_STORAGE_KEY,
+        JSON.stringify(nextModes),
+      );
+    } catch {
+      // Ignore storage errors; mode remains available for this session.
+    }
+
+    return { mode: normalizedInput, added: true };
+  }
+
+  function saveCustomModeForService(requestId: string, serviceId: string) {
+    const serviceKey = `${requestId}:${serviceId}`;
+    const rawInput = customModeInputByService[serviceKey] ?? "";
+    const resolved = resolveVerificationMode(rawInput);
+
+    if (!resolved.mode) {
+      setMessage("Enter a custom verification mode before saving.");
+      return;
+    }
+
+    updateServiceDraft(requestId, serviceId, { verificationMode: resolved.mode });
+    setShowCustomModeInputByService((prev) => ({
+      ...prev,
+      [serviceKey]: false,
+    }));
+    setCustomModeInputByService((prev) => ({
+      ...prev,
+      [serviceKey]: "",
+    }));
+    setMessage(
+      resolved.added
+        ? `Saved \"${resolved.mode}\" for upcoming verification mode dropdowns.`
+        : `Verification mode set to \"${resolved.mode}\".`,
+    );
+  }
+
+  async function logServiceAttempt(requestId: string, serviceId: string) {
+    const draft = serviceDraftsByRequest[requestId]?.[serviceId];
+    if (!draft) {
+      setMessage("Open View Status first to prepare verification data.");
+      return;
+    }
+
     setMessage("");
+    setVerifyingServiceKey(`${requestId}:${serviceId}`);
 
     const res = await fetch("/api/requests", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requestId, status, rejectionNote }),
+      body: JSON.stringify({
+        action: "verify-service",
+        requestId,
+        serviceId,
+        serviceStatus: draft.status,
+        verificationMode: draft.verificationMode,
+        comment: draft.comment,
+      }),
     });
 
     const data = (await res.json()) as { message?: string; error?: string };
+    setVerifyingServiceKey("");
+
     if (!res.ok) {
-      setMessage(data.error ?? "Could not update status.");
+      setMessage(data.error ?? "Could not log service verification attempt.");
       return;
     }
 
-    setMessage(data.message ?? "Request status updated.");
+    setMessage(data.message ?? "Service verification attempt logged.");
     await loadRequests();
   }
 
-  async function rejectWithNote(requestId: string) {
-    const note = window.prompt("Rejection note (for customer):", "Invalid request details");
-    if (note === null) {
+  async function generateReport(requestId: string) {
+    setMessage("");
+    setReportingRequestId(requestId);
+
+    const res = await fetch(`/api/requests/${requestId}/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const data = (await res.json()) as { message?: string; error?: string; reportNumber?: string };
+    setReportingRequestId("");
+
+    if (!res.ok) {
+      setMessage(data.error ?? "Could not generate report.");
       return;
     }
 
-    const trimmed = note.trim();
-    if (!trimmed) {
-      setMessage("Please enter a rejection note.");
+    const downloadRes = await fetch(`/api/requests/${requestId}/report?download=1`, {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    if (!downloadRes.ok) {
+      let errorMessage = "Report was generated, but download failed.";
+
+      try {
+        const errorPayload = (await downloadRes.json()) as { error?: string; details?: string };
+        errorMessage = errorPayload.error ?? errorPayload.details ?? errorMessage;
+      } catch {
+        // Ignore parse failures and use fallback message.
+      }
+
+      setMessage(errorMessage);
       return;
     }
 
-    const isConfirmed = window.confirm("Confirm reject this request?");
-    if (!isConfirmed) {
-      return;
-    }
+    const reportBlob = await downloadRes.blob();
+    const disposition = downloadRes.headers.get("content-disposition") ?? "";
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+    const filename = filenameMatch?.[1] ?? `verification-report-${requestId}.pdf`;
 
-    await updateStatus(requestId, "rejected", trimmed);
-  }
+    const objectUrl = window.URL.createObjectURL(reportBlob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(objectUrl);
 
-  async function approveRequest(requestId: string) {
-    const isConfirmed = window.confirm("Confirm approve this request?");
-    if (!isConfirmed) {
-      return;
-    }
-
-    await updateStatus(requestId, "approved");
-  }
-
-  async function verifyRequest(requestId: string) {
-    const isConfirmed = window.confirm("Confirm mark this request as verified?");
-    if (!isConfirmed) {
-      return;
-    }
-
-    await updateStatus(requestId, "verified");
+    setMessage(data.message ?? "Report generated and downloaded.");
+    await loadRequests();
   }
 
   function toggleCompanyGroup(groupKey: string) {
@@ -450,6 +692,258 @@ function RequestsPageContent() {
     );
   }
 
+  function renderServiceVerificationWorkspace(item: RequestItem) {
+    const services = getServiceVerifications(item);
+    const requestDraft = serviceDraftsByRequest[item._id] ?? {};
+
+    if (services.length === 0) {
+      return (
+        <div className="glass-card" style={{ padding: "1rem", marginBottom: "1rem" }}>
+          <p style={{ margin: 0, color: "#667892" }}>No services are attached to this request.</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="glass-card" style={{ padding: "1rem", marginBottom: "1rem", background: "#F8FAFC" }}>
+        <h4 style={{ margin: "0 0 0.4rem", color: "#1E293B" }}>Service Verification Workspace</h4>
+        <p style={{ margin: "0 0 0.85rem", color: "#64748B", fontSize: "0.85rem" }}>
+          Log verification attempts per service with result, mode, and comments.
+        </p>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: "920px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
+            <thead>
+              <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Service</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Current Status</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Verification Mode</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Result</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Comment</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {services.map((service) => {
+                const draft = requestDraft[service.serviceId] ?? {
+                  status: service.status === "unverified" ? "unverified" : "verified",
+                  verificationMode: service.verificationMode || "manual",
+                  comment: service.comment || "",
+                };
+                const serviceKey = `${item._id}:${service.serviceId}`;
+                const showCustomModeInput = Boolean(showCustomModeInputByService[serviceKey]);
+                const customModeInput = customModeInputByService[serviceKey] ?? "";
+                const hasDraftModeOption = verificationModeOptions.some(
+                  (option) => option.value === draft.verificationMode,
+                );
+                const rowModeOptions = hasDraftModeOption
+                  ? verificationModeOptions
+                  : draft.verificationMode
+                    ? [
+                        ...verificationModeOptions,
+                        {
+                          value: draft.verificationMode,
+                          label: draft.verificationMode,
+                        },
+                      ]
+                    : verificationModeOptions;
+                const canSubmitAttempt =
+                  canVerifyWorkflow &&
+                  item.candidateFormStatus === "submitted" &&
+                  (item.status === "approved" || item.status === "verified");
+
+                return (
+                  <tr key={`${item._id}-${service.serviceId}`} style={{ borderTop: "1px solid #F1F5F9" }}>
+                    <td style={{ padding: "0.65rem", fontWeight: 600, color: "#1E293B" }}>{service.serviceName}</td>
+                    <td style={{ padding: "0.65rem" }}>
+                      <span className={`status-pill status-pill-${service.status === "unverified" ? "rejected" : service.status === "verified" ? "verified" : "pending"}`} style={{ textTransform: "capitalize" }}>
+                        {service.status}
+                      </span>
+                    </td>
+                    <td style={{ padding: "0.65rem", minWidth: "240px" }}>
+                      <select
+                        className="input"
+                        style={{ minWidth: "160px", padding: "0.35rem 0.45rem" }}
+                        value={draft.verificationMode}
+                        onChange={(e) => {
+                          const selectedMode = e.target.value;
+                          if (selectedMode === CUSTOM_VERIFICATION_MODE_SENTINEL) {
+                            setShowCustomModeInputByService((prev) => ({
+                              ...prev,
+                              [serviceKey]: true,
+                            }));
+                            return;
+                          }
+
+                          setShowCustomModeInputByService((prev) => ({
+                            ...prev,
+                            [serviceKey]: false,
+                          }));
+                          updateServiceDraft(item._id, service.serviceId, {
+                            verificationMode: selectedMode,
+                          });
+                        }}
+                      >
+                        {rowModeOptions.map((option) => (
+                          <option key={`${serviceKey}-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                        <option value={CUSTOM_VERIFICATION_MODE_SENTINEL}>+ Add custom mode</option>
+                      </select>
+
+                      {showCustomModeInput ? (
+                        <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <input
+                            className="input"
+                            style={{ minWidth: "150px", padding: "0.32rem 0.45rem" }}
+                            value={customModeInput}
+                            placeholder="Type custom mode"
+                            onChange={(e) =>
+                              setCustomModeInputByService((prev) => ({
+                                ...prev,
+                                [serviceKey]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                saveCustomModeForService(item._id, service.serviceId);
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
+                            onClick={() => saveCustomModeForService(item._id, service.serviceId)}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
+                            onClick={() => {
+                              setShowCustomModeInputByService((prev) => ({
+                                ...prev,
+                                [serviceKey]: false,
+                              }));
+                              setCustomModeInputByService((prev) => ({
+                                ...prev,
+                                [serviceKey]: "",
+                              }));
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : null}
+                    </td>
+                    <td style={{ padding: "0.65rem" }}>
+                      <select
+                        className="input"
+                        style={{ minWidth: "130px", padding: "0.35rem 0.45rem" }}
+                        value={draft.status}
+                        onChange={(e) =>
+                          updateServiceDraft(item._id, service.serviceId, {
+                            status: e.target.value as "verified" | "unverified",
+                          })
+                        }
+                      >
+                        <option value="verified">Verified</option>
+                        <option value="unverified">Unverified</option>
+                      </select>
+                    </td>
+                    <td style={{ padding: "0.65rem", minWidth: "210px" }}>
+                      <input
+                        className="input"
+                        style={{ padding: "0.35rem 0.45rem" }}
+                        value={draft.comment}
+                        placeholder="Add attempt comment"
+                        onChange={(e) =>
+                          updateServiceDraft(item._id, service.serviceId, {
+                            comment: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td style={{ padding: "0.65rem" }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem" }}
+                        disabled={!canSubmitAttempt || verifyingServiceKey === serviceKey}
+                        onClick={() => logServiceAttempt(item._id, service.serviceId)}
+                      >
+                        {verifyingServiceKey === serviceKey ? "Saving..." : "Log Attempt"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ display: "grid", gap: "0.85rem", marginTop: "0.9rem" }}>
+          {services.map((service) => (
+            <div key={`${item._id}-${service.serviceId}-attempts`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#FFFFFF", padding: "0.75rem" }}>
+              <div style={{ fontWeight: 600, color: "#334155", marginBottom: "0.45rem" }}>
+                Attempts: {service.serviceName}
+              </div>
+              {service.attempts.length === 0 ? (
+                <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", minWidth: "760px", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", borderBottom: "1px solid #E2E8F0" }}>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Date/Time</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Result</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Mode</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Comment</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Verifier</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Manager</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {service.attempts
+                        .slice()
+                        .reverse()
+                        .map((attempt, attemptIndex) => (
+                          <tr key={`${item._id}-${service.serviceId}-attempt-${attemptIndex}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {new Date(attempt.attemptedAt).toLocaleString()}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155", textTransform: "capitalize" }}>
+                              {attempt.status}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.verificationMode || "-"}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.comment || "-"}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.verifierName || "-"}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.managerName || "-"}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   function renderCompanyGroup(group: CompanyRequestGroup, companyIndex: number) {
     const isExpanded = Boolean(expandedCompanyGroups[group.key]);
     const isCollapsed = !isExpanded;
@@ -502,19 +996,20 @@ function RequestsPageContent() {
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Validation</th>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Note</th>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Date</th>
-                  <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Data</th>
+                  <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>View Status</th>
                   <th style={{ padding: "1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0", textAlign: "right" }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {group.items.map((item, index) => {
-                  const hasResponses = Boolean(item.candidateFormResponses && item.candidateFormResponses.length > 0);
                   const formSubmitted = item.candidateFormStatus === "submitted";
-                  const canApprove = canManageStatuses && (item.status === "pending" || item.status === "rejected");
-                  const canReject =
-                    canManageStatuses &&
-                    (item.status === "pending" || (item.status === "approved" && me?.role === "superadmin"));
-                  const canVerify = canManageStatuses && item.status === "approved";
+                  const canViewStatus = canVerifyWorkflow;
+                  const canVerifyNow =
+                    canVerifyWorkflow &&
+                    formSubmitted &&
+                    (item.status === "approved" || item.status === "verified");
+                  const canGenerateItemReport =
+                    Boolean(canGenerateReport) && item.status === "verified";
                   const verifierActivity =
                     item.verifierNames && item.verifierNames.length > 0
                       ? item.verifierNames.join(", ")
@@ -585,71 +1080,62 @@ function RequestsPageContent() {
                       <td style={{ padding: "1rem", borderBottom: "1px solid #F1F5F9" }}>
                         <button
                           type="button"
-                          onClick={() => setActiveResponseRequestId(item._id)}
-                          disabled={!hasResponses}
+                          onClick={() => openVerificationModal(item)}
+                          disabled={!canViewStatus}
                           style={{
-                            background: hasResponses ? "#EFF6FF" : "#F1F5F9",
-                            color: hasResponses ? "#2563EB" : "#94A3B8",
+                            background: canViewStatus ? "#EFF6FF" : "#F1F5F9",
+                            color: canViewStatus ? "#2563EB" : "#94A3B8",
                             border: "none",
                             padding: "0.4rem 0.8rem",
                             borderRadius: "6px",
                             fontSize: "0.85rem",
                             fontWeight: 600,
-                            cursor: hasResponses ? "pointer" : "not-allowed",
+                            cursor: canViewStatus ? "pointer" : "not-allowed",
                             transition: "background 0.2s"
                           }}
                         >
-                          {hasResponses ? "View Data" : "Empty"}
+                          {canViewStatus ? "View Status" : "Unavailable"}
                         </button>
                       </td>
                       <td style={{ padding: "1rem", borderBottom: "1px solid #F1F5F9", textAlign: "right" }}>
                         <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
-                          {canApprove ? (
+                          {canVerifyWorkflow ? (
                             <button
                               type="button"
-                              onClick={() => approveRequest(item._id)}
-                              disabled={!formSubmitted}
-                              title={formSubmitted ? "Approve" : "Form not submitted"}
+                              onClick={() => openVerificationModal(item)}
+                              disabled={!canVerifyNow}
+                              title={canVerifyNow ? "Verify now" : "Only approved, submitted requests can be verified"}
                               style={{
                                 display: "inline-flex", alignItems: "center", gap: "0.3rem", fontWeight: 500, fontSize: "0.85rem",
-                                background: formSubmitted ? "#F0FDF4" : "transparent", border: formSubmitted ? "1px solid #BBF7D0" : "1px solid transparent", borderRadius: "6px", cursor: formSubmitted ? "pointer" : "not-allowed",
-                                color: formSubmitted ? "#16A34A" : "#CBD5E1", padding: "0.3rem 0.6rem", transition: "all 0.2s"
+                                background: canVerifyNow ? "#EFF6FF" : "transparent", border: canVerifyNow ? "1px solid #BFDBFE" : "1px solid transparent", borderRadius: "6px", cursor: canVerifyNow ? "pointer" : "not-allowed",
+                                color: canVerifyNow ? "#2563EB" : "#CBD5E1", padding: "0.3rem 0.6rem", transition: "all 0.2s"
                               }}
                             >
-                              <CheckCircle size={16} /> Approve
+                              <BadgeCheck size={16} /> Verify Now
                             </button>
                           ) : null}
-                          {canReject ? (
+
+                          {canGenerateReport ? (
                             <button
                               type="button"
-                              onClick={() => rejectWithNote(item._id)}
-                              disabled={!formSubmitted}
-                              title={formSubmitted ? "Reject" : "Form not submitted"}
+                              onClick={() => generateReport(item._id)}
+                              disabled={!canGenerateItemReport || reportingRequestId === item._id}
+                              title={
+                                canGenerateItemReport
+                                  ? "Generate report"
+                                  : "Report is available after verification is complete"
+                              }
                               style={{
                                 display: "inline-flex", alignItems: "center", gap: "0.3rem", fontWeight: 500, fontSize: "0.85rem",
-                                background: formSubmitted ? "#FEF2F2" : "transparent", border: formSubmitted ? "1px solid #FECACA" : "1px solid transparent", borderRadius: "6px", cursor: formSubmitted ? "pointer" : "not-allowed",
-                                color: formSubmitted ? "#DC2626" : "#CBD5E1", padding: "0.3rem 0.6rem", transition: "all 0.2s"
+                                background: canGenerateItemReport ? "#F0FDF4" : "transparent", border: canGenerateItemReport ? "1px solid #BBF7D0" : "1px solid transparent", borderRadius: "6px", cursor: canGenerateItemReport ? "pointer" : "not-allowed",
+                                color: canGenerateItemReport ? "#16A34A" : "#CBD5E1", padding: "0.3rem 0.6rem", transition: "all 0.2s"
                               }}
                             >
-                              <XCircle size={16} /> Reject
+                              {reportingRequestId === item._id ? "Generating..." : "Generate Report"}
                             </button>
                           ) : null}
-                          {canVerify ? (
-                            <button
-                              type="button"
-                              onClick={() => verifyRequest(item._id)}
-                              disabled={!formSubmitted}
-                              title={formSubmitted ? "Verify" : "Form not submitted"}
-                              style={{
-                                display: "inline-flex", alignItems: "center", gap: "0.3rem", fontWeight: 500, fontSize: "0.85rem",
-                                background: formSubmitted ? "#EFF6FF" : "transparent", border: formSubmitted ? "1px solid #BFDBFE" : "1px solid transparent", borderRadius: "6px", cursor: formSubmitted ? "pointer" : "not-allowed",
-                                color: formSubmitted ? "#2563EB" : "#CBD5E1", padding: "0.3rem 0.6rem", transition: "all 0.2s"
-                              }}
-                            >
-                              <BadgeCheck size={16} /> Verify
-                            </button>
-                          ) : null}
-                          {!canApprove && !canReject && !canVerify ? <span style={{ color: "#CBD5E1" }}>-</span> : null}
+
+                          {!canVerifyWorkflow && !canGenerateReport ? <span style={{ color: "#CBD5E1" }}>-</span> : null}
                         </div>
                       </td>
                     </tr>
@@ -688,7 +1174,7 @@ function RequestsPageContent() {
               Company Requests Hub
             </h2>
             <p style={{ color: "#64748B", margin: "0.4rem 0 0", fontSize: "0.95rem" }}>
-              Unified dashboard for processing candidates, approvals, and validations
+              Unified dashboard for service-level verification, status tracking, and report generation.
             </p>
           </div>
         </div>
@@ -832,7 +1318,8 @@ function RequestsPageContent() {
           <div
             className="glass-card"
             style={{
-              width: "min(920px, calc(100vw - 2rem))",
+              width: "70vw",
+              maxWidth: "calc(100vw - 2rem)",
               maxHeight: "86vh",
               overflowY: "auto",
               padding: "1rem",
@@ -841,7 +1328,7 @@ function RequestsPageContent() {
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.8rem" }}>
               <div>
-                <h3 style={{ margin: 0 }}>Candidate Responses</h3>
+                <h3 style={{ margin: 0 }}>Request Status Workspace</h3>
                 <p style={{ margin: "0.25rem 0 0", color: "#667892" }}>
                   {activeResponseRequest.candidateName} • {activeResponseRequest.customerName}
                 </p>
@@ -850,6 +1337,8 @@ function RequestsPageContent() {
                 <X size={16} />
               </button>
             </div>
+
+            {renderServiceVerificationWorkspace(activeResponseRequest)}
 
             {renderResponseContent(activeResponseRequest)}
           </div>

@@ -63,9 +63,9 @@ async function run() {
   await mongoose.connect(MONGODB_URI, { dbName: "cluso" });
   console.log("Connected to DB");
 
-  const customer = await User.findOne({ email: "customer@techcorp.com", role: "customer" }).lean();
+  const customer = await User.findOne({ email: "enterprise@techcorp.com", role: "customer" }).lean();
   if (!customer) {
-    throw new Error("Customer account not found. Run reset_users.mjs first.");
+    throw new Error("Enterprise account not found. Run reset_users.mjs first.");
   }
 
   const delegate = await User.findOne({

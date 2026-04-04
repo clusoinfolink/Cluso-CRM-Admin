@@ -291,7 +291,7 @@ export async function POST(req: NextRequest) {
     selectedServices,
   });
 
-  return NextResponse.json({ message: "Customer login issued successfully." }, { status: 201 });
+  return NextResponse.json({ message: "Enterprise login issued successfully." }, { status: 201 });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -310,7 +310,7 @@ export async function PATCH(req: NextRequest) {
 
   const customer = await User.findOne({ _id: parsed.data.customerId, role: "customer" }).lean();
   if (!customer) {
-    return NextResponse.json({ error: "Customer company not found." }, { status: 404 });
+    return NextResponse.json({ error: "Enterprise company not found." }, { status: 404 });
   }
 
   const selectedServiceIds = parsed.data.selectedServices.map((item) => item.serviceId);
