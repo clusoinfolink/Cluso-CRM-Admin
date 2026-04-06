@@ -78,10 +78,13 @@ export type RequestItem = {
     serviceId: string;
     serviceName: string;
     answers: Array<{
+      fieldKey?: string;
       question: string;
       fieldType: "text" | "long_text" | "number" | "file" | "date";
       required?: boolean;
       repeatable?: boolean;
+      notApplicable?: boolean;
+      notApplicableText?: string;
       value: string;
       fileName?: string;
       fileMimeType?: string;
@@ -95,13 +98,17 @@ export type RequestItem = {
 };
 
 export type ServiceFormField = {
+  fieldKey?: string;
   question: string;
+  iconKey?: string;
   fieldType: "text" | "long_text" | "number" | "file" | "date";
   required: boolean;
   repeatable?: boolean;
   minLength?: number | null;
   maxLength?: number | null;
   forceUppercase?: boolean;
+  allowNotApplicable?: boolean;
+  notApplicableText?: string;
 };
 
 export type ServiceItem = {
@@ -111,6 +118,10 @@ export type ServiceItem = {
   defaultPrice: number | null;
   defaultCurrency: SupportedCurrency;
   isPackage: boolean;
+  allowMultipleEntries?: boolean;
+  multipleEntriesLabel?: string;
+  hiddenFromCustomerPortal?: boolean;
+  isDefaultPersonalDetails?: boolean;
   includedServiceIds: string[];
   formFields: ServiceFormField[];
 };

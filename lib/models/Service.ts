@@ -4,13 +4,17 @@ import { SUPPORTED_CURRENCIES, type SupportedCurrency } from "@/lib/currencies";
 export type ServiceFormFieldType = "text" | "long_text" | "number" | "file" | "date";
 
 export type ServiceFormField = {
+  fieldKey?: string;
   question: string;
+  iconKey?: string;
   fieldType: ServiceFormFieldType;
   required: boolean;
   repeatable?: boolean;
   minLength?: number | null;
   maxLength?: number | null;
   forceUppercase?: boolean;
+  allowNotApplicable?: boolean;
+  notApplicableText?: string;
 };
 
 export interface IService extends Document {
@@ -19,7 +23,11 @@ export interface IService extends Document {
   defaultPrice?: number;
   defaultCurrency: SupportedCurrency;
   isPackage: boolean;
+  allowMultipleEntries?: boolean;
+    multipleEntriesLabel?: string;
   includedServiceIds: mongoose.Types.ObjectId[];
+  hiddenFromCustomerPortal?: boolean;
+  isDefaultPersonalDetails?: boolean;
   formFields: ServiceFormField[];
   createdAt: Date;
   updatedAt: Date;
@@ -32,10 +40,16 @@ const serviceSchema = new Schema<IService>(
     defaultPrice: { type: Number },
     defaultCurrency: { type: String, enum: SUPPORTED_CURRENCIES, default: "INR" },
     isPackage: { type: Boolean, default: false },
+    allowMultipleEntries: { type: Boolean, default: false },
+      multipleEntriesLabel: { type: String, required: false },
     includedServiceIds: [{ type: Schema.Types.ObjectId, ref: "Service" }],
+    hiddenFromCustomerPortal: { type: Boolean, default: false },
+    isDefaultPersonalDetails: { type: Boolean, default: false },
     formFields: [
       {
+        fieldKey: { type: String, default: "" },
         question: { type: String, required: true },
+        iconKey: { type: String, default: "diary" },
         fieldType: {
           type: String,
           enum: ["text", "long_text", "number", "file", "date"],
@@ -46,6 +60,8 @@ const serviceSchema = new Schema<IService>(
         minLength: { type: Number, default: null },
         maxLength: { type: Number, default: null },
         forceUppercase: { type: Boolean, default: false },
+        allowNotApplicable: { type: Boolean, default: false },
+        notApplicableText: { type: String, default: "" },
       },
     ],
   },
@@ -54,21 +70,34 @@ const serviceSchema = new Schema<IService>(
 
 const hasEnhancedServiceFields = Boolean(
   mongoose.models.Service?.schema.path("formFields.required") &&
+    mongoose.models.Service?.schema.path("formFields.fieldKey") &&
+    mongoose.models.Service?.schema.path("formFields.iconKey") &&
     mongoose.models.Service?.schema.path("formFields.repeatable") &&
     mongoose.models.Service?.schema.path("formFields.minLength") &&
     mongoose.models.Service?.schema.path("formFields.maxLength") &&
-    mongoose.models.Service?.schema.path("formFields.forceUppercase"),
+    mongoose.models.Service?.schema.path("formFields.forceUppercase") &&
+    mongoose.models.Service?.schema.path("formFields.allowNotApplicable") &&
+    mongoose.models.Service?.schema.path("formFields.notApplicableText"),
 );
 const hasPackageFields = Boolean(
   mongoose.models.Service?.schema.path("isPackage") &&
     mongoose.models.Service?.schema.path("includedServiceIds"),
+);
+const hasServiceEntryField = Boolean(
+  mongoose.models.Service?.schema.path("allowMultipleEntries"),
+);
+const hasVisibilityFields = Boolean(
+  mongoose.models.Service?.schema.path("hiddenFromCustomerPortal") &&
+    mongoose.models.Service?.schema.path("isDefaultPersonalDetails"),
 );
 
 if (
   mongoose.models.Service &&
   (!mongoose.models.Service.schema.path("formFields") ||
     !hasEnhancedServiceFields ||
-    !hasPackageFields)
+    !hasPackageFields ||
+    !hasServiceEntryField ||
+    !hasVisibilityFields)
 ) {
   delete mongoose.models.Service;
 }
