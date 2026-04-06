@@ -91,7 +91,7 @@ function normalizeQuestionIconKey(rawIconKey: unknown): ServiceQuestionIconKey {
 export type ServiceFormField = {
   fieldKey?: string;
   question: string;
-  iconKey?: ServiceQuestionIconKey;
+  iconKey?: string;
   fieldType: ServiceFormFieldType;
   required: boolean;
   repeatable?: boolean;
