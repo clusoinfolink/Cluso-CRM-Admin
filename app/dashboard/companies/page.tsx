@@ -29,6 +29,7 @@ import {
 export default function CompaniesPage() {
   const { me, loading, logout } = useAdminSession();
   const [message, setMessage] = useState("");
+  const [saveServicesNotice, setSaveServicesNotice] = useState("");
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [companies, setCompanies] = useState<CompanyItem[]>([]);
 
@@ -96,17 +97,24 @@ export default function CompaniesPage() {
   }, [me, loadData]);
 
   useEffect(() => {
-    if (companies.length === 0) {
-      if (viewCompanyId) {
-        setViewCompanyId("");
-      }
+    const normalizedViewCompanyId =
+      companies.length === 0
+        ? ""
+        : companies.some((company) => company.id === viewCompanyId)
+          ? viewCompanyId
+          : companies[0].id;
+
+    if (normalizedViewCompanyId === viewCompanyId) {
       return;
     }
 
-    const stillExists = companies.some((company) => company.id === viewCompanyId);
-    if (!stillExists) {
-      setViewCompanyId(companies[0].id);
-    }
+    const stateUpdateTimer = window.setTimeout(() => {
+      setViewCompanyId(normalizedViewCompanyId);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(stateUpdateTimer);
+    };
   }, [companies, viewCompanyId]);
 
   function formatAddress(address: CompanyPartnerProfile["companyInformation"]["address"]) {
@@ -237,6 +245,7 @@ export default function CompaniesPage() {
   function pickCompanyForServiceUpdate(companyId: string) {
     setManageCompanyId(companyId);
     setViewCompanyId(companyId);
+    setSaveServicesNotice("");
     const found = companies.find((item) => item.id === companyId);
     setManageCompanyServices(found?.selectedServices ?? []);
   }
@@ -273,6 +282,7 @@ export default function CompaniesPage() {
   async function updateCompanyServices(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMessage("");
+    setSaveServicesNotice("");
 
     if (!manageCompanyId) {
       setMessage("Please choose a company first.");
@@ -295,6 +305,7 @@ export default function CompaniesPage() {
     }
 
     setMessage(data.message ?? "Company services updated.");
+    setSaveServicesNotice("Successfully saved");
     await loadData();
   }
 
@@ -531,11 +542,30 @@ export default function CompaniesPage() {
             </div>
           ) : null}
 
-          <div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", flexWrap: "wrap" }}>
             <button className="btn btn-primary" type="submit" style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
               <Save size={18} />
               Save Company Services
             </button>
+
+            {saveServicesNotice ? (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  background: "#DCFCE7",
+                  color: "#166534",
+                  border: "1px solid #BBF7D0",
+                  borderRadius: "0.55rem",
+                  padding: "0.45rem 0.65rem",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                }}
+              >
+                {saveServicesNotice}
+              </span>
+            ) : null}
           </div>
         </form>
       </section>
