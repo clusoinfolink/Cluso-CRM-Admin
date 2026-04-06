@@ -39,7 +39,27 @@ type ServiceVerificationLike = {
   }>;
 };
 
-function buildDefaultServiceVerifications(selectedServices: SelectedServiceLike[] = []) {
+type NormalizedServiceVerification = {
+  serviceId: string;
+  serviceName: string;
+  status: "pending" | "verified" | "unverified";
+  verificationMode: string;
+  comment: string;
+  attempts: Array<{
+    status: "verified" | "unverified";
+    verificationMode: string;
+    comment: string;
+    attemptedAt: Date;
+    verifierId: string | null;
+    verifierName: string;
+    managerId: string | null;
+    managerName: string;
+  }>;
+};
+
+function buildDefaultServiceVerifications(
+  selectedServices: SelectedServiceLike[] = [],
+): NormalizedServiceVerification[] {
   return selectedServices.map((service) => ({
     serviceId: String(service.serviceId),
     serviceName: service.serviceName,
@@ -64,11 +84,13 @@ function normalizeServiceVerifications(
   existingVerifications: ServiceVerificationLike[] = [],
 ) {
   const defaults = buildDefaultServiceVerifications(selectedServices);
-  const serviceMap = new Map(defaults.map((entry) => [entry.serviceId, entry]));
+  const serviceMap = new Map<string, NormalizedServiceVerification>(
+    defaults.map((entry) => [entry.serviceId, entry]),
+  );
 
   for (const verification of existingVerifications) {
     const serviceId = String(verification.serviceId);
-    const normalized = {
+    const normalized: NormalizedServiceVerification = {
       serviceId,
       serviceName: verification.serviceName,
       status: verification.status ?? "pending",
