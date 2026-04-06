@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   Building,
   ChevronDown,
@@ -13,6 +13,7 @@ import {
   Save,
   UserCircle2,
   UserPlus,
+  X,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { SearchableSelect } from "@/components/SearchableSelect";
@@ -41,25 +42,13 @@ export default function CompaniesPage() {
   const [manageCompanyId, setManageCompanyId] = useState("");
   const [manageCompanyServices, setManageCompanyServices] = useState<CompanyServiceSelection[]>([]);
   const [viewCompanyId, setViewCompanyId] = useState("");
+  const [profileModalCompanyId, setProfileModalCompanyId] = useState("");
 
   const [issueServiceSearch, setIssueServiceSearch] = useState("");
   const [manageServiceSearch, setManageServiceSearch] = useState("");
   const [issueServicesCollapsed, setIssueServicesCollapsed] = useState(true);  
   const [manageServicesCollapsed, setManageServicesCollapsed] = useState(true); 
-
-  const [profilePanelsCollapsed, setProfilePanelsCollapsed] = useState({
-    company: true,
-    invoicing: true,
-    contact: true,
-    questions: true,
-  });
-
-  const toggleProfilePanel = (panel: keyof typeof profilePanelsCollapsed) => {
-    setProfilePanelsCollapsed((prev) => ({
-      ...prev,
-      [panel]: !prev[panel],
-    }));
-  };
+  const profileAccessSectionRef = useRef<HTMLElement | null>(null);
 
   const loadData = useCallback(async () => {
     const [serviceRes, companyRes] = await Promise.all([
@@ -117,6 +106,23 @@ export default function CompaniesPage() {
     };
   }, [companies, viewCompanyId]);
 
+  useEffect(() => {
+    if (!profileModalCompanyId) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setProfileModalCompanyId("");
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [profileModalCompanyId]);
+
   function formatAddress(address: CompanyPartnerProfile["companyInformation"]["address"]) {
     const parts = [address.line1, address.line2, address.city, address.state, address.postalCode, address.country]
       .map((part) => part.trim())
@@ -154,6 +160,24 @@ export default function CompaniesPage() {
         profile.additionalQuestions.promoCode.trim() ||
         profile.additionalQuestions.primaryIndustry.trim(),
     );
+  }
+
+  function hasSavedProfile(profile: CompanyPartnerProfile) {
+    return Boolean(profile.updatedAt) || hasPartnerProfileData(profile);
+  }
+
+  function openCompanyProfileFromRoster(companyId: string) {
+    setViewCompanyId(companyId);
+    profileAccessSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function openCompanyProfileModal(companyId: string) {
+    setViewCompanyId(companyId);
+    setProfileModalCompanyId(companyId);
+  }
+
+  function closeCompanyProfileModal() {
+    setProfileModalCompanyId("");
   }
 
   function toggleCompanyService(service: ServiceItem, checked: boolean) {
@@ -363,7 +387,10 @@ export default function CompaniesPage() {
 
   const selectedCompanyForInfo = companies.find((company) => company.id === viewCompanyId) ?? null;
   const selectedCompanyProfile = selectedCompanyForInfo?.partnerProfile ?? null;
-  const canShowProfile = selectedCompanyProfile ? hasPartnerProfileData(selectedCompanyProfile) : false;
+  const canShowProfile = selectedCompanyProfile ? hasSavedProfile(selectedCompanyProfile) : false;
+  const selectedCompanyForModal = companies.find((company) => company.id === profileModalCompanyId) ?? null;
+  const selectedCompanyModalProfile = selectedCompanyForModal?.partnerProfile ?? null;
+  const canShowModalProfile = selectedCompanyModalProfile ? hasSavedProfile(selectedCompanyModalProfile) : false;
 
   return (
     <AdminPortalFrame
@@ -374,7 +401,7 @@ export default function CompaniesPage() {
     >
       {message ? <p className={`inline-alert ${getAlertTone(message)}`}>{message}</p> : null}
 
-      <section className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
+      <section ref={profileAccessSectionRef} className="glass-card" style={{ padding: "1.2rem", marginBottom: "1.2rem" }}>
         <h2 style={{ marginTop: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <UserPlus size={24} color="#4A90E2" />
           Issue Company Login ID
@@ -734,14 +761,42 @@ export default function CompaniesPage() {
                   </td>
                   <td style={{ padding: "0.8rem" }}>{company.stats?.lastRequestDate ? new Date(company.stats.lastRequestDate).toLocaleDateString() : <span style={{ color: "#94A3B8", fontStyle: "italic" }}>None</span>}</td>
                   <td style={{ padding: "0.8rem" }}>
-                    {company.partnerProfile && hasPartnerProfileData(company.partnerProfile) ? (
-                      <span style={{ padding: "0.25rem 0.5rem", background: "#f0fdf4", color: "#166534", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 600, border: "1px solid #bbf7d0" }}>
-                        Submitted
-                      </span>
+                    {company.partnerProfile && hasSavedProfile(company.partnerProfile) ? (
+                      <button
+                        type="button"
+                        onClick={() => openCompanyProfileModal(company.id)}
+                        title="View full company profile"
+                        style={{
+                          padding: "0.25rem 0.5rem",
+                          background: "#f0fdf4",
+                          color: "#166534",
+                          borderRadius: "999px",
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          border: "1px solid #bbf7d0",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Submitted - View
+                      </button>
                     ) : (
-                      <span style={{ padding: "0.25rem 0.5rem", background: "#fef2f2", color: "#991b1b", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 600, border: "1px solid #fecaca" }}>
-                        Pending
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openCompanyProfileFromRoster(company.id)}
+                        title="Open company profile"
+                        style={{
+                          padding: "0.25rem 0.5rem",
+                          background: "#fef2f2",
+                          color: "#991b1b",
+                          borderRadius: "999px",
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          border: "1px solid #fecaca",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Pending - Open
+                      </button>
                     )}
                   </td>
                   <td style={{ padding: "0.8rem" }}>
@@ -770,6 +825,189 @@ export default function CompaniesPage() {
           </table>
         </div>
       </section>
+
+      {profileModalCompanyId ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Company profile details"
+          onClick={closeCompanyProfileModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            zIndex: 1200,
+            display: "grid",
+            placeItems: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(1120px, 100%)",
+              maxHeight: "92vh",
+              overflowY: "auto",
+              borderRadius: "14px",
+              border: "1px solid #cbd5e1",
+              background: "#ffffff",
+              boxShadow: "0 28px 72px rgba(15, 23, 42, 0.2)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "start",
+                justifyContent: "space-between",
+                gap: "0.8rem",
+                padding: "1rem 1rem 0.8rem",
+                borderBottom: "1px solid #e2e8f0",
+              }}
+            >
+              <div>
+                <h3 style={{ margin: 0, color: "#0f172a" }}>Submitted Company Profile</h3>
+                <p style={{ margin: "0.35rem 0 0", color: "#475569", fontSize: "0.92rem" }}>
+                  {selectedCompanyForModal ? `${selectedCompanyForModal.name} (${selectedCompanyForModal.email})` : "Selected company"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeCompanyProfileModal}
+                aria-label="Close company profile popup"
+                style={{
+                  border: "1px solid #cbd5e1",
+                  background: "#f8fafc",
+                  color: "#334155",
+                  borderRadius: "8px",
+                  width: "34px",
+                  height: "34px",
+                  display: "inline-grid",
+                  placeItems: "center",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: "1rem" }}>
+              {!selectedCompanyForModal ? (
+                <p className="inline-alert inline-alert-warning" style={{ margin: 0 }}>
+                  Company details are not available.
+                </p>
+              ) : !selectedCompanyModalProfile || !canShowModalProfile ? (
+                <p className="inline-alert inline-alert-warning" style={{ margin: 0 }}>
+                  {selectedCompanyForModal.name} has not filled their profile information yet.
+                </p>
+              ) : (
+                <div
+                  style={{
+                    display: "grid",
+                    gap: "0.75rem",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                  }}
+                >
+                  <article className="glass-card" style={{ padding: "0.85rem" }}>
+                    <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <Building size={16} color="#4A90E2" /> Company Information
+                    </h3>
+                    <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                      <div><strong>Company Name:</strong> {selectedCompanyModalProfile.companyInformation.companyName || selectedCompanyForModal.name}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        <Mail size={14} color="#5E7A9A" />
+                        <span><strong>Login Email:</strong> {selectedCompanyForModal.email}</span>
+                      </div>
+                      <div><strong>GSTIN:</strong> {selectedCompanyModalProfile.companyInformation.gstin || "-"}</div>
+                      <div><strong>CIN / Registration:</strong> {selectedCompanyModalProfile.companyInformation.cinRegistrationNumber || "-"}</div>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: "0.35rem" }}>
+                        <MapPin size={14} color="#5E7A9A" style={{ marginTop: "0.18rem" }} />
+                        <span><strong>Address:</strong> {formatAddress(selectedCompanyModalProfile.companyInformation.address)}</span>
+                      </div>
+
+                      <div style={{ marginTop: "0.3rem" }}>
+                        <strong>Documents:</strong>
+                        {selectedCompanyModalProfile.companyInformation.documents.length > 0 ? (
+                          <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.1rem", display: "grid", gap: "0.2rem" }}>
+                            {selectedCompanyModalProfile.companyInformation.documents.map((doc, index) => (
+                              <li key={`${doc.fileName}-${doc.fileSize}-${index}`} style={{ display: "flex", alignItems: "center", gap: "0.32rem" }}>
+                                <FileText size={14} color="#5E7A9A" />
+                                <span>
+                                  {doc.fileName} ({(doc.fileSize / 1024 / 1024).toFixed(2)} MB)
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <span> -</span>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+
+                  <article className="glass-card" style={{ padding: "0.85rem" }}>
+                    <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E" }}>Invoicing Information</h3>
+                    <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                      <div><strong>Invoice Email:</strong> {selectedCompanyModalProfile.invoicingInformation.invoiceEmail || "-"}</div>
+                      <div><strong>Billing same as company:</strong> {selectedCompanyModalProfile.invoicingInformation.billingSameAsCompany ? "Yes" : "No"}</div>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: "0.35rem" }}>
+                        <MapPin size={14} color="#5E7A9A" style={{ marginTop: "0.18rem" }} />
+                        <span><strong>Billing Address:</strong> {formatAddress(selectedCompanyModalProfile.invoicingInformation.address)}</span>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article className="glass-card" style={{ padding: "0.85rem" }}>
+                    <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <UserCircle2 size={16} color="#4A90E2" /> Primary Contact Information
+                    </h3>
+                    <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                      <div><strong>Name:</strong> {`${selectedCompanyModalProfile.primaryContactInformation.firstName} ${selectedCompanyModalProfile.primaryContactInformation.lastName}`.trim() || "-"}</div>
+                      <div><strong>Designation:</strong> {selectedCompanyModalProfile.primaryContactInformation.designation || "-"}</div>
+                      <div><strong>Email:</strong> {selectedCompanyModalProfile.primaryContactInformation.email || "-"}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        <Phone size={14} color="#5E7A9A" />
+                        <span><strong>Office:</strong> {formatPhone(selectedCompanyModalProfile.primaryContactInformation.officePhone)}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        <Phone size={14} color="#5E7A9A" />
+                        <span><strong>Mobile:</strong> {formatPhone(selectedCompanyModalProfile.primaryContactInformation.mobilePhone)}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        <Phone size={14} color="#5E7A9A" />
+                        <span><strong>WhatsApp:</strong> {formatPhone(selectedCompanyModalProfile.primaryContactInformation.whatsappPhone)}</span>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article className="glass-card" style={{ padding: "0.85rem" }}>
+                    <h3 style={{ margin: 0, fontSize: "0.98rem", color: "#2D405E" }}>Additional Questions</h3>
+                    <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
+                      <div><strong>How did you hear about us:</strong> {selectedCompanyModalProfile.additionalQuestions.heardAboutUs || "-"}</div>
+                      <div><strong>Referred By:</strong> {selectedCompanyModalProfile.additionalQuestions.referredBy || "-"}</div>
+                      <div><strong>Expected Backgrounds / Year:</strong> {selectedCompanyModalProfile.additionalQuestions.yearlyBackgroundsExpected || "-"}</div>
+                      <div><strong>Promo Code:</strong> {selectedCompanyModalProfile.additionalQuestions.promoCode || "-"}</div>
+                      <div><strong>Primary Industry:</strong> {selectedCompanyModalProfile.additionalQuestions.primaryIndustry || "-"}</div>
+                    </div>
+                  </article>
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                padding: "0.85rem 1rem",
+                borderTop: "1px solid #e2e8f0",
+                display: "flex",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button type="button" className="btn btn-secondary" onClick={closeCompanyProfileModal}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AdminPortalFrame>
   );
 }
