@@ -158,6 +158,7 @@ const VerificationRequestSchema = new Schema(
       },
       generatedByName: { type: String, default: "" },
       reportNumber: { type: String, default: "" },
+      customerSharedAt: { type: Date, default: null },
     },
     reportData: {
       type: Schema.Types.Mixed,
@@ -199,6 +200,7 @@ if (
     !models.VerificationRequest.schema.path("serviceVerifications") ||
     !models.VerificationRequest.schema.path("serviceVerifications.attempts.attemptedAt") ||
     !models.VerificationRequest.schema.path("reportMetadata") ||
+    !models.VerificationRequest.schema.path("reportMetadata.customerSharedAt") ||
     !models.VerificationRequest.schema.path("reportData") ||
     !models.VerificationRequest.schema.path("invoiceSnapshot"))
 ) {

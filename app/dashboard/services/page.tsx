@@ -38,6 +38,7 @@ export default function ServicesPage() {
 
   const [message, setMessage] = useState("");
   const [newServiceName, setNewServiceName] = useState("");
+  const [newPackageName, setNewPackageName] = useState("");
   const [newServiceDescription, setNewServiceDescription] = useState("");
   const [newServiceDefaultPrice, setNewServiceDefaultPrice] = useState("");
   const [newServiceDefaultCurrency, setNewServiceDefaultCurrency] = useState<SupportedCurrency>("INR");
@@ -94,6 +95,12 @@ export default function ServicesPage() {
     e.preventDefault();
     setMessage("");
 
+    const normalizedName = (newServiceIsPackage ? newPackageName : newServiceName).trim();
+    if (!normalizedName) {
+      setMessage(newServiceIsPackage ? "Please enter a package name." : "Please enter a service name.");
+      return;
+    }
+
     const payload: {
       name: string;
       description: string;
@@ -102,7 +109,7 @@ export default function ServicesPage() {
       isPackage?: boolean;
       includedServiceIds?: string[];
     } = {
-      name: newServiceName,
+      name: normalizedName,
       description: newServiceDescription,
       defaultCurrency: newServiceDefaultCurrency,
     };
@@ -139,6 +146,7 @@ export default function ServicesPage() {
     }
 
     setNewServiceName("");
+    setNewPackageName("");
     setNewServiceDescription("");
     setNewServiceDefaultPrice("");
     setNewServiceDefaultCurrency("INR");
@@ -293,10 +301,19 @@ export default function ServicesPage() {
             
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "1.2rem" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                <div>
-                  <label className="label" style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569" }}>Service Name</label>
-                  <input className="input" value={newServiceName} onChange={(e) => setNewServiceName(e.target.value)} required style={{ background: "#F8FAFC", width: "100%" }} />
-                </div>
+                {!newServiceIsPackage && (
+                  <div>
+                    <label className="label" style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569" }}>Service Name</label>
+                    <input
+                      className="input"
+                      value={newServiceName}
+                      onChange={(e) => setNewServiceName(e.target.value)}
+                      required={!newServiceIsPackage}
+                      style={{ background: "#F8FAFC", width: "100%" }}
+                      placeholder="Enter service name"
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="label" style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569" }}>Description (Optional)</label>
                   <textarea className="input" value={newServiceDescription} onChange={(e) => setNewServiceDescription(e.target.value)} rows={3} style={{ background: "#F8FAFC", width: "100%", resize: "vertical" }} />
@@ -323,7 +340,12 @@ export default function ServicesPage() {
                     <input type="checkbox" checked={newServiceIsPackage} onChange={(e) => {
                       const checked = e.target.checked;
                       setNewServiceIsPackage(checked);
-                      if (!checked) setNewServiceIncludedIds([]);
+                      if (checked && !newPackageName.trim() && newServiceName.trim()) {
+                        setNewPackageName(newServiceName.trim());
+                      }
+                      if (!checked) {
+                        setNewServiceIncludedIds([]);
+                      }
                     }} style={{ width: "16px", height: "16px" }} />
                     Create as Package Deal
                   </label>
@@ -333,6 +355,17 @@ export default function ServicesPage() {
 
                   {newServiceIsPackage && (
                     <div style={{ padding: "0.75rem", background: "#FFFFFF", borderRadius: "6px", border: "1px solid #E2E8F0" }}>
+                      <div style={{ marginBottom: "0.85rem" }}>
+                        <label className="label" style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569" }}>Package Name</label>
+                        <input
+                          className="input"
+                          value={newPackageName}
+                          onChange={(e) => setNewPackageName(e.target.value)}
+                          required={newServiceIsPackage}
+                          style={{ background: "#F8FAFC", width: "100%" }}
+                          placeholder="Enter package name"
+                        />
+                      </div>
                       {regularServices.length < 2 ? (
                         <p style={{ margin: 0, color: "#DC2626", fontSize: "0.85rem" }}>You need at least 2 regular services to map a package.</p>
                       ) : (

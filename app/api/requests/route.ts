@@ -5,7 +5,7 @@ import { connectMongo } from "@/lib/mongodb";
 import VerificationRequest from "@/lib/models/VerificationRequest";
 import User from "@/lib/models/User";
 
-const patchSchema = z.object({
+const verifyServicePatchSchema = z.object({
   action: z.literal("verify-service"),
   requestId: z.string().min(1),
   serviceId: z.string().min(1),
@@ -13,6 +13,16 @@ const patchSchema = z.object({
   verificationMode: z.string().trim().max(120).optional().default("manual"),
   comment: z.string().trim().max(500).optional().default(""),
 });
+
+const shareReportPatchSchema = z.object({
+  action: z.literal("share-report-to-customer"),
+  requestId: z.string().min(1),
+});
+
+const patchSchema = z.discriminatedUnion("action", [
+  verifyServicePatchSchema,
+  shareReportPatchSchema,
+]);
 
 type SelectedServiceLike = {
   serviceId: unknown;
@@ -309,7 +319,10 @@ export async function PATCH(req: NextRequest) {
 
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid input. Expected verify-service action payload." },
+      {
+        error:
+          "Invalid input. Expected verify-service or share-report-to-customer action payload.",
+      },
       { status: 400 },
     );
   }
@@ -370,7 +383,53 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
-  const requestDoc = await VerificationRequest.findById(parsed.data.requestId)
+  if (parsed.data.action === "share-report-to-customer") {
+    if (auth.role === "verifier") {
+      return NextResponse.json(
+        { error: "Only admin or manager roles can share reports with customers." },
+        { status: 403 },
+      );
+    }
+
+    const shareTarget = await VerificationRequest.findById(parsed.data.requestId)
+      .select("status reportData")
+      .lean();
+
+    if (!shareTarget) {
+      return NextResponse.json({ error: "Request not found." }, { status: 404 });
+    }
+
+    if (shareTarget.status !== "verified") {
+      return NextResponse.json(
+        { error: "Only verified requests can be shared with customers." },
+        { status: 400 },
+      );
+    }
+
+    if (!shareTarget.reportData) {
+      return NextResponse.json(
+        { error: "Generate the report before sharing it with customer." },
+        { status: 400 },
+      );
+    }
+
+    await VerificationRequest.findByIdAndUpdate(
+      parsed.data.requestId,
+      {
+        "reportMetadata.customerSharedAt": new Date(),
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    return NextResponse.json({ message: "Report shared with customer portal." });
+  }
+
+  const verifyPayload = parsed.data;
+
+  const requestDoc = await VerificationRequest.findById(verifyPayload.requestId)
     .select("candidateFormStatus status selectedServices serviceVerifications")
     .lean();
 
@@ -401,7 +460,7 @@ export async function PATCH(req: NextRequest) {
   );
 
   const targetIndex = normalizedServiceVerifications.findIndex(
-    (service) => service.serviceId === parsed.data.serviceId,
+    (service) => service.serviceId === verifyPayload.serviceId,
   );
   if (targetIndex === -1) {
     return NextResponse.json(
@@ -431,13 +490,13 @@ export async function PATCH(req: NextRequest) {
   }
 
   const target = normalizedServiceVerifications[targetIndex];
-  target.status = parsed.data.serviceStatus;
-  target.verificationMode = parsed.data.verificationMode;
-  target.comment = parsed.data.comment;
+  target.status = verifyPayload.serviceStatus;
+  target.verificationMode = verifyPayload.verificationMode;
+  target.comment = verifyPayload.comment;
   target.attempts.push({
-    status: parsed.data.serviceStatus,
-    verificationMode: parsed.data.verificationMode,
-    comment: parsed.data.comment,
+    status: verifyPayload.serviceStatus,
+    verificationMode: verifyPayload.verificationMode,
+    comment: verifyPayload.comment,
     attemptedAt: new Date(),
     verifierId: auth.userId,
     verifierName,
@@ -451,7 +510,7 @@ export async function PATCH(req: NextRequest) {
   const nextStatus = isVerificationComplete ? "verified" : "approved";
 
   const updated = await VerificationRequest.findByIdAndUpdate(
-    parsed.data.requestId,
+    verifyPayload.requestId,
     {
       status: nextStatus,
       rejectionNote: "",
@@ -469,7 +528,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   return NextResponse.json({
-    message: `Service verification attempt logged (${parsed.data.serviceStatus}).`,
+    message: `Service verification attempt logged (${verifyPayload.serviceStatus}).`,
     requestStatus: nextStatus,
   });
 }

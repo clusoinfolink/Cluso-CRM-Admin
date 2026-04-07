@@ -73,11 +73,13 @@ const formFieldSchema = z
     notApplicableText: z.string().trim().max(200).optional().default("Not Applicable"),
   })
   .superRefine((field, ctx) => {
-    const supportsTextConstraints =
-      field.fieldType === "text" || field.fieldType === "long_text";
+    const supportsLengthConstraints =
+      field.fieldType === "text" ||
+      field.fieldType === "long_text" ||
+      field.fieldType === "number";
 
     if (
-      supportsTextConstraints &&
+      supportsLengthConstraints &&
       field.minLength !== null &&
       field.minLength !== undefined &&
       field.maxLength !== null &&
@@ -111,7 +113,11 @@ const formFieldSchema = z
 type ParsedFormField = z.infer<typeof formFieldSchema>;
 
 function normalizeFormField(field: ParsedFormField) {
-  const supportsTextConstraints =
+  const supportsLengthConstraints =
+    field.fieldType === "text" ||
+    field.fieldType === "long_text" ||
+    field.fieldType === "number";
+  const supportsUppercaseConstraint =
     field.fieldType === "text" || field.fieldType === "long_text";
 
   return {
@@ -121,17 +127,17 @@ function normalizeFormField(field: ParsedFormField) {
     fieldType: field.fieldType,
     required: Boolean(field.required),
     repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
-    minLength: supportsTextConstraints
+    minLength: supportsLengthConstraints
       ? typeof field.minLength === "number"
         ? field.minLength
         : null
       : null,
-    maxLength: supportsTextConstraints
+    maxLength: supportsLengthConstraints
       ? typeof field.maxLength === "number"
         ? field.maxLength
         : null
       : null,
-    forceUppercase: supportsTextConstraints ? Boolean(field.forceUppercase) : false,
+    forceUppercase: supportsUppercaseConstraint ? Boolean(field.forceUppercase) : false,
     allowNotApplicable: Boolean(field.allowNotApplicable),
     notApplicableText: Boolean(field.allowNotApplicable)
       ? field.notApplicableText.trim() || "Not Applicable"

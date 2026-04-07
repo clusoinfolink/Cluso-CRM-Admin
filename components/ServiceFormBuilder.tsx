@@ -121,7 +121,11 @@ type Props = {
   preferredServiceId?: string;
 };
 
-function supportsTextConstraints(fieldType: ServiceFormFieldType) {
+function supportsLengthConstraints(fieldType: ServiceFormFieldType) {
+  return fieldType === "text" || fieldType === "long_text" || fieldType === "number";
+}
+
+function supportsUppercaseConstraint(fieldType: ServiceFormFieldType) {
   return fieldType === "text" || fieldType === "long_text";
 }
 
@@ -289,9 +293,9 @@ export default function ServiceFormBuilder({
               repeatable: supportsRepeatable(fieldType)
                 ? Boolean(item.repeatable)
                 : false,
-              minLength: supportsTextConstraints(fieldType) ? item.minLength ?? null : null,
-              maxLength: supportsTextConstraints(fieldType) ? item.maxLength ?? null : null,
-              forceUppercase: supportsTextConstraints(fieldType)
+              minLength: supportsLengthConstraints(fieldType) ? item.minLength ?? null : null,
+              maxLength: supportsLengthConstraints(fieldType) ? item.maxLength ?? null : null,
+              forceUppercase: supportsUppercaseConstraint(fieldType)
                 ? Boolean(item.forceUppercase)
                 : false,
             }
@@ -449,11 +453,11 @@ export default function ServiceFormBuilder({
 
     const cleaned = fields.map((item) => {
       const minLength =
-        supportsTextConstraints(item.fieldType) && typeof item.minLength === "number"
+        supportsLengthConstraints(item.fieldType) && typeof item.minLength === "number"
           ? item.minLength
           : null;
       const maxLength =
-        supportsTextConstraints(item.fieldType) && typeof item.maxLength === "number"
+        supportsLengthConstraints(item.fieldType) && typeof item.maxLength === "number"
           ? item.maxLength
           : null;
 
@@ -466,7 +470,7 @@ export default function ServiceFormBuilder({
         repeatable: supportsRepeatable(item.fieldType) ? Boolean(item.repeatable) : false,
         minLength,
         maxLength,
-        forceUppercase: supportsTextConstraints(item.fieldType)
+        forceUppercase: supportsUppercaseConstraint(item.fieldType)
           ? Boolean(item.forceUppercase)
           : false,
         allowNotApplicable: Boolean(item.allowNotApplicable),
@@ -504,12 +508,18 @@ export default function ServiceFormBuilder({
     }
 
     setSaving(true);
+    const normalizedMultipleEntriesLabel =
+      multipleEntriesLabel?.trim() && allowMultipleEntries
+        ? multipleEntriesLabel.trim()
+        : undefined;
+
     const res = await fetch("/api/services", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         serviceId: activeServiceId,
         allowMultipleEntries,
+        multipleEntriesLabel: normalizedMultipleEntriesLabel,
         formFields: cleaned,
       }),
     });
@@ -811,6 +821,9 @@ export default function ServiceFormBuilder({
                             />
                             Allow "Not Applicable" mapping
                           </label>
+                          <p style={{ margin: 0, fontSize: "0.8rem", color: "#64748B" }}>
+                            Candidate form shows a checkbox with this exact text for this question.
+                          </p>
                           {field.allowNotApplicable && (
                             <div style={{ paddingLeft: "1.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                               <span style={{ fontSize: "0.85rem", color: "#64748B" }}>Prefill value:</span>
@@ -835,18 +848,22 @@ export default function ServiceFormBuilder({
                               />
                               Enable multiple entries for this specific question
                             </label>
-                            <p style={{ margin: "0.2rem 0 0 1.5rem", fontSize: "0.8rem", color: "#15803D" }}>Candidates can dynamically add more values locally.</p>
+                            <p style={{ margin: "0.2rem 0 0 1.5rem", fontSize: "0.8rem", color: "#15803D" }}>
+                              Candidates can add extra values directly under this question.
+                            </p>
                           </div>
                         )}
 
-                        {supportsTextConstraints(field.fieldType) && (
+                        {supportsLengthConstraints(field.fieldType) && (
                           <div style={{ background: "#FDF4FF", border: "1px solid #FBCFE8", borderRadius: "6px", padding: "0.8rem 1rem", display: "flex", flexWrap: "wrap", gap: "1.5rem", alignItems: "center" }}>
                             <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#86198F", display: "flex", alignItems: "center", gap: "0.3rem" }}>
-                              <Settings size={14} /> Constraints
+                              <Settings size={14} /> Length constraints
                             </span>
                             
                             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                              <label style={{ fontSize: "0.85rem", color: "#701A75" }}>Min:</label>
+                              <label style={{ fontSize: "0.85rem", color: "#701A75" }}>
+                                {field.fieldType === "number" ? "Min digits:" : "Min chars:"}
+                              </label>
                               <input
                                 style={{ width: "60px", padding: "0.3rem 0.5rem", border: "1px solid #F9A8D4", borderRadius: "4px", fontSize: "0.85rem" }}
                                 type="number" min={1} step={1}
@@ -857,7 +874,9 @@ export default function ServiceFormBuilder({
                             </div>
 
                             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                              <label style={{ fontSize: "0.85rem", color: "#701A75" }}>Max:</label>
+                              <label style={{ fontSize: "0.85rem", color: "#701A75" }}>
+                                {field.fieldType === "number" ? "Max digits:" : "Max chars:"}
+                              </label>
                               <input
                                 style={{ width: "60px", padding: "0.3rem 0.5rem", border: "1px solid #F9A8D4", borderRadius: "4px", fontSize: "0.85rem" }}
                                 type="number" min={1} step={1}
@@ -867,15 +886,21 @@ export default function ServiceFormBuilder({
                               />
                             </div>
 
-                            <label style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem", color: "#701A75", cursor: "pointer", fontWeight: 500 }}>
-                              <input
-                                type="checkbox"
-                                checked={Boolean(field.forceUppercase)}
-                                onChange={(e) => updateFieldForceUppercase(index, e.target.checked)}
-                                style={{ accentColor: "#D946EF" }}
-                              />
-                              Force ALL CAPS
-                            </label>
+                            {supportsUppercaseConstraint(field.fieldType) ? (
+                              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem", color: "#701A75", cursor: "pointer", fontWeight: 500 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(field.forceUppercase)}
+                                  onChange={(e) => updateFieldForceUppercase(index, e.target.checked)}
+                                  style={{ accentColor: "#D946EF" }}
+                                />
+                                Force ALL CAPS
+                              </label>
+                            ) : (
+                              <span style={{ fontSize: "0.82rem", color: "#7E22CE" }}>
+                                Number fields validate digit count on candidate submit.
+                              </span>
+                            )}
                           </div>
                         )}
 

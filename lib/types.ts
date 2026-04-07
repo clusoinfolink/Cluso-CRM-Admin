@@ -42,6 +42,7 @@ export type ReportMetadata = {
   generatedBy?: string | null;
   generatedByName?: string;
   reportNumber?: string;
+  customerSharedAt?: string | null;
 };
 
 export type InvoiceSnapshot = {
