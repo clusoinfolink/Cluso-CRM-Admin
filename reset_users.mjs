@@ -1,8 +1,27 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import fs from "fs";
 
-const MONGODB_URI = "mongodb+srv://Cluso:Litera%402016@cluster0.qettuov.mongodb.net/cluso?appName=Cluster0";
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  throw new Error("MONGODB_URI is missing. Set it in your environment before running this script.");
+}
+
+function resolvePassword(envName) {
+  const fromEnv = process.env[envName]?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  return `Cluso${crypto.randomBytes(4).toString("hex")}`;
+}
+
+const SUPERADMIN_PASSWORD = resolvePassword("RESET_SUPERADMIN_PASSWORD");
+const ADMIN_PASSWORD = resolvePassword("RESET_ADMIN_PASSWORD");
+const CUSTOMER_PASSWORD = resolvePassword("RESET_CUSTOMER_PASSWORD");
+const DELEGATE_PASSWORD = resolvePassword("RESET_DELEGATE_PASSWORD");
 
 const UserSchema = new mongoose.Schema(
   {
@@ -46,10 +65,21 @@ async function run() {
     return user;
   };
 
-  await createAccount("Super Admin Test", "superadmin@cluso.com", "admin123", "superadmin");
-  await createAccount("Admin Test", "admin@cluso.com", "admin123", "admin");
-  const customer = await createAccount("Enterprise Tech Corp", "enterprise@techcorp.com", "cust123", "customer");
-  await createAccount("Delegate Jane", "delegate@techcorp.com", "del123", "delegate", customer._id);
+  await createAccount("Super Admin Test", "superadmin@cluso.com", SUPERADMIN_PASSWORD, "superadmin");
+  await createAccount("Admin Test", "admin@cluso.com", ADMIN_PASSWORD, "admin");
+  const customer = await createAccount(
+    "Enterprise Tech Corp",
+    "enterprise@techcorp.com",
+    CUSTOMER_PASSWORD,
+    "customer",
+  );
+  await createAccount(
+    "Delegate Jane",
+    "delegate@techcorp.com",
+    DELEGATE_PASSWORD,
+    "delegate",
+    customer._id,
+  );
 
   const txtContent = "=== Cluso Test Credentials ===\n\n" + output.join("\n");
   fs.writeFileSync("test_credentials.txt", txtContent);

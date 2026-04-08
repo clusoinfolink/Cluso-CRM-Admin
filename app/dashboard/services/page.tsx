@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Package, Plus, Trash, Tag, FileText, LayoutList } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import ServiceFormBuilder from "@/components/ServiceFormBuilder";
@@ -24,7 +24,7 @@ async function fetchServices() {
   return serviceJson.items ?? [];
 }
 
-export default function ServicesPage() {
+function ServicesPageContent() {
   const { me, loading, logout } = useAdminSession();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -514,5 +514,13 @@ export default function ServicesPage() {
         </div>
       </div>
     </AdminPortalFrame>
+  );
+}
+
+export default function ServicesPage() {
+  return (
+    <Suspense fallback={<main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>}>
+      <ServicesPageContent />
+    </Suspense>
   );
 }

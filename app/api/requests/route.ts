@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getAdminAuthFromRequest } from "@/lib/auth";
+import { sendCustomerReportSharedEmail } from "@/lib/customerReportMail";
 import { connectMongo } from "@/lib/mongodb";
 import VerificationRequest from "@/lib/models/VerificationRequest";
 import User from "@/lib/models/User";
@@ -392,7 +393,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const shareTarget = await VerificationRequest.findById(parsed.data.requestId)
-      .select("status reportData")
+      .select("status reportData candidateName customer")
       .lean();
 
     if (!shareTarget) {
@@ -424,7 +425,35 @@ export async function PATCH(req: NextRequest) {
       },
     );
 
-    return NextResponse.json({ message: "Report shared with customer portal." });
+    const customer = await User.findById(shareTarget.customer)
+      .select("name email")
+      .lean();
+
+    const customerEmail = customer?.email?.trim() ?? "";
+
+    if (!customerEmail) {
+      return NextResponse.json({
+        message: "Report shared with customer portal, but customer email is not configured.",
+      });
+    }
+
+    const emailResult = await sendCustomerReportSharedEmail({
+      customerName: customer?.name?.trim() || "Customer",
+      customerEmail,
+      candidateName: shareTarget.candidateName || "Candidate",
+      requestId: parsed.data.requestId,
+    });
+
+    if (!emailResult.sent) {
+      return NextResponse.json({
+        message: "Report shared with customer portal, but customer email could not be sent.",
+        emailError: emailResult.reason ?? "Unknown email error",
+      });
+    }
+
+    return NextResponse.json({
+      message: "Report shared with customer portal and emailed to customer.",
+    });
   }
 
   const verifyPayload = parsed.data;

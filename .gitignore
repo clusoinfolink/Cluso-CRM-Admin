@@ -23,3 +23,7 @@ Thumbs.db
 # typescript
 *.tsbuildinfo
 .env*.local
+
+# local secret export files
+vercel-admin-email.env.txt
+test_credentials.txt

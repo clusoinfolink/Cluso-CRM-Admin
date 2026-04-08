@@ -1,8 +1,10 @@
 import mongoose from "mongoose";
 
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://Cluso:Litera%402016@cluster0.qettuov.mongodb.net/cluso?appName=Cluster0";
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  throw new Error("MONGODB_URI is missing. Set it in your environment before running this script.");
+}
 
 const UserSchema = new mongoose.Schema(
   {
