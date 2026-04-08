@@ -837,23 +837,6 @@ export default function ServiceFormBuilder({
                           )}
                         </div>
 
-                        {supportsRepeatable(field.fieldType) && (
-                          <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: "6px", padding: "0.75rem 1rem" }}>
-                            <label style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", fontWeight: 500, color: "#166534", cursor: "pointer" }}>
-                              <input
-                                type="checkbox"
-                                checked={Boolean(field.repeatable)}
-                                onChange={(e) => updateFieldRepeatable(index, e.target.checked)}
-                                style={{ accentColor: "#16A34A", width: "1rem", height: "1rem" }}
-                              />
-                              Enable multiple entries for this specific question
-                            </label>
-                            <p style={{ margin: "0.2rem 0 0 1.5rem", fontSize: "0.8rem", color: "#15803D" }}>
-                              Candidates can add extra values directly under this question.
-                            </p>
-                          </div>
-                        )}
-
                         {supportsLengthConstraints(field.fieldType) && (
                           <div style={{ background: "#FDF4FF", border: "1px solid #FBCFE8", borderRadius: "6px", padding: "0.8rem 1rem", display: "flex", flexWrap: "wrap", gap: "1.5rem", alignItems: "center" }}>
                             <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#86198F", display: "flex", alignItems: "center", gap: "0.3rem" }}>

@@ -26,9 +26,11 @@ import {
   CompanyServiceSelection,
   ServiceItem,
 } from "@/lib/types";
+import { useRouter } from "next/navigation";
 
 export default function CompaniesPage() {
   const { me, loading, logout } = useAdminSession();
+  const router = useRouter();
   const [message, setMessage] = useState("");
   const [saveServicesNotice, setSaveServicesNotice] = useState("");
   const [services, setServices] = useState<ServiceItem[]>([]);
@@ -174,6 +176,10 @@ export default function CompaniesPage() {
   function openCompanyProfileModal(companyId: string) {
     setViewCompanyId(companyId);
     setProfileModalCompanyId(companyId);
+  }
+
+  function openServiceFormBuilder(serviceId: string) {
+    router.push(`/dashboard/services?tab=forms&serviceId=${encodeURIComponent(serviceId)}`);
   }
 
   function closeCompanyProfileModal() {
@@ -450,42 +456,56 @@ export default function CompaniesPage() {
                   </button>
                 </div>
 
-                {!issueServicesCollapsed && filteredIssueServices.length === 0 && <div style={{ color: "#6C757D" }}>No services match your search.</div>}
+                {!issueServicesCollapsed && filteredIssueServices.length === 0 ? <div style={{ color: "#6C757D" }}>No services match your search.</div> : null}
 
-                {!issueServicesCollapsed && filteredIssueServices.map((service) => {
-                  const selected = selectedCompanyServices.find((item) => item.serviceId === service.id);
-                  return (
-                    <div key={service.id} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
-                      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600 }}>
-                        <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleCompanyService(service, e.target.checked)} />
-                        {service.name}
-                      </label>
-                      {service.isPackage ? (
-                        <div style={{ marginTop: "0.2rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.84rem" }}>
-                          Package deal ({service.includedServiceIds.length} services)
-                        </div>
-                      ) : null}
-                      <div style={{ color: "#6C757D", marginTop: "0.25rem" }}>{service.description || "No description"}</div>
+                {!issueServicesCollapsed && filteredIssueServices.length > 0 ? (
+                  <div
+                    style={{
+                      maxHeight: "430px",
+                      overflowY: "auto",
+                      border: "1px solid #E2E8F0",
+                      borderRadius: "0.65rem",
+                      padding: "0.55rem",
+                      display: "grid",
+                      gap: "0.6rem",
+                    }}
+                  >
+                    {filteredIssueServices.map((service) => {
+                      const selected = selectedCompanyServices.find((item) => item.serviceId === service.id);
+                      return (
+                        <div key={service.id} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600 }}>
+                            <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleCompanyService(service, e.target.checked)} />
+                            {service.name}
+                          </label>
+                          {service.isPackage ? (
+                            <div style={{ marginTop: "0.2rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.84rem" }}>
+                              Package deal ({service.includedServiceIds.length} services)
+                            </div>
+                          ) : null}
+                          <div style={{ color: "#6C757D", marginTop: "0.25rem" }}>{service.description || "No description"}</div>
 
-                      {selected ? (
-                        <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-                          <div>
-                            <label className="label">Price</label>
-                            <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateCompanyServicePrice(service.id, e.target.value)} required />
-                          </div>
-                          <div>
-                            <label className="label">Currency</label>
-                            <select className="input" value={selected.currency} onChange={(e) => updateCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
-                              {SUPPORTED_CURRENCIES.map((currency) => (
-                                <option key={currency} value={currency}>{currency}</option>
-                              ))}
-                            </select>
-                          </div>
+                          {selected ? (
+                            <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+                              <div>
+                                <label className="label">Price</label>
+                                <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateCompanyServicePrice(service.id, e.target.value)} required />
+                              </div>
+                              <div>
+                                <label className="label">Currency</label>
+                                <select className="input" value={selected.currency} onChange={(e) => updateCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
+                                  {SUPPORTED_CURRENCIES.map((currency) => (
+                                    <option key={currency} value={currency}>{currency}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -533,39 +553,87 @@ export default function CompaniesPage() {
 
               {!manageServicesCollapsed && filteredManageServices.length === 0 ? <div style={{ color: "#6C757D" }}>No services match your search.</div> : null}
 
-              {!manageServicesCollapsed && filteredManageServices.map((service) => {
-                const selected = manageCompanyServices.find((item) => item.serviceId === service.id);
-                return (
-                  <div key={`manage-${service.id}`} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600 }}>
-                      <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleManageCompanyService(service, e.target.checked)} />
-                      {service.name}
-                    </label>
-                    {service.isPackage ? (
-                      <div style={{ marginTop: "0.2rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.84rem" }}>
-                        Package deal ({service.includedServiceIds.length} services)
-                      </div>
-                    ) : null}
+              {!manageServicesCollapsed && filteredManageServices.length > 0 ? (
+                <div
+                  style={{
+                    maxHeight: "430px",
+                    overflowY: "auto",
+                    border: "1px solid #E2E8F0",
+                    borderRadius: "0.65rem",
+                    padding: "0.55rem",
+                    display: "grid",
+                    gap: "0.6rem",
+                  }}
+                >
+                  {filteredManageServices.map((service) => {
+                    const selected = manageCompanyServices.find((item) => item.serviceId === service.id);
+                    const hasServiceForm = !service.isPackage && service.formFields.length > 0;
+                    return (
+                      <div key={`manage-${service.id}`} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600 }}>
+                          <input type="checkbox" checked={Boolean(selected)} onChange={(e) => toggleManageCompanyService(service, e.target.checked)} />
+                          {service.name}
+                        </label>
+                        {service.isPackage ? (
+                          <div style={{ marginTop: "0.2rem", color: "#1E4DB7", fontWeight: 600, fontSize: "0.84rem" }}>
+                            Package deal ({service.includedServiceIds.length} services)
+                          </div>
+                        ) : null}
 
-                    {selected ? (
-                      <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-                        <div>
-                          <label className="label">Price</label>
-                          <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateManageCompanyServicePrice(service.id, e.target.value)} required />
-                        </div>
-                        <div>
-                          <label className="label">Currency</label>
-                          <select className="input" value={selected.currency} onChange={(e) => updateManageCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
-                            {SUPPORTED_CURRENCIES.map((currency) => (
-                              <option key={currency} value={currency}>{currency}</option>
-                            ))}
-                          </select>
-                        </div>
+                        <div style={{ color: "#6C757D", marginTop: "0.25rem" }}>{service.description || "No description"}</div>
+
+                        {!service.isPackage ? (
+                          <div style={{ marginTop: "0.45rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
+                            <span
+                              style={{
+                                fontSize: "0.8rem",
+                                fontWeight: 700,
+                                color: hasServiceForm ? "#166534" : "#991B1B",
+                              }}
+                            >
+                              {hasServiceForm ? "Form created" : "Form not created"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => openServiceFormBuilder(service.id)}
+                              title="Open service form builder"
+                              style={{
+                                padding: "0.25rem 0.65rem",
+                                border: "none",
+                                borderRadius: "999px",
+                                fontSize: "0.75rem",
+                                fontWeight: 700,
+                                color: "#FFFFFF",
+                                background: hasServiceForm ? "#16A34A" : "#DC2626",
+                                cursor: "pointer",
+                              }}
+                            >
+                              REF
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {selected ? (
+                          <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+                            <div>
+                              <label className="label">Price</label>
+                              <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateManageCompanyServicePrice(service.id, e.target.value)} required />
+                            </div>
+                            <div>
+                              <label className="label">Currency</label>
+                              <select className="input" value={selected.currency} onChange={(e) => updateManageCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
+                                {SUPPORTED_CURRENCIES.map((currency) => (
+                                  <option key={currency} value={currency}>{currency}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           ) : null}
 

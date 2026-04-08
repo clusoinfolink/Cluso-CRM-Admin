@@ -1,8 +1,9 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Package, Plus, Trash, Tag, FileText, LayoutList } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import ServiceFormBuilder from "@/components/ServiceFormBuilder";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { getAlertTone } from "@/lib/alerts";
@@ -25,6 +26,7 @@ async function fetchServices() {
 
 export default function ServicesPage() {
   const { me, loading, logout } = useAdminSession();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const servicesQuery = useQuery<ServiceItem[]>({
     queryKey: SERVICES_QUERY_KEY,
@@ -66,6 +68,36 @@ export default function ServicesPage() {
       staleTime: force ? 0 : SERVICES_STALE_TIME_MS,
     });
   }, [queryClient]);
+
+  const requestedTab = searchParams.get("tab");
+  const requestedServiceId = searchParams.get("serviceId");
+
+  useEffect(() => {
+    if (requestedTab === "forms") {
+      setActiveTab("forms");
+    }
+  }, [requestedTab]);
+
+  useEffect(() => {
+    if (!requestedServiceId) {
+      return;
+    }
+
+    const requestedService = services.find(
+      (service) => !service.isPackage && service.id === requestedServiceId,
+    );
+
+    if (!requestedService) {
+      return;
+    }
+
+    setPendingFormService((prev) =>
+      prev?.id === requestedService.id
+        ? prev
+        : { id: requestedService.id, name: requestedService.name },
+    );
+    setActiveTab("forms");
+  }, [requestedServiceId, services]);
 
   function toggleIncludedService(serviceId: string, checked: boolean) {
     setNewServiceIncludedIds((prev) => checked ? (prev.includes(serviceId) ? prev : [...prev, serviceId]) : prev.filter((id) => id !== serviceId));
