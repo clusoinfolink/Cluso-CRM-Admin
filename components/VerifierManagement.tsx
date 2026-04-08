@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Plus, UserCheck, Users, Briefcase, Settings2, AlertCircle } from "lucide-react";
+import { SearchableSelect } from "@/components/SearchableSelect";
 
 type CompanyOption = {
   id: string;
@@ -55,6 +56,7 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
   
   const [manageVerifierId, setManageVerifierId] = useState("");
   const [manageCompanyIds, setManageCompanyIds] = useState<string[]>([]);
+  const [promoteVerifierToManager, setPromoteVerifierToManager] = useState(false);
   const [manageManagerId, setManageManagerId] = useState("");
   const [manageManagerCompanyIds, setManageManagerCompanyIds] = useState<string[]>([]);
   
@@ -88,6 +90,19 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
     return () => { isMounted = false; };
   }, []);
 
+  useEffect(() => {
+    if (!bulkManagerId) {
+      setBulkVerifierIds([]);
+      return;
+    }
+
+    const assignedVerifierIds = verifiers
+      .filter((verifier) => verifier.manager?.id === bulkManagerId)
+      .map((verifier) => verifier.id);
+
+    setBulkVerifierIds(assignedVerifierIds);
+  }, [bulkManagerId, verifiers]);
+
   const rosterRows = useMemo(
     () =>
       managers.map((manager) => ({
@@ -99,6 +114,15 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
 
   const unassignedVerifiers = useMemo(
     () => verifiers.filter((verifier) => !verifier.manager),
+    [verifiers],
+  );
+
+  const verifierAccessOptions = useMemo(
+    () =>
+      verifiers.map((verifier) => ({
+        value: verifier.id,
+        label: `${verifier.name} (${verifier.email})${verifier.manager ? ` - Manager: ${verifier.manager.name}` : " - Unassigned"}`,
+      })),
     [verifiers],
   );
 
@@ -142,11 +166,16 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
     const res = await fetch("/api/verifiers", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ verifierId: manageVerifierId, companyIds: manageCompanyIds }),
+      body: JSON.stringify({ verifierId: manageVerifierId, companyIds: manageCompanyIds, promoteToManager: promoteVerifierToManager }),
     });
     const data = (await res.json()) as { message?: string; error?: string };
     if (!res.ok) { setMessage(data.error ?? "Could not update verifier company access."); return; }
     setMessage(data.message ?? "Verifier company access updated.");
+    if (promoteVerifierToManager) {
+      setManageVerifierId("");
+      setManageCompanyIds([]);
+      setPromoteVerifierToManager(false);
+    }
     await loadVerifierData();
   }
 
@@ -168,7 +197,7 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
   async function bulkAssignManager(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMessage("");
-    if (bulkVerifierIds.length === 0) { setMessage("Please select at least one verifier."); return; }
+    if (!bulkManagerId) { setMessage("Please select a target manager."); return; }
     const res = await fetch("/api/verifiers", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -327,20 +356,49 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
         <form onSubmit={updateAccess}>
           <div style={{ marginBottom: "1rem" }}>
             <label className="label" style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569" }}>Target Verifier</label>
-            <select className="input" value={manageVerifierId} onChange={(e) => {
-              const id = e.target.value; setManageVerifierId(id);
-              const v = verifiers.find((item) => item.id === id);
-              setManageCompanyIds(v ? v.assignedCompanies.map((c) => c.id) : []);
-            }} required style={{ background: "#F8FAFC", width: "100%", maxWidth: "400px" }}>
-              <option value="">Select Verifier...</option>
-              {verifiers.map((v) => (
-                <option key={v.id} value={v.id}>{v.name} ({v.email}) {v.manager ? ` - Manager: ${v.manager.name}` : " - Unassigned"}</option>
-              ))}
-            </select>
+            <SearchableSelect
+              className="w-full max-w-[400px]"
+              options={verifierAccessOptions}
+              value={manageVerifierId}
+              placeholder="Select Verifier..."
+              visibleOptionCount={5}
+              onChange={(id) => {
+                setManageVerifierId(id);
+                const verifier = verifiers.find((item) => item.id === id);
+                setManageCompanyIds(verifier ? verifier.assignedCompanies.map((c) => c.id) : []);
+                setPromoteVerifierToManager(false);
+              }}
+            />
           </div>
 
           {manageVerifierId && (
             <div style={{ marginTop: "1rem", marginBottom: "1rem" }}>
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  marginBottom: "0.65rem",
+                  fontSize: "0.9rem",
+                  color: "#334155",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={promoteVerifierToManager}
+                  onChange={(e) => setPromoteVerifierToManager(e.target.checked)}
+                  style={{ margin: 0 }}
+                />
+                Make selected verifier a manager
+              </label>
+              {promoteVerifierToManager ? (
+                <p style={{ margin: "0 0 0.6rem", fontSize: "0.8rem", color: "#64748B" }}>
+                  On save, this verifier will be promoted to manager, removed from their current manager, and shown under managers.
+                </p>
+              ) : null}
+
               <label className="label" style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569", marginBottom: "0.5rem" }}>Toggle Company Access</label>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "0.5rem" }}>
                 {companies.map((c) => (
@@ -355,7 +413,7 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
 
           <div style={{ display: "flex", justifyContent: "flex-start" }}>
             <button className="btn btn-primary" type="submit" disabled={!manageVerifierId}>
-              Save Verifier Access
+              {promoteVerifierToManager ? "Make Manager" : "Save Verifier Access"}
             </button>
           </div>
         </form>
@@ -421,6 +479,9 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
 
               <div style={{ marginTop: "1rem", marginBottom: "1rem" }}>
                 <label className="label" style={{ fontSize: "0.85rem", fontWeight: 600, color: "#475569", marginBottom: "0.5rem" }}>Select Verifiers</label>
+                <p style={{ margin: "0 0 0.45rem", fontSize: "0.78rem", color: "#64748B" }}>
+                  Verifiers already assigned to the selected manager are pre-checked. Untick any verifier to remove assignment.
+                </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxHeight: "150px", overflowY: "auto", paddingRight: "0.5rem" }}>
                   {verifiers.map((v) => (
                     <label key={`bv-${v.id}`} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.9rem", color: "#334155", background: bulkVerifierIds.includes(v.id) ? "#DCFCE7" : "#F8FAFC", padding: "0.4rem", borderRadius: "6px", border: "1px solid", borderColor: bulkVerifierIds.includes(v.id) ? "#86EFAC" : "#E2E8F0", cursor: "pointer", transition: "all 0.2s" }}>
@@ -434,7 +495,7 @@ export default function VerifierManagement({ viewerRole = "admin" }: VerifierMan
                 </div>
               </div>
 
-              <button className="btn btn-primary" type="submit" disabled={bulkVerifierIds.length === 0} style={{ width: "100%", background: "#16A34A", borderColor: "#16A34A" }}>
+              <button className="btn btn-primary" type="submit" disabled={!bulkManagerId} style={{ width: "100%", background: "#16A34A", borderColor: "#16A34A" }}>
                 Save Bulk Assignment
               </button>
             </form>

@@ -15,9 +15,10 @@ type Props = {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  visibleOptionCount?: number;
 };
 
-export function SearchableSelect({ options, value, onChange, placeholder = "Select...", className = "", disabled = false }: Props) {
+export function SearchableSelect({ options, value, onChange, placeholder = "Select...", className = "", disabled = false, visibleOptionCount = 7 }: Props) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -32,6 +33,7 @@ export function SearchableSelect({ options, value, onChange, placeholder = "Sele
   const filteredOptions = sortedOptions.filter((opt) =>
     opt.label.toLowerCase().includes(search.toLowerCase())
   );
+  const listMaxHeightPx = Math.max(1, visibleOptionCount) * 36;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -84,7 +86,7 @@ export function SearchableSelect({ options, value, onChange, placeholder = "Sele
             />
           </div>
           
-          <ul className="max-h-60 overflow-auto py-1 text-base sm:text-sm">
+          <ul className="overflow-auto py-1 text-base sm:text-sm" style={{ maxHeight: `${listMaxHeightPx}px` }}>
             {filteredOptions.length === 0 ? (
               <li className="relative cursor-default select-none py-2 pl-3 pr-9 text-gray-500">
                 No results found

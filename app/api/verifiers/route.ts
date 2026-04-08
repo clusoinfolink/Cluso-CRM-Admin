@@ -19,6 +19,7 @@ const updateTeamCompanyAccessSchema = z
     verifierId: z.string().min(1).optional(),
     targetRole: z.enum(["verifier", "manager"]).optional().default("verifier"),
     companyIds: z.array(z.string().min(1)).optional().default([]),
+    promoteToManager: z.boolean().optional().default(false),
   })
   .refine((value) => Boolean(value.userId || value.verifierId), {
     message: "User id is required.",
@@ -26,7 +27,7 @@ const updateTeamCompanyAccessSchema = z
 
 const updateVerifierManagersSchema = z.object({
   managerId: z.string().trim().optional().default(""),
-  verifierIds: z.array(z.string().min(1)).min(1),
+  verifierIds: z.array(z.string().min(1)).optional().default([]),
 });
 
 type TeamCompany = {
@@ -281,6 +282,14 @@ export async function PATCH(req: NextRequest) {
 
   const targetRole = parsed.data.targetRole ?? "verifier";
   const targetUserId = parsed.data.userId ?? parsed.data.verifierId ?? "";
+  const promoteToManager = parsed.data.promoteToManager === true;
+
+  if (promoteToManager && auth.role === "manager") {
+    return NextResponse.json(
+      { error: "Only admin or superadmin can promote a verifier to manager." },
+      { status: 403 },
+    );
+  }
 
   if (auth.role === "manager" && targetRole !== "verifier") {
     return NextResponse.json(
@@ -343,6 +352,23 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
+  if (promoteToManager) {
+    const verifier = await User.findOne({ _id: targetUserId, role: "verifier" }).lean();
+    if (!verifier) {
+      return NextResponse.json({ error: "Verifier not found." }, { status: 404 });
+    }
+
+    await User.findByIdAndUpdate(targetUserId, {
+      role: "manager",
+      manager: null,
+      assignedCompanies: companyIds,
+    });
+
+    return NextResponse.json({
+      message: "Verifier promoted to manager successfully.",
+    });
+  }
+
   await User.findByIdAndUpdate(targetUserId, {
     assignedCompanies: companyIds,
   });
@@ -370,28 +396,63 @@ export async function PUT(req: NextRequest) {
   await connectMongo();
 
   const verifierIds = dedupeIds(parsed.data.verifierIds);
-  if (verifierIds.length === 0) {
+  const managerId = parsed.data.managerId.trim();
+
+  if (!managerId && verifierIds.length === 0) {
     return NextResponse.json({ error: "Select at least one verifier." }, { status: 400 });
   }
 
-  const verifierCount = await User.countDocuments({
-    _id: { $in: verifierIds },
-    role: "verifier",
-  });
-
-  if (verifierCount !== verifierIds.length) {
-    return NextResponse.json(
-      { error: "One or more selected verifiers are invalid." },
-      { status: 400 },
-    );
-  }
-
-  const managerId = parsed.data.managerId.trim();
   if (managerId) {
     const manager = await User.findOne({ _id: managerId, role: "manager" }).lean();
     if (!manager) {
       return NextResponse.json({ error: "Selected manager is invalid." }, { status: 400 });
     }
+  }
+
+  if (verifierIds.length > 0) {
+    const verifierCount = await User.countDocuments({
+      _id: { $in: verifierIds },
+      role: "verifier",
+    });
+
+    if (verifierCount !== verifierIds.length) {
+      return NextResponse.json(
+        { error: "One or more selected verifiers are invalid." },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (managerId) {
+    const assignResult = verifierIds.length
+      ? await User.updateMany(
+          {
+            _id: { $in: verifierIds },
+            role: "verifier",
+          },
+          {
+            $set: {
+              manager: managerId,
+            },
+          },
+        )
+      : { modifiedCount: 0 };
+
+    const clearFilter = verifierIds.length
+      ? { role: "verifier", manager: managerId, _id: { $nin: verifierIds } }
+      : { role: "verifier", manager: managerId };
+
+    const clearResult = await User.updateMany(clearFilter, {
+      $set: {
+        manager: null,
+      },
+    });
+
+    return NextResponse.json({
+      message: "Manager assignment synced for the selected manager.",
+      assignedCount: assignResult.modifiedCount,
+      removedCount: clearResult.modifiedCount,
+    });
   }
 
   const result = await User.updateMany(
