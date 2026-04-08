@@ -5,6 +5,10 @@ type CustomerReportMailPayload = {
   customerEmail: string;
   candidateName: string;
   requestId: string;
+  reportPdf?: {
+    filename: string;
+    content: Buffer;
+  };
 };
 
 export type CustomerReportMailResult = {
@@ -75,6 +79,7 @@ export async function sendCustomerReportSharedEmail(
     `Dear ${payload.customerName},`,
     "",
     `The verification report for candidate ${payload.candidateName} is now available in your customer portal.`,
+    payload.reportPdf ? "The generated verification report PDF is attached to this email." : "",
     "",
     `Request ID: ${payload.requestId}`,
     `Portal URL: ${portalUrl}`,
@@ -90,6 +95,7 @@ export async function sendCustomerReportSharedEmail(
         The verification report for candidate <strong>${safeCandidateName}</strong>
         is now available in your customer portal.
       </p>
+      ${payload.reportPdf ? "<p><strong>The generated verification report PDF is attached to this email.</strong></p>" : ""}
       <table cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; width: 100%; max-width: 560px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
         <tr>
           <td style="padding: 12px 14px; font-weight: 700; width: 160px; color: #334155;">Request ID</td>
@@ -117,6 +123,15 @@ export async function sendCustomerReportSharedEmail(
       subject,
       text,
       html,
+      attachments: payload.reportPdf
+        ? [
+            {
+              filename: payload.reportPdf.filename,
+              content: payload.reportPdf.content,
+              contentType: "application/pdf",
+            },
+          ]
+        : undefined,
     });
 
     return { sent: true };

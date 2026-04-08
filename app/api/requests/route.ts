@@ -68,6 +68,33 @@ type NormalizedServiceVerification = {
   }>;
 };
 
+function extractFilenameFromContentDisposition(contentDisposition: string | null) {
+  if (!contentDisposition) {
+    return "";
+  }
+
+  const encodedMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1].trim().replace(/^['"]|['"]$/g, ""));
+    } catch {
+      return encodedMatch[1].trim().replace(/^['"]|['"]$/g, "");
+    }
+  }
+
+  const quotedMatch = contentDisposition.match(/filename="([^"]+)"/i);
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1].trim();
+  }
+
+  const plainMatch = contentDisposition.match(/filename=([^;]+)/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].trim().replace(/^['"]|['"]$/g, "");
+  }
+
+  return "";
+}
+
 function buildDefaultServiceVerifications(
   selectedServices: SelectedServiceLike[] = [],
 ): NormalizedServiceVerification[] {
@@ -437,11 +464,73 @@ export async function PATCH(req: NextRequest) {
       });
     }
 
+    const reportDownloadUrl = new URL(
+      `/api/requests/${encodeURIComponent(parsed.data.requestId)}/report`,
+      req.nextUrl.origin,
+    );
+
+    let reportPdfBuffer: Buffer | null = null;
+    let reportPdfFilename = `verification-report-${parsed.data.requestId}.pdf`;
+
+    try {
+      const reportResponse = await fetch(reportDownloadUrl, {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          cookie: req.headers.get("cookie") ?? "",
+        },
+      });
+
+      if (!reportResponse.ok) {
+        const details = (await reportResponse.text()).trim();
+        return NextResponse.json({
+          message:
+            "Report shared with customer portal, but report PDF could not be prepared for email attachment.",
+          emailError: details || "Could not download generated report PDF.",
+        });
+      }
+
+      const reportBytes = await reportResponse.arrayBuffer();
+      if (reportBytes.byteLength === 0) {
+        return NextResponse.json({
+          message:
+            "Report shared with customer portal, but report PDF could not be prepared for email attachment.",
+          emailError: "Generated report PDF is empty.",
+        });
+      }
+
+      const contentDisposition = reportResponse.headers.get("content-disposition");
+      const extractedFilename = extractFilenameFromContentDisposition(contentDisposition);
+      if (extractedFilename) {
+        reportPdfFilename = extractedFilename;
+      }
+
+      reportPdfBuffer = Buffer.from(reportBytes);
+    } catch (error) {
+      return NextResponse.json({
+        message:
+          "Report shared with customer portal, but report PDF could not be prepared for email attachment.",
+        emailError: error instanceof Error ? error.message : "Unknown PDF attachment error",
+      });
+    }
+
+    if (!reportPdfBuffer) {
+      return NextResponse.json({
+        message:
+          "Report shared with customer portal, but report PDF could not be prepared for email attachment.",
+        emailError: "Failed to prepare report PDF attachment.",
+      });
+    }
+
     const emailResult = await sendCustomerReportSharedEmail({
       customerName: customer?.name?.trim() || "Customer",
       customerEmail,
       candidateName: shareTarget.candidateName || "Candidate",
       requestId: parsed.data.requestId,
+      reportPdf: {
+        filename: reportPdfFilename,
+        content: reportPdfBuffer,
+      },
     });
 
     if (!emailResult.sent) {
@@ -452,7 +541,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     return NextResponse.json({
-      message: "Report shared with customer portal and emailed to customer.",
+      message: "Report shared with customer portal and emailed to customer with PDF attachment.",
     });
   }
 
