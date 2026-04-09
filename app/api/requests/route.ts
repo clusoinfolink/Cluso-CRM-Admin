@@ -13,11 +13,16 @@ const verifyServicePatchSchema = z.object({
   serviceStatus: z.enum(["verified", "unverified"]),
   verificationMode: z.string().trim().max(120).optional().default("manual"),
   comment: z.string().trim().max(500).optional().default(""),
+  screenshotFileName: z.string().trim().max(180).optional().default(""),
+  screenshotMimeType: z.string().trim().max(100).optional().default(""),
+  screenshotFileSize: z.number().int().nonnegative().optional().nullable().default(null),
+  screenshotData: z.string().trim().max(3_000_000).optional().default(""),
 });
 
 const shareReportPatchSchema = z.object({
   action: z.literal("share-report-to-customer"),
   requestId: z.string().min(1),
+  reportData: z.unknown().optional(),
 });
 
 const patchSchema = z.discriminatedUnion("action", [
@@ -42,6 +47,10 @@ type ServiceVerificationLike = {
     status?: "verified" | "unverified";
     verificationMode?: string;
     comment?: string;
+    screenshotFileName?: string;
+    screenshotMimeType?: string;
+    screenshotFileSize?: number | null;
+    screenshotData?: string;
     attemptedAt?: Date;
     verifierId?: unknown;
     verifierName?: string;
@@ -60,6 +69,10 @@ type NormalizedServiceVerification = {
     status: "verified" | "unverified";
     verificationMode: string;
     comment: string;
+    screenshotFileName: string;
+    screenshotMimeType: string;
+    screenshotFileSize: number | null;
+    screenshotData: string;
     attemptedAt: Date;
     verifierId: string | null;
     verifierName: string;
@@ -67,6 +80,57 @@ type NormalizedServiceVerification = {
     managerName: string;
   }>;
 };
+
+type ReportPayloadForShare = {
+  reportNumber: string;
+  generatedAt: string;
+  generatedByName: string;
+  candidate: {
+    name: string;
+    email: string;
+    phone: string;
+  };
+  company: {
+    name: string;
+    email: string;
+  };
+  status: string;
+  createdAt: string;
+  services: Array<{
+    serviceName: string;
+    status: string;
+    verificationMode: string;
+    comment: string;
+    attempts: Array<{
+      attemptedAt: string;
+      status: string;
+      verificationMode: string;
+      comment: string;
+      verifierName: string;
+      managerName: string;
+    }>;
+  }>;
+};
+
+const MAX_ATTEMPT_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+const ATTEMPT_SCREENSHOT_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+]);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
 
 function extractFilenameFromContentDisposition(contentDisposition: string | null) {
   if (!contentDisposition) {
@@ -95,6 +159,327 @@ function extractFilenameFromContentDisposition(contentDisposition: string | null
   return "";
 }
 
+function normalizeAttachmentFileName(input: string, fallback: string) {
+  const trimmed = input.trim();
+  const candidate = trimmed || fallback;
+  return candidate
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 180) || fallback;
+}
+
+function getImageExtensionFromMimeType(mimeType: string) {
+  if (mimeType === "image/png") {
+    return "png";
+  }
+
+  if (mimeType === "image/webp") {
+    return "webp";
+  }
+
+  return "jpg";
+}
+
+function parseImageDataUrl(dataUrl: string) {
+  const trimmed = dataUrl.trim();
+  const match = trimmed.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/);
+  if (!match) {
+    return null;
+  }
+
+  const mimeType = match[1].trim().toLowerCase();
+  if (!ATTEMPT_SCREENSHOT_MIME_TYPES.has(mimeType)) {
+    return null;
+  }
+
+  const base64Payload = match[2].replace(/\s+/g, "");
+  if (!base64Payload) {
+    return null;
+  }
+
+  try {
+    const content = Buffer.from(base64Payload, "base64");
+    if (content.byteLength === 0) {
+      return null;
+    }
+
+    return {
+      mimeType,
+      content,
+      normalizedDataUrl: `data:${mimeType};base64,${base64Payload}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseReportPayload(value: unknown): ReportPayloadForShare | null {
+  const root = asRecord(value);
+  if (!root) {
+    return null;
+  }
+
+  const candidate = asRecord(root.candidate);
+  const company = asRecord(root.company);
+
+  const servicesRaw = Array.isArray(root.services) ? root.services : [];
+  const services = servicesRaw
+    .map((serviceValue) => {
+      const service = asRecord(serviceValue);
+      if (!service) {
+        return null;
+      }
+
+      const attemptsRaw = Array.isArray(service.attempts) ? service.attempts : [];
+      const attempts = attemptsRaw
+        .map((attemptValue) => {
+          const attempt = asRecord(attemptValue);
+          if (!attempt) {
+            return null;
+          }
+
+          return {
+            attemptedAt: asString(attempt.attemptedAt),
+            status: asString(attempt.status),
+            verificationMode: asString(attempt.verificationMode),
+            comment: asString(attempt.comment),
+            verifierName: asString(attempt.verifierName),
+            managerName: asString(attempt.managerName),
+          };
+        })
+        .filter(
+          (
+            attempt,
+          ): attempt is {
+            attemptedAt: string;
+            status: string;
+            verificationMode: string;
+            comment: string;
+            verifierName: string;
+            managerName: string;
+          } => Boolean(attempt),
+        );
+
+      return {
+        serviceName: asString(service.serviceName),
+        status: asString(service.status),
+        verificationMode: asString(service.verificationMode),
+        comment: asString(service.comment),
+        attempts,
+      };
+    })
+    .filter(
+      (
+        service,
+      ): service is {
+        serviceName: string;
+        status: string;
+        verificationMode: string;
+        comment: string;
+        attempts: Array<{
+          attemptedAt: string;
+          status: string;
+          verificationMode: string;
+          comment: string;
+          verifierName: string;
+          managerName: string;
+        }>;
+      } => Boolean(service),
+    );
+
+  return {
+    reportNumber: asString(root.reportNumber),
+    generatedAt: asString(root.generatedAt),
+    generatedByName: asString(root.generatedByName),
+    candidate: {
+      name: asString(candidate?.name),
+      email: asString(candidate?.email),
+      phone: asString(candidate?.phone),
+    },
+    company: {
+      name: asString(company?.name),
+      email: asString(company?.email),
+    },
+    status: asString(root.status),
+    createdAt: asString(root.createdAt),
+    services,
+  };
+}
+
+function normalizeReportPayloadForShare(
+  value: unknown,
+  fallbackRaw: unknown,
+): ReportPayloadForShare | null {
+  const fallback = parseReportPayload(fallbackRaw);
+  const parsed = parseReportPayload(value);
+
+  if (!parsed) {
+    return fallback;
+  }
+
+  const nowIso = new Date().toISOString();
+  const fallbackServices = fallback?.services ?? [];
+  const parsedServices = parsed.services.length > 0 ? parsed.services : fallbackServices;
+
+  return {
+    reportNumber:
+      parsed.reportNumber.trim() ||
+      fallback?.reportNumber.trim() ||
+      `RPT-${Date.now()}`,
+    generatedAt: parsed.generatedAt.trim() || fallback?.generatedAt || nowIso,
+    generatedByName:
+      parsed.generatedByName.trim() || fallback?.generatedByName || "Unknown",
+    candidate: {
+      name: parsed.candidate.name.trim() || fallback?.candidate.name || "",
+      email: parsed.candidate.email.trim() || fallback?.candidate.email || "",
+      phone: parsed.candidate.phone.trim() || fallback?.candidate.phone || "",
+    },
+    company: {
+      name: parsed.company.name.trim() || fallback?.company.name || "",
+      email: parsed.company.email.trim() || fallback?.company.email || "",
+    },
+    status: parsed.status.trim() || fallback?.status || "verified",
+    createdAt: parsed.createdAt.trim() || fallback?.createdAt || nowIso,
+    services: parsedServices,
+  };
+}
+
+function normalizeAttemptScreenshot(payload: {
+  screenshotData?: string;
+  screenshotFileName?: string;
+  screenshotMimeType?: string;
+  screenshotFileSize?: number | null;
+}) {
+  const rawData = payload.screenshotData?.trim() ?? "";
+  const hasMetadata =
+    Boolean(payload.screenshotFileName?.trim()) ||
+    Boolean(payload.screenshotMimeType?.trim()) ||
+    Boolean(payload.screenshotFileSize);
+
+  if (!rawData) {
+    if (hasMetadata) {
+      return {
+        ok: false as const,
+        error: "Screenshot metadata was provided without image data.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      value: {
+        screenshotFileName: "",
+        screenshotMimeType: "",
+        screenshotFileSize: null,
+        screenshotData: "",
+      },
+    };
+  }
+
+  const parsed = parseImageDataUrl(rawData);
+  if (!parsed) {
+    return {
+      ok: false as const,
+      error: "Screenshot must be a valid PNG, JPG, or WEBP image.",
+    };
+  }
+
+  if (parsed.content.byteLength > MAX_ATTEMPT_SCREENSHOT_BYTES) {
+    return {
+      ok: false as const,
+      error: "Screenshot must be 2MB or smaller.",
+    };
+  }
+
+  if (
+    typeof payload.screenshotFileSize === "number" &&
+    payload.screenshotFileSize > MAX_ATTEMPT_SCREENSHOT_BYTES
+  ) {
+    return {
+      ok: false as const,
+      error: "Screenshot must be 2MB or smaller.",
+    };
+  }
+
+  const extension = getImageExtensionFromMimeType(parsed.mimeType);
+  const fallbackName = `attempt-screenshot.${extension}`;
+  const normalizedFileName = normalizeAttachmentFileName(
+    payload.screenshotFileName ?? "",
+    fallbackName,
+  );
+
+  return {
+    ok: true as const,
+    value: {
+      screenshotFileName: normalizedFileName,
+      screenshotMimeType: parsed.mimeType,
+      screenshotFileSize: parsed.content.byteLength,
+      screenshotData: parsed.normalizedDataUrl,
+    },
+  };
+}
+
+function buildAttemptScreenshotAttachments(
+  requestId: string,
+  verifications: ServiceVerificationLike[] = [],
+) {
+  const usedFilenames = new Set<string>();
+  const attachments: Array<{
+    filename: string;
+    content: Buffer;
+    contentType: string;
+  }> = [];
+
+  for (const verification of verifications) {
+    const safeServiceName = normalizeAttachmentFileName(
+      verification.serviceName ?? "service",
+      "service",
+    );
+
+    for (const [attemptIndex, attempt] of (verification.attempts ?? []).entries()) {
+      const parsed = parseImageDataUrl(attempt.screenshotData ?? "");
+      if (!parsed) {
+        continue;
+      }
+
+      if (parsed.content.byteLength > MAX_ATTEMPT_SCREENSHOT_BYTES) {
+        continue;
+      }
+
+      const fallbackBase = `${requestId}-${safeServiceName}-attempt-${attemptIndex + 1}`;
+      const fallbackName = `${fallbackBase}.${getImageExtensionFromMimeType(parsed.mimeType)}`;
+      const normalizedBaseName = normalizeAttachmentFileName(
+        attempt.screenshotFileName ?? "",
+        fallbackName,
+      );
+
+      let attachmentName = normalizedBaseName;
+      let serial = 2;
+      while (usedFilenames.has(attachmentName.toLowerCase())) {
+        const dotIndex = normalizedBaseName.lastIndexOf(".");
+        if (dotIndex === -1) {
+          attachmentName = `${normalizedBaseName}-${serial}`;
+        } else {
+          const base = normalizedBaseName.slice(0, dotIndex);
+          const ext = normalizedBaseName.slice(dotIndex);
+          attachmentName = `${base}-${serial}${ext}`;
+        }
+        serial += 1;
+      }
+
+      usedFilenames.add(attachmentName.toLowerCase());
+      attachments.push({
+        filename: attachmentName,
+        content: parsed.content,
+        contentType: parsed.mimeType,
+      });
+    }
+  }
+
+  return attachments;
+}
+
 function buildDefaultServiceVerifications(
   selectedServices: SelectedServiceLike[] = [],
 ): NormalizedServiceVerification[] {
@@ -108,6 +493,10 @@ function buildDefaultServiceVerifications(
       status: "verified" | "unverified";
       verificationMode: string;
       comment: string;
+      screenshotFileName: string;
+      screenshotMimeType: string;
+      screenshotFileSize: number | null;
+      screenshotData: string;
       attemptedAt: Date;
       verifierId: string | null;
       verifierName: string;
@@ -138,6 +527,10 @@ function normalizeServiceVerifications(
         status: attempt.status ?? "verified",
         verificationMode: attempt.verificationMode ?? "",
         comment: attempt.comment ?? "",
+        screenshotFileName: attempt.screenshotFileName ?? "",
+        screenshotMimeType: attempt.screenshotMimeType ?? "",
+        screenshotFileSize: attempt.screenshotFileSize ?? null,
+        screenshotData: attempt.screenshotData ?? "",
         attemptedAt: attempt.attemptedAt ? new Date(attempt.attemptedAt) : new Date(),
         verifierId: attempt.verifierId ? String(attempt.verifierId) : null,
         verifierName: attempt.verifierName ?? "",
@@ -420,7 +813,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const shareTarget = await VerificationRequest.findById(parsed.data.requestId)
-      .select("status reportData candidateName customer")
+      .select("status reportData candidateName customer serviceVerifications")
       .lean();
 
     if (!shareTarget) {
@@ -434,18 +827,42 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    if (!shareTarget.reportData) {
+    const normalizedReportData = normalizeReportPayloadForShare(
+      parsed.data.reportData,
+      shareTarget.reportData,
+    );
+
+    if (!shareTarget.reportData && !normalizedReportData) {
       return NextResponse.json(
         { error: "Generate the report before sharing it with customer." },
         { status: 400 },
       );
     }
 
+    const generatedAtDate = normalizedReportData
+      ? new Date(normalizedReportData.generatedAt)
+      : null;
+    const resolvedGeneratedAt =
+      generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+        ? generatedAtDate
+        : new Date();
+
+    const metadataUpdates: Record<string, unknown> = {
+      "reportMetadata.customerSharedAt": new Date(),
+    };
+
+    if (normalizedReportData) {
+      metadataUpdates.reportData = normalizedReportData;
+      metadataUpdates["reportMetadata.generatedAt"] = resolvedGeneratedAt;
+      metadataUpdates["reportMetadata.generatedByName"] =
+        normalizedReportData.generatedByName;
+      metadataUpdates["reportMetadata.reportNumber"] =
+        normalizedReportData.reportNumber;
+    }
+
     await VerificationRequest.findByIdAndUpdate(
       parsed.data.requestId,
-      {
-        "reportMetadata.customerSharedAt": new Date(),
-      },
+      metadataUpdates,
       {
         new: true,
         runValidators: true,
@@ -522,6 +939,11 @@ export async function PATCH(req: NextRequest) {
       });
     }
 
+    const screenshotAttachments = buildAttemptScreenshotAttachments(
+      parsed.data.requestId,
+      (shareTarget.serviceVerifications ?? []) as ServiceVerificationLike[],
+    );
+
     const emailResult = await sendCustomerReportSharedEmail({
       customerName: customer?.name?.trim() || "Customer",
       customerEmail,
@@ -531,6 +953,7 @@ export async function PATCH(req: NextRequest) {
         filename: reportPdfFilename,
         content: reportPdfBuffer,
       },
+      supplementalAttachments: screenshotAttachments,
     });
 
     if (!emailResult.sent) {
@@ -546,6 +969,10 @@ export async function PATCH(req: NextRequest) {
   }
 
   const verifyPayload = parsed.data;
+  const normalizedScreenshot = normalizeAttemptScreenshot(verifyPayload);
+  if (!normalizedScreenshot.ok) {
+    return NextResponse.json({ error: normalizedScreenshot.error }, { status: 400 });
+  }
 
   const requestDoc = await VerificationRequest.findById(verifyPayload.requestId)
     .select("candidateFormStatus status selectedServices serviceVerifications")
@@ -615,6 +1042,10 @@ export async function PATCH(req: NextRequest) {
     status: verifyPayload.serviceStatus,
     verificationMode: verifyPayload.verificationMode,
     comment: verifyPayload.comment,
+    screenshotFileName: normalizedScreenshot.value.screenshotFileName,
+    screenshotMimeType: normalizedScreenshot.value.screenshotMimeType,
+    screenshotFileSize: normalizedScreenshot.value.screenshotFileSize,
+    screenshotData: normalizedScreenshot.value.screenshotData,
     attemptedAt: new Date(),
     verifierId: auth.userId,
     verifierName,

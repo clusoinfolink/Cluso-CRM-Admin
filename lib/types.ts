@@ -26,6 +26,10 @@ export type ServiceVerificationAttempt = {
   verifierName?: string;
   managerId?: string | null;
   managerName?: string;
+  screenshotFileName?: string;
+  screenshotMimeType?: string;
+  screenshotFileSize?: number | null;
+  screenshotData?: string;
 };
 
 export type ServiceVerification = {
@@ -184,6 +188,53 @@ export type CompanyPartnerProfile = {
     primaryIndustry: string;
   };
   updatedAt: string | null;
+};
+
+export type ClusoDetailsResponse = {
+  profile: CompanyPartnerProfile;
+};
+
+export type InvoicePartyDetails = {
+  companyName: string;
+  loginEmail: string;
+  gstin: string;
+  cinRegistrationNumber: string;
+  address: string;
+  invoiceEmail: string;
+  billingSameAsCompany: boolean;
+  billingAddress: string;
+};
+
+export type InvoiceLineItem = {
+  serviceId: string;
+  serviceName: string;
+  price: number;
+  currency: SupportedCurrency;
+};
+
+export type InvoiceCurrencyTotal = {
+  currency: SupportedCurrency;
+  subtotal: number;
+};
+
+export type InvoiceRecord = {
+  id: string;
+  invoiceNumber: string;
+  customerId: string;
+  customerName: string;
+  customerEmail: string;
+  enterpriseDetails: InvoicePartyDetails;
+  clusoDetails: InvoicePartyDetails;
+  lineItems: InvoiceLineItem[];
+  totalsByCurrency: InvoiceCurrencyTotal[];
+  generatedByName: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InvoiceWorkspaceResponse = {
+  invoices: InvoiceRecord[];
+  clusoDefaultDetails: InvoicePartyDetails;
 };
 
 export type CompanyItem = {

@@ -1,22 +1,17 @@
 import nodemailer from "nodemailer";
 
-type CustomerReportMailPayload = {
+type CustomerInvoiceMailPayload = {
   customerName: string;
   customerEmail: string;
-  candidateName: string;
-  requestId: string;
-  reportPdf?: {
+  invoiceNumber: string;
+  invoiceGeneratedAt: string;
+  invoicePdf: {
     filename: string;
     content: Buffer;
   };
-  supplementalAttachments?: Array<{
-    filename: string;
-    content: Buffer;
-    contentType?: string;
-  }>;
 };
 
-export type CustomerReportMailResult = {
+export type CustomerInvoiceMailResult = {
   sent: boolean;
   reason?: string;
 };
@@ -41,9 +36,26 @@ function resolveCustomerPortalUrl() {
     : "http://localhost:3011";
 }
 
-export async function sendCustomerReportSharedEmail(
-  payload: CustomerReportMailPayload,
-): Promise<CustomerReportMailResult> {
+function formatDateTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "-";
+  }
+
+  return parsed.toLocaleString("en-IN", {
+    day: "numeric",
+    month: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+}
+
+export async function sendCustomerInvoiceEmail(
+  payload: CustomerInvoiceMailPayload,
+): Promise<CustomerInvoiceMailResult> {
   const smtpHost = process.env.SMTP_HOST?.trim();
   const smtpPort = Number(process.env.SMTP_PORT ?? "587");
   const smtpUser = process.env.SMTP_USER?.trim();
@@ -69,28 +81,22 @@ export async function sendCustomerReportSharedEmail(
 
   const portalUrl = resolveCustomerPortalUrl();
   const safeCustomerName = escapeHtml(payload.customerName);
-  const safeCandidateName = escapeHtml(payload.candidateName);
-  const safeRequestId = escapeHtml(payload.requestId);
+  const safeInvoiceNumber = escapeHtml(payload.invoiceNumber);
   const safePortalUrl = escapeHtml(portalUrl);
+  const generatedAt = formatDateTime(payload.invoiceGeneratedAt);
 
   const fromAddress =
     process.env.CUSTOMER_REPORT_MAIL_FROM?.trim() ||
     process.env.VERIFICATION_MAIL_FROM?.trim() ||
     `Cluso Infolink Team <${smtpUser}>`;
 
-  const subject = `Verification report shared for ${payload.candidateName}`;
-  const supplementalAttachmentCount = payload.supplementalAttachments?.length ?? 0;
+  const subject = `Invoice ${payload.invoiceNumber} from Cluso Infolink`;
 
   const text = [
     `Dear ${payload.customerName},`,
     "",
-    `The verification report for candidate ${payload.candidateName} is now available in your customer portal.`,
-    payload.reportPdf ? "The generated verification report PDF is attached to this email." : "",
-    supplementalAttachmentCount > 0
-      ? `${supplementalAttachmentCount} verification screenshot attachment${supplementalAttachmentCount > 1 ? "s are" : " is"} included with this email.`
-      : "",
-    "",
-    `Request ID: ${payload.requestId}`,
+    `Your invoice ${payload.invoiceNumber} has been generated and is attached to this email as a PDF file.`,
+    `Generated: ${generatedAt}`,
     `Portal URL: ${portalUrl}`,
     "",
     "Regards,",
@@ -101,15 +107,17 @@ export async function sendCustomerReportSharedEmail(
     <div style="font-family: Arial, Helvetica, sans-serif; color: #0f172a; line-height: 1.5;">
       <p>Dear ${safeCustomerName},</p>
       <p>
-        The verification report for candidate <strong>${safeCandidateName}</strong>
-        is now available in your customer portal.
+        Your invoice <strong>${safeInvoiceNumber}</strong> has been generated and is attached
+        to this email as a PDF file.
       </p>
-      ${payload.reportPdf ? "<p><strong>The generated verification report PDF is attached to this email.</strong></p>" : ""}
-      ${supplementalAttachmentCount > 0 ? `<p><strong>${supplementalAttachmentCount} verification screenshot attachment${supplementalAttachmentCount > 1 ? "s are" : " is"} included with this email.</strong></p>` : ""}
       <table cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse; width: 100%; max-width: 560px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
         <tr>
-          <td style="padding: 12px 14px; font-weight: 700; width: 160px; color: #334155;">Request ID</td>
-          <td style="padding: 12px 14px;"><code style="font-family: Consolas, Menlo, monospace; background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${safeRequestId}</code></td>
+          <td style="padding: 12px 14px; font-weight: 700; width: 160px; color: #334155;">Invoice Number</td>
+          <td style="padding: 12px 14px;"><code style="font-family: Consolas, Menlo, monospace; background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${safeInvoiceNumber}</code></td>
+        </tr>
+        <tr>
+          <td style="padding: 12px 14px; font-weight: 700; width: 160px; color: #334155; border-top: 1px solid #e2e8f0;">Generated</td>
+          <td style="padding: 12px 14px; border-top: 1px solid #e2e8f0;">${escapeHtml(generatedAt)}</td>
         </tr>
         <tr>
           <td style="padding: 12px 14px; font-weight: 700; width: 160px; color: #334155; border-top: 1px solid #e2e8f0;">Portal URL</td>
@@ -117,7 +125,7 @@ export async function sendCustomerReportSharedEmail(
         </tr>
       </table>
       <p style="margin-top: 14px;">
-        Please sign in to review the shared report.
+        You can also sign in to your customer portal to view previously generated invoices.
       </p>
       <p>
         Regards,<br />
@@ -127,30 +135,19 @@ export async function sendCustomerReportSharedEmail(
   `;
 
   try {
-    const attachments = [
-      ...(payload.reportPdf
-        ? [
-            {
-              filename: payload.reportPdf.filename,
-              content: payload.reportPdf.content,
-              contentType: "application/pdf",
-            },
-          ]
-        : []),
-      ...((payload.supplementalAttachments ?? []).map((attachment) => ({
-        filename: attachment.filename,
-        content: attachment.content,
-        contentType: attachment.contentType || "application/octet-stream",
-      }))),
-    ];
-
     await transporter.sendMail({
       from: fromAddress,
       to: payload.customerEmail,
       subject,
       text,
       html,
-      attachments: attachments.length > 0 ? attachments : undefined,
+      attachments: [
+        {
+          filename: payload.invoicePdf.filename,
+          content: payload.invoicePdf.content,
+          contentType: "application/pdf",
+        },
+      ],
     });
 
     return { sent: true };

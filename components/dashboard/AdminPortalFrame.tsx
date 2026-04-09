@@ -9,6 +9,7 @@ import {
   BriefcaseBusiness,
   Building2,
   CheckCheck,
+  FileText,
   LayoutDashboard,
   LogOut,
   Settings,
@@ -40,6 +41,7 @@ const navItems: NavItem[] = [
   { href: "/dashboard/requests", label: "Requests", icon: ShieldCheck, roles: ["admin", "superadmin", "manager", "verifier"] },
   { href: "/dashboard/companies", label: "Companies", icon: Building2, roles: ["admin", "superadmin"] },
   { href: "/dashboard/services", label: "Services", icon: BriefcaseBusiness, roles: ["admin", "superadmin", "verifier"] },
+  { href: "/dashboard/invoices", label: "Invoices", icon: FileText, roles: ["admin", "superadmin"] },
   { href: "/dashboard/team", label: "Team", icon: Users, roles: ["admin", "superadmin", "manager"] },
   { href: "/dashboard/settings", label: "Settings", icon: Settings, roles: ["admin", "superadmin", "manager", "verifier"] },
 ];

@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
   ChevronDown,
@@ -41,12 +41,29 @@ const REQUESTS_QUERY_KEY = ["admin-requests"];
 const REQUESTS_STALE_TIME_MS = 5 * 60 * 1000;
 const CUSTOM_VERIFICATION_MODE_STORAGE_KEY = "cluso-admin-custom-verification-modes";
 const CUSTOM_VERIFICATION_MODE_SENTINEL = "__add_custom_mode__";
+const MAX_ATTEMPT_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+const ATTEMPT_SCREENSHOT_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+]);
 const DEFAULT_VERIFICATION_MODE_OPTIONS = [
   { value: "manual", label: "Manual" },
   { value: "document", label: "Document Check" },
   { value: "database", label: "Database Check" },
   { value: "field", label: "Field Verification" },
 ] as const;
+
+type ServiceAttemptDraft = {
+  status: "verified" | "unverified";
+  verificationMode: string;
+  comment: string;
+  screenshotFileName: string;
+  screenshotMimeType: string;
+  screenshotFileSize: number | null;
+  screenshotData: string;
+};
 
 const REPORT_NOTICE_PARAGRAPHS = [
   "The Cluso Report is provided by CLUSO INFOLINK, LLC. CLUSO INFOLINK, LLC does not warrant the completeness or correctness of this report or any of the information contained herein. CLUSO INFOLINK, LLC is not liable for any loss, damage or injury caused by negligence or other act or failure of CLUSO INFOLINK, LLC in procuring, collecting or communicating any such information. Reliance on any information contained herein shall be solely at the users risk and shall not constitute a waiver of any claim against, and a release of, CLUSO INFOLINK, LLC.",
@@ -329,6 +346,39 @@ function buildReportPreviewData(item: RequestItem, viewerName: string) {
   } satisfies ReportPreviewData;
 }
 
+function toShareReportPayload(report: ReportPreviewData) {
+  return {
+    reportNumber: report.reportNumber,
+    generatedAt: report.generatedAt,
+    generatedByName: report.generatedByName,
+    candidate: {
+      name: report.candidate.name,
+      email: report.candidate.email,
+      phone: report.candidate.phone,
+    },
+    company: {
+      name: report.company.name,
+      email: report.company.email,
+    },
+    status: report.status,
+    createdAt: report.createdAt,
+    services: report.services.map((service) => ({
+      serviceName: service.serviceName,
+      status: service.status,
+      verificationMode: service.verificationMode,
+      comment: service.comment,
+      attempts: service.attempts.map((attempt) => ({
+        attemptedAt: attempt.attemptedAt,
+        status: attempt.status,
+        verificationMode: attempt.verificationMode,
+        comment: attempt.comment,
+        verifierName: attempt.verifierName,
+        managerName: attempt.managerName,
+      })),
+    })),
+  };
+}
+
 async function fetchRequests() {
   const reqRes = await fetch("/api/requests", { cache: "no-store" });
   if (!reqRes.ok) {
@@ -367,6 +417,35 @@ function parseRepeatableAnswerValues(rawValue: string, repeatable?: boolean) {
   } catch {
     return [];
   }
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    return `${kb.toFixed(1)} KB`;
+  }
+
+  return `${(kb / 1024).toFixed(2)} MB`;
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read screenshot file."));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Could not read screenshot file."));
+        return;
+      }
+
+      resolve(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function normalizeVerificationModeInput(value: string) {
@@ -448,7 +527,7 @@ function RequestsPageContent() {
   const [highlightedRequestId, setHighlightedRequestId] = useState("");
   const [activeResponseRequestId, setActiveResponseRequestId] = useState("");
   const [serviceDraftsByRequest, setServiceDraftsByRequest] = useState<
-    Record<string, Record<string, { status: "verified" | "unverified"; verificationMode: string; comment: string }>>
+    Record<string, Record<string, ServiceAttemptDraft>>
   >({});
   const [customVerificationModes, setCustomVerificationModes] = useState<string[]>(loadStoredCustomVerificationModes);
   const [showCustomModeInputByService, setShowCustomModeInputByService] = useState<Record<string, boolean>>({});
@@ -457,6 +536,9 @@ function RequestsPageContent() {
   const [reportingRequestId, setReportingRequestId] = useState("");
   const [sharingReportRequestId, setSharingReportRequestId] = useState("");
   const [activeReportPreviewRequestId, setActiveReportPreviewRequestId] = useState("");
+  const [reportDraftsByRequest, setReportDraftsByRequest] = useState<
+    Record<string, ReportPreviewData>
+  >({});
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [companyFilter, setCompanyFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | RequestItem["status"]>("all");
@@ -510,7 +592,7 @@ function RequestsPageContent() {
 
       const requestDraft: Record<
         string,
-        { status: "verified" | "unverified"; verificationMode: string; comment: string }
+        ServiceAttemptDraft
       > = {};
 
       for (const service of services) {
@@ -518,6 +600,10 @@ function RequestsPageContent() {
           status: service.status === "unverified" ? "unverified" : "verified",
           verificationMode: service.verificationMode || "manual",
           comment: service.comment || "",
+          screenshotFileName: "",
+          screenshotMimeType: "",
+          screenshotFileSize: null,
+          screenshotData: "",
         };
       }
 
@@ -533,7 +619,7 @@ function RequestsPageContent() {
   function updateServiceDraft(
     requestId: string,
     serviceId: string,
-    patch: Partial<{ status: "verified" | "unverified"; verificationMode: string; comment: string }>,
+    patch: Partial<ServiceAttemptDraft>,
   ) {
     setServiceDraftsByRequest((prev) => {
       const requestDraft = prev[requestId] ?? {};
@@ -541,6 +627,10 @@ function RequestsPageContent() {
         status: "verified" as const,
         verificationMode: "manual",
         comment: "",
+        screenshotFileName: "",
+        screenshotMimeType: "",
+        screenshotFileSize: null,
+        screenshotData: "",
       };
 
       return {
@@ -620,6 +710,57 @@ function RequestsPageContent() {
     );
   }
 
+  function clearAttemptScreenshot(requestId: string, serviceId: string) {
+    updateServiceDraft(requestId, serviceId, {
+      screenshotFileName: "",
+      screenshotMimeType: "",
+      screenshotFileSize: null,
+      screenshotData: "",
+    });
+  }
+
+  async function selectAttemptScreenshot(
+    requestId: string,
+    serviceId: string,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const input = event.currentTarget;
+    const selectedFile = input.files?.[0];
+
+    if (!selectedFile) {
+      clearAttemptScreenshot(requestId, serviceId);
+      return;
+    }
+
+    const normalizedMimeType = selectedFile.type.trim().toLowerCase();
+    if (!ATTEMPT_SCREENSHOT_MIME_TYPES.has(normalizedMimeType)) {
+      setMessage("Screenshot must be PNG, JPG, or WEBP.");
+      input.value = "";
+      return;
+    }
+
+    if (selectedFile.size > MAX_ATTEMPT_SCREENSHOT_BYTES) {
+      setMessage("Screenshot must be 2MB or smaller.");
+      input.value = "";
+      return;
+    }
+
+    try {
+      const screenshotData = await readFileAsDataUrl(selectedFile);
+      updateServiceDraft(requestId, serviceId, {
+        screenshotFileName: selectedFile.name,
+        screenshotMimeType: normalizedMimeType,
+        screenshotFileSize: selectedFile.size,
+        screenshotData,
+      });
+      setMessage(`Screenshot selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)}).`);
+      input.value = "";
+    } catch {
+      setMessage("Could not read screenshot file. Please try another image.");
+      input.value = "";
+    }
+  }
+
   async function logServiceAttempt(requestId: string, serviceId: string) {
     const draft = serviceDraftsByRequest[requestId]?.[serviceId];
     if (!draft) {
@@ -640,6 +781,10 @@ function RequestsPageContent() {
         serviceStatus: draft.status,
         verificationMode: draft.verificationMode,
         comment: draft.comment,
+        screenshotFileName: draft.screenshotFileName,
+        screenshotMimeType: draft.screenshotMimeType,
+        screenshotFileSize: draft.screenshotFileSize,
+        screenshotData: draft.screenshotData,
       }),
     });
 
@@ -652,6 +797,7 @@ function RequestsPageContent() {
     }
 
     setMessage(data.message ?? "Service verification attempt logged.");
+    clearAttemptScreenshot(requestId, serviceId);
     await loadRequests();
   }
 
@@ -710,17 +856,26 @@ function RequestsPageContent() {
     setActiveReportPreviewRequestId(requestId);
   }
 
-  async function shareReportToCustomer(requestId: string) {
+  async function shareReportToCustomer(
+    requestId: string,
+    draftOverride?: ReportPreviewData,
+  ) {
     setMessage("");
     setSharingReportRequestId(requestId);
+
+    const payload: Record<string, unknown> = {
+      action: "share-report-to-customer",
+      requestId,
+    };
+
+    if (draftOverride) {
+      payload.reportData = toShareReportPayload(draftOverride);
+    }
 
     const res = await fetch("/api/requests", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "share-report-to-customer",
-        requestId,
-      }),
+      body: JSON.stringify(payload),
     });
 
     const data = (await res.json()) as { message?: string; error?: string };
@@ -741,8 +896,81 @@ function RequestsPageContent() {
       return;
     }
 
+    const initialDraft = buildReportPreviewData(item, me?.name ?? "Unknown");
+    setReportDraftsByRequest((prev) => ({
+      ...prev,
+      [item._id]: initialDraft,
+    }));
+
     setActiveResponseRequestId("");
     setActiveReportPreviewRequestId(item._id);
+  }
+
+  function updateReportDraft(
+    requestId: string,
+    updater: (draft: ReportPreviewData) => ReportPreviewData,
+    fallbackItem: RequestItem | null,
+  ) {
+    setReportDraftsByRequest((prev) => {
+      const currentDraft =
+        prev[requestId] ??
+        (fallbackItem ? buildReportPreviewData(fallbackItem, me?.name ?? "Unknown") : null);
+
+      if (!currentDraft) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [requestId]: updater(currentDraft),
+      };
+    });
+  }
+
+  function updateReportServiceField(
+    requestId: string,
+    serviceIndex: number,
+    patch: Partial<ReportPreviewService>,
+    fallbackItem: RequestItem | null,
+  ) {
+    updateReportDraft(
+      requestId,
+      (draft) => ({
+        ...draft,
+        services: draft.services.map((service, index) =>
+          index === serviceIndex ? { ...service, ...patch } : service,
+        ),
+      }),
+      fallbackItem,
+    );
+  }
+
+  function updateReportAttemptField(
+    requestId: string,
+    serviceIndex: number,
+    attemptIndex: number,
+    patch: Partial<ReportPreviewAttempt>,
+    fallbackItem: RequestItem | null,
+  ) {
+    updateReportDraft(
+      requestId,
+      (draft) => ({
+        ...draft,
+        services: draft.services.map((service, currentServiceIndex) => {
+          if (currentServiceIndex !== serviceIndex) {
+            return service;
+          }
+
+          return {
+            ...service,
+            attempts: service.attempts.map((attempt, currentAttemptIndex) =>
+              currentAttemptIndex === attemptIndex ? { ...attempt, ...patch } : attempt,
+            ),
+          };
+        }),
+      }),
+      fallbackItem,
+    );
   }
 
   function toggleCompanyGroup(groupKey: string) {
@@ -923,6 +1151,17 @@ function RequestsPageContent() {
     [activeReportPreviewRequestId, requests],
   );
 
+  const activeReportPreviewDraft = useMemo(() => {
+    if (!activeReportPreviewRequest) {
+      return null;
+    }
+
+    return (
+      reportDraftsByRequest[activeReportPreviewRequest._id] ??
+      buildReportPreviewData(activeReportPreviewRequest, me?.name ?? "Unknown")
+    );
+  }, [activeReportPreviewRequest, reportDraftsByRequest, me?.name]);
+
   function renderResponseContent(item: RequestItem) {
     if (!item.candidateFormResponses || item.candidateFormResponses.length === 0) {
       return <p style={{ margin: 0, color: "#667892" }}>Candidate has not submitted form responses yet.</p>;
@@ -1038,7 +1277,7 @@ function RequestsPageContent() {
         </p>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: "920px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
+          <table style={{ width: "100%", minWidth: "1080px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
             <thead>
               <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Service</th>
@@ -1046,6 +1285,7 @@ function RequestsPageContent() {
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Verification Mode</th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Result</th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Comment</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Screenshot (Max 2MB)</th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Action</th>
               </tr>
             </thead>
@@ -1055,6 +1295,10 @@ function RequestsPageContent() {
                   status: service.status === "unverified" ? "unverified" : "verified",
                   verificationMode: service.verificationMode || "manual",
                   comment: service.comment || "",
+                  screenshotFileName: "",
+                  screenshotMimeType: "",
+                  screenshotFileSize: null,
+                  screenshotData: "",
                 };
                 const serviceKey = `${item._id}:${service.serviceId}`;
                 const showCustomModeInput = Boolean(showCustomModeInputByService[serviceKey]);
@@ -1194,6 +1438,41 @@ function RequestsPageContent() {
                         }
                       />
                     </td>
+                    <td style={{ padding: "0.65rem", minWidth: "260px" }}>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/jpg,image/webp"
+                          className="input"
+                          style={{ padding: "0.35rem 0.45rem" }}
+                          onChange={(event) =>
+                            void selectAttemptScreenshot(item._id, service.serviceId, event)
+                          }
+                        />
+                        {draft.screenshotData ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap", fontSize: "0.75rem", color: "#475569" }}>
+                            <span style={{ fontWeight: 600, color: "#1E293B" }}>
+                              {draft.screenshotFileName || "Selected screenshot"}
+                            </span>
+                            {typeof draft.screenshotFileSize === "number" ? (
+                              <span>({formatFileSize(draft.screenshotFileSize)})</span>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ padding: "0.2rem 0.45rem", fontSize: "0.72rem" }}
+                              onClick={() => clearAttemptScreenshot(item._id, service.serviceId)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: "0.75rem", color: "#94A3B8" }}>
+                            Optional: attach verification screenshot
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td style={{ padding: "0.65rem" }}>
                       <button
                         type="button"
@@ -1222,13 +1501,14 @@ function RequestsPageContent() {
                 <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
               ) : (
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: "760px", borderCollapse: "collapse" }}>
+                  <table style={{ width: "100%", minWidth: "900px", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ textAlign: "left", borderBottom: "1px solid #E2E8F0" }}>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Date/Time</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Result</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Mode</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Comment</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Screenshot</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Verifier</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Manager</th>
                       </tr>
@@ -1252,6 +1532,33 @@ function RequestsPageContent() {
                               {attempt.comment || "-"}
                             </td>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.screenshotData ? (
+                                <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+                                  <a
+                                    href={attempt.screenshotData}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
+                                    onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
+                                    onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
+                                  >
+                                    View
+                                  </a>
+                                  <a
+                                    href={attempt.screenshotData}
+                                    download={attempt.screenshotFileName || `attempt-screenshot-${attemptIndex + 1}`}
+                                    style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
+                                    onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
+                                    onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
+                                  >
+                                    Download
+                                  </a>
+                                </span>
+                              ) : (
+                                "-"
+                              )}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {attempt.verifierName || "-"}
                             </td>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
@@ -1270,9 +1577,7 @@ function RequestsPageContent() {
     );
   }
 
-  function renderReportPreview(item: RequestItem) {
-    const report = buildReportPreviewData(item, me?.name ?? "Unknown");
-
+  function renderReportPreview(requestId: string, report: ReportPreviewData) {
     return (
       <div style={{ overflowX: "auto" }}>
         <article
@@ -1420,7 +1725,7 @@ function RequestsPageContent() {
                     );
 
                   return (
-                    <section key={`${item._id}-preview-service-${serviceIndex}`}>
+                    <section key={`${requestId}-preview-service-${serviceIndex}`}>
                       <h4 style={{ margin: 0, fontWeight: 700, fontSize: "1.4rem" }}>
                         {serviceIndex + 1}. {service.serviceName}
                       </h4>
@@ -1458,7 +1763,7 @@ function RequestsPageContent() {
                               </tr>
                             ) : (
                               attempts.map((attempt, attemptIndex) => (
-                                <tr key={`${item._id}-preview-service-${serviceIndex}-attempt-${attemptIndex}`} style={{ borderBottom: "1px solid #666666", verticalAlign: "top" }}>
+                                <tr key={`${requestId}-preview-service-${serviceIndex}-attempt-${attemptIndex}`} style={{ borderBottom: "1px solid #666666", verticalAlign: "top" }}>
                                   <td style={{ padding: "0.35rem 0.2rem" }}>{formatReportDateTime(attempt.attemptedAt)}</td>
                                   <td style={{ padding: "0.35rem 0.2rem", color: getReportAttemptStatusColor(attempt.status), fontWeight: 700 }}>
                                     {toReportAttemptStatusLabel(attempt.status)}
@@ -1504,7 +1809,7 @@ function RequestsPageContent() {
               <p style={{ margin: 0, fontWeight: 700 }}>--END OF REPORT--</p>
               <p style={{ margin: "0.25rem 0 0", fontWeight: 700 }}>IMPORTANT NOTICE</p>
               {REPORT_NOTICE_PARAGRAPHS.map((paragraph) => (
-                <p key={`${item._id}-${paragraph.slice(0, 20)}`} style={{ margin: "0.38rem 0 0" }}>
+                <p key={`${requestId}-${paragraph.slice(0, 20)}`} style={{ margin: "0.38rem 0 0" }}>
                   {paragraph}
                 </p>
               ))}
@@ -2033,6 +2338,34 @@ function RequestsPageContent() {
                   </button>
                 ) : null}
 
+                {canGenerateReport ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={
+                      sharingReportRequestId === activeReportPreviewRequest._id ||
+                      !activeReportPreviewDraft
+                    }
+                    onClick={() => {
+                      if (!activeReportPreviewDraft) {
+                        return;
+                      }
+
+                      void shareReportToCustomer(
+                        activeReportPreviewRequest._id,
+                        activeReportPreviewDraft,
+                      );
+                    }}
+                    style={{ padding: "0.42rem 0.75rem", fontSize: "0.84rem" }}
+                  >
+                    {sharingReportRequestId === activeReportPreviewRequest._id
+                      ? "Sending..."
+                      : activeReportPreviewRequest.reportMetadata?.customerSharedAt
+                        ? "Resend To Customer"
+                        : "Send To Customer"}
+                  </button>
+                ) : null}
+
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -2044,7 +2377,435 @@ function RequestsPageContent() {
               </div>
             </div>
 
-            {renderReportPreview(activeReportPreviewRequest)}
+            {activeReportPreviewDraft ? (
+              <section
+                className="glass-card"
+                style={{
+                  padding: "0.9rem",
+                  marginBottom: "0.95rem",
+                  background: "#F8FAFC",
+                  border: "1px solid #E2E8F0",
+                }}
+              >
+                <h4 style={{ margin: 0, color: "#1E293B" }}>Editable Report Fields</h4>
+                <p style={{ margin: "0.35rem 0 0.75rem", color: "#64748B", fontSize: "0.86rem" }}>
+                  Adjust details below, review the preview, then send to customer.
+                </p>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gap: "0.65rem",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  }}
+                >
+                  <div>
+                    <label className="label" htmlFor="preview-report-number">Report Number</label>
+                    <input
+                      id="preview-report-number"
+                      className="input"
+                      value={activeReportPreviewDraft.reportNumber}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({ ...draft, reportNumber: event.target.value }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label" htmlFor="preview-generated-at">Generated At</label>
+                    <input
+                      id="preview-generated-at"
+                      className="input"
+                      value={activeReportPreviewDraft.generatedAt}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({ ...draft, generatedAt: event.target.value }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label" htmlFor="preview-generated-by">Generated By</label>
+                    <input
+                      id="preview-generated-by"
+                      className="input"
+                      value={activeReportPreviewDraft.generatedByName}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({ ...draft, generatedByName: event.target.value }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label" htmlFor="preview-overall-status">Overall Status</label>
+                    <select
+                      id="preview-overall-status"
+                      className="input"
+                      value={activeReportPreviewDraft.status}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({ ...draft, status: event.target.value }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    >
+                      <option value="pending">Pending</option>
+                      <option value="approved">Approved</option>
+                      <option value="verified">Verified</option>
+                      <option value="unverified">Unverified</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gap: "0.65rem",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                    marginTop: "0.75rem",
+                  }}
+                >
+                  <div>
+                    <label className="label" htmlFor="preview-candidate-name">Candidate Name</label>
+                    <input
+                      id="preview-candidate-name"
+                      className="input"
+                      value={activeReportPreviewDraft.candidate.name}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({
+                            ...draft,
+                            candidate: { ...draft.candidate, name: event.target.value },
+                          }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label" htmlFor="preview-candidate-email">Candidate Email</label>
+                    <input
+                      id="preview-candidate-email"
+                      className="input"
+                      value={activeReportPreviewDraft.candidate.email}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({
+                            ...draft,
+                            candidate: { ...draft.candidate, email: event.target.value },
+                          }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label" htmlFor="preview-candidate-phone">Candidate Phone</label>
+                    <input
+                      id="preview-candidate-phone"
+                      className="input"
+                      value={activeReportPreviewDraft.candidate.phone}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({
+                            ...draft,
+                            candidate: { ...draft.candidate, phone: event.target.value },
+                          }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label" htmlFor="preview-company-name">Company Name</label>
+                    <input
+                      id="preview-company-name"
+                      className="input"
+                      value={activeReportPreviewDraft.company.name}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({
+                            ...draft,
+                            company: { ...draft.company, name: event.target.value },
+                          }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label" htmlFor="preview-company-email">Company Email</label>
+                    <input
+                      id="preview-company-email"
+                      className="input"
+                      value={activeReportPreviewDraft.company.email}
+                      onChange={(event) =>
+                        updateReportDraft(
+                          activeReportPreviewRequest._id,
+                          (draft) => ({
+                            ...draft,
+                            company: { ...draft.company, email: event.target.value },
+                          }),
+                          activeReportPreviewRequest,
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginTop: "0.8rem", display: "grid", gap: "0.75rem" }}>
+                  {activeReportPreviewDraft.services.map((service, serviceIndex) => (
+                    <section
+                      key={`editable-service-${activeReportPreviewRequest._id}-${serviceIndex}`}
+                      style={{
+                        border: "1px solid #E2E8F0",
+                        borderRadius: "10px",
+                        padding: "0.7rem",
+                        background: "#FFFFFF",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: "0.6rem",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                        }}
+                      >
+                        <div>
+                          <label className="label">Service Name</label>
+                          <input
+                            className="input"
+                            value={service.serviceName}
+                            onChange={(event) =>
+                              updateReportServiceField(
+                                activeReportPreviewRequest._id,
+                                serviceIndex,
+                                { serviceName: event.target.value },
+                                activeReportPreviewRequest,
+                              )
+                            }
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label">Service Status</label>
+                          <select
+                            className="input"
+                            value={service.status}
+                            onChange={(event) =>
+                              updateReportServiceField(
+                                activeReportPreviewRequest._id,
+                                serviceIndex,
+                                { status: event.target.value },
+                                activeReportPreviewRequest,
+                              )
+                            }
+                          >
+                            <option value="pending">Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="verified">Verified</option>
+                            <option value="unverified">Unverified</option>
+                            <option value="rejected">Rejected</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="label">Verification Mode</label>
+                          <input
+                            className="input"
+                            value={service.verificationMode}
+                            onChange={(event) =>
+                              updateReportServiceField(
+                                activeReportPreviewRequest._id,
+                                serviceIndex,
+                                { verificationMode: event.target.value },
+                                activeReportPreviewRequest,
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: "0.6rem" }}>
+                        <label className="label">Service Comment</label>
+                        <textarea
+                          className="input"
+                          rows={2}
+                          value={service.comment}
+                          onChange={(event) =>
+                            updateReportServiceField(
+                              activeReportPreviewRequest._id,
+                              serviceIndex,
+                              { comment: event.target.value },
+                              activeReportPreviewRequest,
+                            )
+                          }
+                        />
+                      </div>
+
+                      {service.attempts.length > 0 ? (
+                        <div style={{ marginTop: "0.65rem", display: "grid", gap: "0.5rem" }}>
+                          {service.attempts.map((attempt, attemptIndex) => (
+                            <div
+                              key={`editable-attempt-${activeReportPreviewRequest._id}-${serviceIndex}-${attemptIndex}`}
+                              style={{
+                                border: "1px solid #E2E8F0",
+                                borderRadius: "8px",
+                                padding: "0.55rem",
+                                background: "#F8FAFC",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gap: "0.55rem",
+                                  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                                }}
+                              >
+                                <div>
+                                  <label className="label">Attempted At</label>
+                                  <input
+                                    className="input"
+                                    value={attempt.attemptedAt}
+                                    onChange={(event) =>
+                                      updateReportAttemptField(
+                                        activeReportPreviewRequest._id,
+                                        serviceIndex,
+                                        attemptIndex,
+                                        { attemptedAt: event.target.value },
+                                        activeReportPreviewRequest,
+                                      )
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="label">Attempt Status</label>
+                                  <select
+                                    className="input"
+                                    value={attempt.status}
+                                    onChange={(event) =>
+                                      updateReportAttemptField(
+                                        activeReportPreviewRequest._id,
+                                        serviceIndex,
+                                        attemptIndex,
+                                        { status: event.target.value },
+                                        activeReportPreviewRequest,
+                                      )
+                                    }
+                                  >
+                                    <option value="verified">Verified</option>
+                                    <option value="unverified">Unverified</option>
+                                    <option value="pending">Pending</option>
+                                  </select>
+                                </div>
+
+                                <div>
+                                  <label className="label">Attempt Mode</label>
+                                  <input
+                                    className="input"
+                                    value={attempt.verificationMode}
+                                    onChange={(event) =>
+                                      updateReportAttemptField(
+                                        activeReportPreviewRequest._id,
+                                        serviceIndex,
+                                        attemptIndex,
+                                        { verificationMode: event.target.value },
+                                        activeReportPreviewRequest,
+                                      )
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="label">Verifier</label>
+                                  <input
+                                    className="input"
+                                    value={attempt.verifierName}
+                                    onChange={(event) =>
+                                      updateReportAttemptField(
+                                        activeReportPreviewRequest._id,
+                                        serviceIndex,
+                                        attemptIndex,
+                                        { verifierName: event.target.value },
+                                        activeReportPreviewRequest,
+                                      )
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="label">Manager</label>
+                                  <input
+                                    className="input"
+                                    value={attempt.managerName}
+                                    onChange={(event) =>
+                                      updateReportAttemptField(
+                                        activeReportPreviewRequest._id,
+                                        serviceIndex,
+                                        attemptIndex,
+                                        { managerName: event.target.value },
+                                        activeReportPreviewRequest,
+                                      )
+                                    }
+                                  />
+                                </div>
+                              </div>
+
+                              <div style={{ marginTop: "0.55rem" }}>
+                                <label className="label">Attempt Comment</label>
+                                <textarea
+                                  className="input"
+                                  rows={2}
+                                  value={attempt.comment}
+                                  onChange={(event) =>
+                                    updateReportAttemptField(
+                                      activeReportPreviewRequest._id,
+                                      serviceIndex,
+                                      attemptIndex,
+                                      { comment: event.target.value },
+                                      activeReportPreviewRequest,
+                                    )
+                                  }
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </section>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            {activeReportPreviewDraft
+              ? renderReportPreview(
+                  activeReportPreviewRequest._id,
+                  activeReportPreviewDraft,
+                )
+              : null}
           </div>
         </div>
       ) : null}
