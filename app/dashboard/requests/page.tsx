@@ -535,6 +535,7 @@ function RequestsPageContent() {
   const [verifyingServiceKey, setVerifyingServiceKey] = useState("");
   const [reportingRequestId, setReportingRequestId] = useState("");
   const [sharingReportRequestId, setSharingReportRequestId] = useState("");
+  const [savingReportDraftRequestId, setSavingReportDraftRequestId] = useState("");
   const [activeReportPreviewRequestId, setActiveReportPreviewRequestId] = useState("");
   const [reportDraftsByRequest, setReportDraftsByRequest] = useState<
     Record<string, ReportPreviewData>
@@ -887,6 +888,44 @@ function RequestsPageContent() {
     }
 
     setMessage(data.message ?? "Report shared with customer portal.");
+    await loadRequests();
+  }
+
+  async function saveReportDraftChanges(
+    requestId: string,
+    draftOverride?: ReportPreviewData,
+  ) {
+    if (!draftOverride) {
+      setMessage("Open the report preview before saving edited changes.");
+      return;
+    }
+
+    setMessage("");
+    setSavingReportDraftRequestId(requestId);
+
+    const res = await fetch("/api/requests", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "save-report-draft",
+        requestId,
+        reportData: toShareReportPayload(draftOverride),
+      }),
+    });
+
+    const data = (await res.json()) as { message?: string; error?: string };
+    setSavingReportDraftRequestId("");
+
+    if (!res.ok) {
+      setMessage(data.error ?? "Could not save edited report changes.");
+      return;
+    }
+
+    setReportDraftsByRequest((prev) => ({
+      ...prev,
+      [requestId]: draftOverride,
+    }));
+    setMessage(data.message ?? "Edited report changes saved to database.");
     await loadRequests();
   }
 
@@ -2343,7 +2382,35 @@ function RequestsPageContent() {
                     type="button"
                     className="btn btn-secondary"
                     disabled={
+                      savingReportDraftRequestId === activeReportPreviewRequest._id ||
                       sharingReportRequestId === activeReportPreviewRequest._id ||
+                      !activeReportPreviewDraft
+                    }
+                    onClick={() => {
+                      if (!activeReportPreviewDraft) {
+                        return;
+                      }
+
+                      void saveReportDraftChanges(
+                        activeReportPreviewRequest._id,
+                        activeReportPreviewDraft,
+                      );
+                    }}
+                    style={{ padding: "0.42rem 0.75rem", fontSize: "0.84rem" }}
+                  >
+                    {savingReportDraftRequestId === activeReportPreviewRequest._id
+                      ? "Saving..."
+                      : "Save Changes"}
+                  </button>
+                ) : null}
+
+                {canGenerateReport ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={
+                      sharingReportRequestId === activeReportPreviewRequest._id ||
+                      savingReportDraftRequestId === activeReportPreviewRequest._id ||
                       !activeReportPreviewDraft
                     }
                     onClick={() => {
@@ -2389,7 +2456,7 @@ function RequestsPageContent() {
               >
                 <h4 style={{ margin: 0, color: "#1E293B" }}>Editable Report Fields</h4>
                 <p style={{ margin: "0.35rem 0 0.75rem", color: "#64748B", fontSize: "0.86rem" }}>
-                  Adjust details below, review the preview, then send to customer.
+                  Adjust details below, review the preview, then save or send to customer.
                 </p>
 
                 <div

@@ -86,6 +86,18 @@ type InvoiceSnapshot = {
   companyName: string;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
 function asDate(value: unknown) {
   if (!value) {
     return null;
@@ -93,6 +105,130 @@ function asDate(value: unknown) {
 
   const parsed = value instanceof Date ? value : new Date(String(value));
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseStoredReportData(value: unknown): ReportPayload | null {
+  const root = asRecord(value);
+  if (!root) {
+    return null;
+  }
+
+  const candidate = asRecord(root.candidate);
+  const company = asRecord(root.company);
+
+  const servicesRaw = Array.isArray(root.services) ? root.services : [];
+  const services = servicesRaw
+    .map((serviceValue) => {
+      const service = asRecord(serviceValue);
+      if (!service) {
+        return null;
+      }
+
+      const attemptsRaw = Array.isArray(service.attempts) ? service.attempts : [];
+      const attempts = attemptsRaw
+        .map((attemptValue) => {
+          const attempt = asRecord(attemptValue);
+          if (!attempt) {
+            return null;
+          }
+
+          return {
+            attemptedAt: asString(attempt.attemptedAt),
+            status: asString(attempt.status),
+            verificationMode: asString(attempt.verificationMode),
+            comment: asString(attempt.comment),
+            verifierName: asString(attempt.verifierName),
+            managerName: asString(attempt.managerName),
+          };
+        })
+        .filter(
+          (
+            attempt,
+          ): attempt is {
+            attemptedAt: string;
+            status: string;
+            verificationMode: string;
+            comment: string;
+            verifierName: string;
+            managerName: string;
+          } => Boolean(attempt),
+        );
+
+      return {
+        serviceName: asString(service.serviceName),
+        status: asString(service.status),
+        verificationMode: asString(service.verificationMode),
+        comment: asString(service.comment),
+        attempts,
+      };
+    })
+    .filter(
+      (
+        service,
+      ): service is {
+        serviceName: string;
+        status: string;
+        verificationMode: string;
+        comment: string;
+        attempts: Array<{
+          attemptedAt: string;
+          status: string;
+          verificationMode: string;
+          comment: string;
+          verifierName: string;
+          managerName: string;
+        }>;
+      } => Boolean(service),
+    );
+
+  return {
+    reportNumber: asString(root.reportNumber),
+    generatedAt: asString(root.generatedAt),
+    generatedByName: asString(root.generatedByName),
+    candidate: {
+      name: asString(candidate?.name),
+      email: asString(candidate?.email),
+      phone: asString(candidate?.phone),
+    },
+    company: {
+      name: asString(company?.name),
+      email: asString(company?.email),
+    },
+    status: asString(root.status),
+    createdAt: asString(root.createdAt),
+    services,
+  };
+}
+
+function normalizeReportDataForGeneration(
+  storedValue: unknown,
+  fallback: ReportPayload,
+): ReportPayload {
+  const parsed = parseStoredReportData(storedValue);
+  if (!parsed) {
+    return fallback;
+  }
+
+  const nowIso = new Date().toISOString();
+  const fallbackServices = fallback.services;
+
+  return {
+    reportNumber: parsed.reportNumber.trim() || fallback.reportNumber,
+    generatedAt: parsed.generatedAt.trim() || fallback.generatedAt || nowIso,
+    generatedByName: parsed.generatedByName.trim() || fallback.generatedByName,
+    candidate: {
+      name: parsed.candidate.name.trim() || fallback.candidate.name,
+      email: parsed.candidate.email.trim() || fallback.candidate.email,
+      phone: parsed.candidate.phone.trim() || fallback.candidate.phone,
+    },
+    company: {
+      name: parsed.company.name.trim() || fallback.company.name,
+      email: parsed.company.email.trim() || fallback.company.email,
+    },
+    status: parsed.status.trim() || fallback.status,
+    createdAt: parsed.createdAt.trim() || fallback.createdAt || nowIso,
+    services: parsed.services.length > 0 ? parsed.services : fallbackServices,
+  };
 }
 
 function formatDateTime(value: string | Date) {
@@ -1194,12 +1330,10 @@ export async function POST(
     (scoped.item.serviceVerifications ?? []) as ServiceVerificationLike[],
   );
 
-  const reportNumber = `RPT-${Date.now()}`;
-  const generatedAt = new Date();
-
-  const reportData: ReportPayload = {
-    reportNumber,
-    generatedAt: generatedAt.toISOString(),
+  const fallbackGeneratedAt = new Date();
+  const fallbackReportData: ReportPayload = {
+    reportNumber: `RPT-${Date.now()}`,
+    generatedAt: fallbackGeneratedAt.toISOString(),
     generatedByName: generator?.name ?? "Unknown",
     candidate: {
       name: scoped.item.candidateName,
@@ -1228,6 +1362,19 @@ export async function POST(
     })),
   };
 
+  const reportData = normalizeReportDataForGeneration(
+    scoped.item.reportData,
+    fallbackReportData,
+  );
+
+  const generatedAt = asDate(reportData.generatedAt) ?? fallbackGeneratedAt;
+  const reportNumber = reportData.reportNumber || fallbackReportData.reportNumber;
+  const generatedByName = reportData.generatedByName || generator?.name || "Unknown";
+
+  reportData.reportNumber = reportNumber;
+  reportData.generatedAt = generatedAt.toISOString();
+  reportData.generatedByName = generatedByName;
+
   const invoiceSnapshot: InvoiceSnapshot = {
     currency: selectedServices[0]?.currency || "INR",
     subtotal: selectedServices.reduce((sum, service) => sum + (service.price || 0), 0),
@@ -1250,7 +1397,7 @@ export async function POST(
       reportMetadata: {
         generatedAt,
         generatedBy: auth.userId,
-        generatedByName: generator?.name ?? "Unknown",
+        generatedByName,
         reportNumber,
         customerSharedAt:
           scoped.item.reportMetadata &&

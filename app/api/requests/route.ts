@@ -25,8 +25,15 @@ const shareReportPatchSchema = z.object({
   reportData: z.unknown().optional(),
 });
 
+const saveReportDraftPatchSchema = z.object({
+  action: z.literal("save-report-draft"),
+  requestId: z.string().min(1),
+  reportData: z.unknown().optional(),
+});
+
 const patchSchema = z.discriminatedUnion("action", [
   verifyServicePatchSchema,
+  saveReportDraftPatchSchema,
   shareReportPatchSchema,
 ]);
 
@@ -742,7 +749,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "Invalid input. Expected verify-service or share-report-to-customer action payload.",
+          "Invalid input. Expected verify-service, save-report-draft, or share-report-to-customer action payload.",
       },
       { status: 400 },
     );
@@ -804,10 +811,19 @@ export async function PATCH(req: NextRequest) {
     }
   }
 
-  if (parsed.data.action === "share-report-to-customer") {
+  if (
+    parsed.data.action === "share-report-to-customer" ||
+    parsed.data.action === "save-report-draft"
+  ) {
+    const isShareAction = parsed.data.action === "share-report-to-customer";
+
     if (auth.role === "verifier") {
       return NextResponse.json(
-        { error: "Only admin or manager roles can share reports with customers." },
+        {
+          error: isShareAction
+            ? "Only admin or manager roles can share reports with customers."
+            : "Only admin or manager roles can save edited report previews.",
+        },
         { status: 403 },
       );
     }
@@ -822,7 +838,11 @@ export async function PATCH(req: NextRequest) {
 
     if (shareTarget.status !== "verified") {
       return NextResponse.json(
-        { error: "Only verified requests can be shared with customers." },
+        {
+          error: isShareAction
+            ? "Only verified requests can be shared with customers."
+            : "Only verified requests can save edited report previews.",
+        },
         { status: 400 },
       );
     }
@@ -834,7 +854,11 @@ export async function PATCH(req: NextRequest) {
 
     if (!shareTarget.reportData && !normalizedReportData) {
       return NextResponse.json(
-        { error: "Generate the report before sharing it with customer." },
+        {
+          error: isShareAction
+            ? "Generate the report before sharing it with customer."
+            : "Generate the report preview before saving edited changes.",
+        },
         { status: 400 },
       );
     }
@@ -847,9 +871,7 @@ export async function PATCH(req: NextRequest) {
         ? generatedAtDate
         : new Date();
 
-    const metadataUpdates: Record<string, unknown> = {
-      "reportMetadata.customerSharedAt": new Date(),
-    };
+    const metadataUpdates: Record<string, unknown> = {};
 
     if (normalizedReportData) {
       metadataUpdates.reportData = normalizedReportData;
@@ -860,6 +882,10 @@ export async function PATCH(req: NextRequest) {
         normalizedReportData.reportNumber;
     }
 
+    if (isShareAction) {
+      metadataUpdates["reportMetadata.customerSharedAt"] = new Date();
+    }
+
     await VerificationRequest.findByIdAndUpdate(
       parsed.data.requestId,
       metadataUpdates,
@@ -868,6 +894,12 @@ export async function PATCH(req: NextRequest) {
         runValidators: true,
       },
     );
+
+    if (!isShareAction) {
+      return NextResponse.json({
+        message: "Edited report changes saved to database.",
+      });
+    }
 
     const customer = await User.findById(shareTarget.customer)
       .select("name email")
