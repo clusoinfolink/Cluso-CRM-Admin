@@ -709,6 +709,7 @@ export async function GET(req: NextRequest) {
       serviceVerifications,
       reportMetadata: item.reportMetadata ?? null,
       reportData: item.reportData ?? null,
+      reverificationAppeal: item.reverificationAppeal ?? null,
       invoiceSnapshot: item.invoiceSnapshot ?? null,
       candidateFormResponses: (item.candidateFormResponses ?? []).map((serviceResponse) => ({
         serviceId: String(serviceResponse.serviceId),
@@ -834,7 +835,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const shareTarget = await VerificationRequest.findById(parsed.data.requestId)
-      .select("status reportData candidateName customer serviceVerifications")
+      .select("status reportData candidateName customer serviceVerifications reverificationAppeal")
       .lean();
 
     if (!shareTarget) {
@@ -889,6 +890,16 @@ export async function PATCH(req: NextRequest) {
 
     if (isShareAction) {
       metadataUpdates["reportMetadata.customerSharedAt"] = new Date();
+
+      const appealStatus =
+        (shareTarget.reverificationAppeal as { status?: string } | null)?.status ?? "";
+      if (appealStatus === "open") {
+        const actor = await User.findById(auth.userId).select("name").lean();
+        metadataUpdates["reverificationAppeal.status"] = "resolved";
+        metadataUpdates["reverificationAppeal.resolvedAt"] = new Date();
+        metadataUpdates["reverificationAppeal.resolvedBy"] = auth.userId;
+        metadataUpdates["reverificationAppeal.resolvedByName"] = actor?.name ?? "";
+      }
     }
 
     await VerificationRequest.findByIdAndUpdate(

@@ -104,6 +104,19 @@ function asString(value: unknown, fallback = "") {
   return value;
 }
 
+function parseDateValue(value: unknown): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = value instanceof Date ? new Date(value.getTime()) : new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed;
+}
+
 function asBoolean(value: unknown, fallback = false) {
   if (typeof value === "boolean") {
     return value;
@@ -253,13 +266,26 @@ function buildMonthlySummaryRows(
 
   let srNo = 1;
   for (const request of requests) {
+    const requestRecord = asRecord(request);
+    const reportMetadata = asRecord(requestRecord.reportMetadata);
     const candidateName = normalizeWhitespace(asString(request.candidateName)) || `Candidate ${srNo}`;
     const requestStatus = normalizeWhitespace(asString(request.status)) || "pending";
     const selectedServices = normalizeServiceSelections(request.selectedServices);
-    const createdAt = new Date(asString(request.createdAt));
-    const requestedAt = Number.isNaN(createdAt.getTime())
-      ? ""
-      : createdAt.toISOString();
+    const requestedDate =
+      parseDateValue(requestRecord.createdAt) ??
+      parseDateValue(reportMetadata.customerSharedAt) ??
+      parseDateValue(reportMetadata.generatedAt);
+    const requestedAt = requestedDate ? requestedDate.toISOString() : "";
+
+    if (!requestedAt) {
+      console.warn("[invoices][month-summary] Missing requested date for billable request", {
+        requestId: toIdString(requestRecord._id),
+        candidateName,
+        billingCreatedAt: requestRecord.createdAt ?? null,
+        customerSharedAt: reportMetadata.customerSharedAt ?? null,
+        generatedAt: reportMetadata.generatedAt ?? null,
+      });
+    }
 
     const normalizedServices = selectedServices.length > 0
       ? selectedServices
@@ -759,7 +785,7 @@ export async function GET(req: NextRequest) {
         buildBillableRequestFilter(companyId, monthStart, monthEnd),
       )
         .sort({ createdAt: 1 })
-        .select("candidateName status selectedServices createdAt")
+        .select("candidateName status selectedServices createdAt reportMetadata.customerSharedAt reportMetadata.generatedAt")
         .lean(),
     ]);
 

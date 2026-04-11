@@ -421,6 +421,22 @@ function parseRepeatableAnswerValues(rawValue: string, repeatable?: boolean) {
   }
 }
 
+function toAppealServiceLabel(appeal: RequestItem["reverificationAppeal"] | null | undefined) {
+  if (!appeal) {
+    return "-";
+  }
+
+  const namesFromList = (appeal.services ?? [])
+    .map((service) => (service.serviceName || "").trim())
+    .filter(Boolean);
+  if (namesFromList.length > 0) {
+    return namesFromList.join(", ");
+  }
+
+  const fallbackName = (appeal.serviceName || "").trim();
+  return fallbackName || "-";
+}
+
 function formatFileSize(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -547,6 +563,7 @@ function RequestsPageContent() {
   const [statusFilter, setStatusFilter] = useState<"all" | RequestItem["status"]>("all");
   const [formStatusFilter, setFormStatusFilter] = useState<"all" | "submitted" | "pending">("all");
   const [customerDeliveryFilter, setCustomerDeliveryFilter] = useState<"all" | "sent" | "not-sent">("all");
+  const [appealQuickFilter, setAppealQuickFilter] = useState(false);
   const [expandedCompanyGroups, setExpandedCompanyGroups] = useState<Record<string, boolean>>({});
   const [companyGroupPageByKey, setCompanyGroupPageByKey] = useState<Record<string, number>>({});
 
@@ -1040,6 +1057,16 @@ function RequestsPageContent() {
     setStatusFilter("all");
     setFormStatusFilter("all");
     setCustomerDeliveryFilter("all");
+    setAppealQuickFilter(false);
+  }
+
+  function toggleAppealQuickFilter() {
+    setAppealQuickFilter((prev) => !prev);
+    setSearchText("");
+    setCompanyFilter("");
+    setStatusFilter("all");
+    setFormStatusFilter("all");
+    setCustomerDeliveryFilter("all");
   }
 
   const normalizedSearch = searchText.trim().toLowerCase();
@@ -1065,9 +1092,18 @@ function RequestsPageContent() {
     return [...optionsMap.values()].sort((a, b) => a.label.localeCompare(b.label));
   }, [requests]);
 
+  const appealPendingCount = useMemo(
+    () => requests.filter((item) => item.reverificationAppeal?.status === "open").length,
+    [requests],
+  );
+
   const filteredRequests = useMemo(
     () =>
       requests.filter((item) => {
+        if (appealQuickFilter && item.reverificationAppeal?.status !== "open") {
+          return false;
+        }
+
         if (normalizedSearch) {
           const searchable = [
             item.customerName,
@@ -1116,6 +1152,7 @@ function RequestsPageContent() {
         return true;
       }),
     [
+      appealQuickFilter,
       normalizedCompanyFilter,
       normalizedSearch,
       requests,
@@ -1201,6 +1238,7 @@ function RequestsPageContent() {
       setCompanyFilter(targetRequest.customerName || "");
       setStatusFilter("all");
       setFormStatusFilter("all");
+      setAppealQuickFilter(false);
       setIsFilterOpen(true);
       setExpandedCompanyGroups((prev) => ({
         ...prev,
@@ -2030,20 +2068,30 @@ function RequestsPageContent() {
                     Boolean(item.reportData);
                   const hasSharedReportWithCustomer =
                     Boolean(item.reportMetadata?.customerSharedAt);
+                  const hasOpenAppeal = item.reverificationAppeal?.status === "open";
+                  const appealServiceLabel = toAppealServiceLabel(item.reverificationAppeal);
                   const canPreviewItemReport =
                     Boolean(canViewStatus) && item.status === "verified";
                   const verifierActivity =
                     item.verifierNames && item.verifierNames.length > 0
                       ? item.verifierNames.join(", ")
                       : "No verifier assigned";
-                  const baseRowBackground = hasSharedReportWithCustomer
+                  const baseRowBackground = hasOpenAppeal
                     ? index % 2 === 1
-                      ? "#ECFDF3"
-                      : "#F0FDF4"
-                    : index % 2 === 1
-                      ? "#F8FAFC"
-                      : "#FFFFFF";
-                  const hoverRowBackground = hasSharedReportWithCustomer ? "#DCFCE7" : "#F1F5F9";
+                      ? "#FEF2F2"
+                      : "#FFF1F2"
+                    : hasSharedReportWithCustomer
+                      ? index % 2 === 1
+                        ? "#ECFDF3"
+                        : "#F0FDF4"
+                      : index % 2 === 1
+                        ? "#F8FAFC"
+                        : "#FFFFFF";
+                  const hoverRowBackground = hasOpenAppeal
+                    ? "#FEE2E2"
+                    : hasSharedReportWithCustomer
+                      ? "#DCFCE7"
+                      : "#F1F5F9";
 
                   return (
                     <tr
@@ -2097,12 +2145,44 @@ function RequestsPageContent() {
                         </div>
                       </td>
                       <td style={{ padding: "1rem", borderBottom: "1px solid #F1F5F9" }}>
-                        <span className={`status-pill status-pill-${item.status}`} style={{ textTransform: "capitalize" }}>
-                          {item.status}
-                        </span>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <span className={`status-pill status-pill-${item.status}`} style={{ textTransform: "capitalize" }}>
+                            {item.status}
+                          </span>
+                          {hasOpenAppeal ? (
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                width: "fit-content",
+                                background: "#FEE2E2",
+                                color: "#B91C1C",
+                                border: "1px solid #FCA5A5",
+                                fontSize: "0.72rem",
+                                fontWeight: 700,
+                                borderRadius: "999px",
+                                padding: "0.18rem 0.55rem",
+                              }}
+                            >
+                              Appeal Pending
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td style={{ padding: "1rem", maxWidth: "220px", borderBottom: "1px solid #F1F5F9", color: "#475569", fontSize: "0.85rem" }}>
-                        {item.rejectionNote || <span style={{ color: "#CBD5E1" }}>-</span>}
+                        {hasOpenAppeal ? (
+                          <div style={{ display: "grid", gap: "0.22rem", color: "#7F1D1D" }}>
+                            <strong style={{ fontSize: "0.78rem" }}>
+                              Appeal: {appealServiceLabel}
+                            </strong>
+                            <span style={{ whiteSpace: "pre-wrap" }}>
+                              {item.reverificationAppeal?.comment || "No comment provided."}
+                            </span>
+                          </div>
+                        ) : item.rejectionNote ? (
+                          item.rejectionNote
+                        ) : (
+                          <span style={{ color: "#CBD5E1" }}>-</span>
+                        )}
                       </td>
                       <td style={{ padding: "1rem", whiteSpace: "nowrap", borderBottom: "1px solid #F1F5F9", color: "#475569", fontSize: "0.85rem" }}>
                         {new Date(item.createdAt).toLocaleDateString()}
@@ -2317,6 +2397,43 @@ function RequestsPageContent() {
             <SlidersHorizontal size={18} />
             {isFilterOpen ? "Active Filters" : "Filter"}
           </button>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={toggleAppealQuickFilter}
+            disabled={appealPendingCount === 0 && !appealQuickFilter}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.45rem",
+              padding: "0.6rem 1rem",
+              borderRadius: "8px",
+              background: appealQuickFilter ? "#B91C1C" : "#F8FAFC",
+              color: appealQuickFilter ? "#FFFFFF" : "#7F1D1D",
+              border: "1px solid",
+              borderColor: appealQuickFilter ? "#B91C1C" : "#FECACA",
+              transition: "all 0.2s",
+            }}
+          >
+            Appeal Pending
+            <span
+              style={{
+                display: "inline-flex",
+                minWidth: "1.35rem",
+                justifyContent: "center",
+                alignItems: "center",
+                borderRadius: "999px",
+                fontSize: "0.72rem",
+                fontWeight: 700,
+                padding: "0.05rem 0.35rem",
+                background: appealQuickFilter ? "#FEE2E2" : "#FEE2E2",
+                color: "#B91C1C",
+              }}
+            >
+              {appealPendingCount}
+            </span>
+          </button>
         </div>
 
         {isFilterOpen && (
@@ -2469,6 +2586,69 @@ function RequestsPageContent() {
                 <X size={16} />
               </button>
             </div>
+
+            {activeResponseRequest.reverificationAppeal ? (
+              <section
+                style={{
+                  border: `1px solid ${
+                    activeResponseRequest.reverificationAppeal.status === "open"
+                      ? "#FCA5A5"
+                      : "#CBD5E1"
+                  }`,
+                  background:
+                    activeResponseRequest.reverificationAppeal.status === "open"
+                      ? "#FEF2F2"
+                      : "#F8FAFC",
+                  borderRadius: "10px",
+                  padding: "0.85rem",
+                  marginBottom: "0.85rem",
+                  display: "grid",
+                  gap: "0.38rem",
+                }}
+              >
+                <strong
+                  style={{
+                    color:
+                      activeResponseRequest.reverificationAppeal.status === "open"
+                        ? "#B91C1C"
+                        : "#334155",
+                  }}
+                >
+                  {activeResponseRequest.reverificationAppeal.status === "open"
+                    ? "Customer Appeal Pending"
+                    : "Resolved Customer Appeal"}
+                </strong>
+                <div style={{ fontSize: "0.84rem", color: "#475569" }}>
+                  <strong>Services:</strong> {toAppealServiceLabel(activeResponseRequest.reverificationAppeal)}
+                </div>
+                <div style={{ fontSize: "0.84rem", color: "#475569" }}>
+                  <strong>Submitted At:</strong> {formatReportDateTime(activeResponseRequest.reverificationAppeal.submittedAt)}
+                </div>
+                <div style={{ fontSize: "0.84rem", color: "#475569", whiteSpace: "pre-wrap" }}>
+                  <strong>Comment:</strong> {activeResponseRequest.reverificationAppeal.comment || "-"}
+                </div>
+                {activeResponseRequest.reverificationAppeal.attachmentData ? (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: "0.84rem", color: "#475569" }}>Attachment:</strong>
+                    <a
+                      href={activeResponseRequest.reverificationAppeal.attachmentData}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600, fontSize: "0.84rem" }}
+                    >
+                      View
+                    </a>
+                    <a
+                      href={activeResponseRequest.reverificationAppeal.attachmentData}
+                      download={activeResponseRequest.reverificationAppeal.attachmentFileName || "appeal-attachment"}
+                      style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600, fontSize: "0.84rem" }}
+                    >
+                      Download
+                    </a>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
 
             {renderServiceVerificationWorkspace(activeResponseRequest)}
 
