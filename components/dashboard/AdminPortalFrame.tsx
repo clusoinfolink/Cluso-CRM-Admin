@@ -12,6 +12,7 @@ import {
   FileText,
   LayoutDashboard,
   LogOut,
+  MoreHorizontal,
   Settings,
   ShieldCheck,
   User,
@@ -69,6 +70,18 @@ async function fetchRequestsForNotifications() {
 }
 
 function getAdminNotificationContent(item: RequestItem) {
+  if (item.reverificationAppeal?.status === "open") {
+    const appealedServiceNames = (item.reverificationAppeal.services ?? [])
+      .map((service) => service.serviceName)
+      .filter((name) => typeof name === "string" && name.trim().length > 0);
+    const appealedServicesLabel = appealedServiceNames.length > 0 ? appealedServiceNames.join(", ") : "requested services";
+
+    return {
+      title: "Reverification appeal submitted",
+      detail: `${item.candidateName} requested recheck for ${appealedServicesLabel}`,
+    };
+  }
+
   if (item.status === "verified") {
     return {
       title: "Request verified",
@@ -117,6 +130,7 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
   const visibleNav = navItems.filter((item) => item.roles.includes(me.role));
   const notificationWrapRef = useRef<HTMLDivElement | null>(null);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [clearedNotificationIds, setClearedNotificationIds] = useState<string[]>([]);
 
   const requestsQuery = useQuery<RequestItem[]>({
@@ -136,11 +150,17 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
     return (requestsQuery.data ?? [])
       .map((item) => {
         const parsedCreatedAt = Date.parse(item.createdAt);
-        const createdAtMs = Number.isNaN(parsedCreatedAt) ? 0 : parsedCreatedAt;
+        const requestCreatedAtMs = Number.isNaN(parsedCreatedAt) ? 0 : parsedCreatedAt;
+        const parsedAppealSubmittedAt =
+          item.reverificationAppeal?.status === "open" ? Date.parse(item.reverificationAppeal.submittedAt) : Number.NaN;
+        const createdAtMs = Number.isNaN(parsedAppealSubmittedAt) ? requestCreatedAtMs : parsedAppealSubmittedAt;
         const content = getAdminNotificationContent(item);
+        const appealKey = item.reverificationAppeal
+          ? `${item.reverificationAppeal.status}:${item.reverificationAppeal.submittedAt}:${item.reverificationAppeal.resolvedAt ?? ""}`
+          : "none";
 
         return {
-          id: `${item._id}:${item.status}:${item.candidateFormStatus ?? "pending"}`,
+          id: `${item._id}:${item.status}:${item.candidateFormStatus ?? "pending"}:${appealKey}`,
           requestId: item._id,
           title: content.title,
           detail: content.detail,
@@ -259,7 +279,11 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
 
   return (
     <div className="admin-layout">
-      <aside className="admin-sidebar" aria-label="Admin navigation menu">
+      <aside
+        id="admin-mobile-nav"
+        className={`admin-sidebar ${isMobileNavOpen ? "mobile-open" : ""}`}
+        aria-label="Admin navigation menu"
+      >
         <div className="sidebar-brand flex items-center justify-center p-4">
           <Image
             src="/images/cluso-infolink-logo.png"
@@ -278,6 +302,7 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => setIsMobileNavOpen(false)}
                 className={`portal-nav-link ${isNavActive(pathname, item.href) ? "active" : ""}`}
               >
                 <Icon size={18} />
@@ -288,13 +313,34 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
         </nav>
       </aside>
 
+      {isMobileNavOpen ? (
+        <button
+          type="button"
+          className="portal-mobile-backdrop"
+          aria-label="Close navigation menu"
+          onClick={() => setIsMobileNavOpen(false)}
+        />
+      ) : null}
+
       <main className="admin-main">
         <header className="admin-topbar">
-          <div style={{ display: "grid", gap: "0.15rem" }}>
-            <h1 className="admin-topbar-title">{title || "Admin Panel"}</h1>
-            {subtitle ? (
-              <p style={{ margin: 0, color: "#6B7A90", fontSize: "0.85rem" }}>{subtitle}</p>
-            ) : null}
+          <div className="portal-topbar-leading" style={{ display: "flex", alignItems: "center", gap: "0.65rem" }}>
+            <button
+              type="button"
+              className="portal-nav-overflow-trigger"
+              onClick={() => setIsMobileNavOpen((prev) => !prev)}
+              aria-label="More options"
+              aria-expanded={isMobileNavOpen}
+              aria-controls="admin-mobile-nav"
+            >
+              <MoreHorizontal size={18} />
+            </button>
+            <div style={{ display: "grid", gap: "0.15rem" }}>
+              <h1 className="admin-topbar-title">{title || "Admin Panel"}</h1>
+              {subtitle ? (
+                <p style={{ margin: 0, color: "#6B7A90", fontSize: "0.85rem" }}>{subtitle}</p>
+              ) : null}
+            </div>
           </div>
           <div className="account-actions-wrap">
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 500 }}>
