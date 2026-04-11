@@ -13,6 +13,7 @@ const verifyServicePatchSchema = z.object({
   serviceStatus: z.enum(["verified", "unverified"]),
   verificationMode: z.string().trim().max(120).optional().default("manual"),
   comment: z.string().trim().max(500).optional().default(""),
+  verifierNote: z.string().trim().max(1200).optional().default(""),
   screenshotFileName: z.string().trim().max(180).optional().default(""),
   screenshotMimeType: z.string().trim().max(100).optional().default(""),
   screenshotFileSize: z.number().int().nonnegative().optional().nullable().default(null),
@@ -54,6 +55,7 @@ type ServiceVerificationLike = {
     status?: "verified" | "unverified";
     verificationMode?: string;
     comment?: string;
+    verifierNote?: string;
     screenshotFileName?: string;
     screenshotMimeType?: string;
     screenshotFileSize?: number | null;
@@ -76,6 +78,7 @@ type NormalizedServiceVerification = {
     status: "verified" | "unverified";
     verificationMode: string;
     comment: string;
+    verifierNote: string;
     screenshotFileName: string;
     screenshotMimeType: string;
     screenshotFileSize: number | null;
@@ -500,6 +503,7 @@ function buildDefaultServiceVerifications(
       status: "verified" | "unverified";
       verificationMode: string;
       comment: string;
+      verifierNote: string;
       screenshotFileName: string;
       screenshotMimeType: string;
       screenshotFileSize: number | null;
@@ -534,6 +538,7 @@ function normalizeServiceVerifications(
         status: attempt.status ?? "verified",
         verificationMode: attempt.verificationMode ?? "",
         comment: attempt.comment ?? "",
+        verifierNote: attempt.verifierNote ?? "",
         screenshotFileName: attempt.screenshotFileName ?? "",
         screenshotMimeType: attempt.screenshotMimeType ?? "",
         screenshotFileSize: attempt.screenshotFileSize ?? null,
@@ -1074,6 +1079,7 @@ export async function PATCH(req: NextRequest) {
     status: verifyPayload.serviceStatus,
     verificationMode: verifyPayload.verificationMode,
     comment: verifyPayload.comment,
+    verifierNote: verifyPayload.verifierNote,
     screenshotFileName: normalizedScreenshot.value.screenshotFileName,
     screenshotMimeType: normalizedScreenshot.value.screenshotMimeType,
     screenshotFileSize: normalizedScreenshot.value.screenshotFileSize,

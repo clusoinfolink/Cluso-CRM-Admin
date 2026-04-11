@@ -42,6 +42,8 @@ const PartnerProfileSchema = new Schema(
     invoicingInformation: {
       billingSameAsCompany: { type: Boolean, default: true },
       invoiceEmail: { type: String, default: "", trim: true },
+      gstEnabled: { type: Boolean, default: false },
+      gstRate: { type: Number, default: 18, min: 0, max: 100 },
       address: { type: AddressSchema, default: () => ({}) },
     },
     primaryContactInformation: {
@@ -131,6 +133,12 @@ const hasManagerRole =
   Array.isArray(existingUserRoleValues) && existingUserRoleValues.includes("manager");
 const hasPartnerProfilePath = Boolean(models.User?.schema.path("partnerProfile"));
 const hasManagerPath = Boolean(models.User?.schema.path("manager"));
+const hasPartnerProfileGstEnabledPath = Boolean(
+  models.User?.schema.path("partnerProfile.invoicingInformation.gstEnabled"),
+);
+const hasPartnerProfileGstRatePath = Boolean(
+  models.User?.schema.path("partnerProfile.invoicingInformation.gstRate"),
+);
 
 if (
   models.User &&
@@ -140,7 +148,9 @@ if (
     !hasDelegateUserRole ||
     !hasManagerRole ||
     !hasPartnerProfilePath ||
-    !hasManagerPath)
+    !hasManagerPath ||
+    !hasPartnerProfileGstEnabledPath ||
+    !hasPartnerProfileGstRatePath)
 ) {
   delete models.User;
 }

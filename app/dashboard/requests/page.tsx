@@ -39,6 +39,7 @@ type CompanyFilterOption = {
 
 const REQUESTS_QUERY_KEY = ["admin-requests"];
 const REQUESTS_STALE_TIME_MS = 5 * 60 * 1000;
+const REQUESTS_PER_COMPANY_GROUP_PAGE = 20;
 const CUSTOM_VERIFICATION_MODE_STORAGE_KEY = "cluso-admin-custom-verification-modes";
 const CUSTOM_VERIFICATION_MODE_SENTINEL = "__add_custom_mode__";
 const MAX_ATTEMPT_SCREENSHOT_BYTES = 2 * 1024 * 1024;
@@ -59,6 +60,7 @@ type ServiceAttemptDraft = {
   status: "verified" | "unverified";
   verificationMode: string;
   comment: string;
+  verifierNote: string;
   screenshotFileName: string;
   screenshotMimeType: string;
   screenshotFileSize: number | null;
@@ -544,7 +546,9 @@ function RequestsPageContent() {
   const [companyFilter, setCompanyFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | RequestItem["status"]>("all");
   const [formStatusFilter, setFormStatusFilter] = useState<"all" | "submitted" | "pending">("all");
+  const [customerDeliveryFilter, setCustomerDeliveryFilter] = useState<"all" | "sent" | "not-sent">("all");
   const [expandedCompanyGroups, setExpandedCompanyGroups] = useState<Record<string, boolean>>({});
+  const [companyGroupPageByKey, setCompanyGroupPageByKey] = useState<Record<string, number>>({});
 
   const focusRequestId = searchParams.get("requestId")?.trim() ?? "";
 
@@ -597,10 +601,12 @@ function RequestsPageContent() {
       > = {};
 
       for (const service of services) {
+        const latestAttempt = service.attempts?.[service.attempts.length - 1];
         requestDraft[service.serviceId] = {
           status: service.status === "unverified" ? "unverified" : "verified",
           verificationMode: service.verificationMode || "manual",
           comment: service.comment || "",
+          verifierNote: latestAttempt?.verifierNote || "",
           screenshotFileName: "",
           screenshotMimeType: "",
           screenshotFileSize: null,
@@ -628,6 +634,7 @@ function RequestsPageContent() {
         status: "verified" as const,
         verificationMode: "manual",
         comment: "",
+        verifierNote: "",
         screenshotFileName: "",
         screenshotMimeType: "",
         screenshotFileSize: null,
@@ -782,6 +789,7 @@ function RequestsPageContent() {
         serviceStatus: draft.status,
         verificationMode: draft.verificationMode,
         comment: draft.comment,
+        verifierNote: draft.verifierNote,
         screenshotFileName: draft.screenshotFileName,
         screenshotMimeType: draft.screenshotMimeType,
         screenshotFileSize: draft.screenshotFileSize,
@@ -1019,10 +1027,19 @@ function RequestsPageContent() {
     }));
   }
 
+  function setCompanyGroupPage(groupKey: string, page: number, totalPages: number) {
+    const safePage = Math.min(Math.max(page, 1), totalPages);
+    setCompanyGroupPageByKey((prev) => ({
+      ...prev,
+      [groupKey]: safePage,
+    }));
+  }
+
   function clearFilters() {
     setCompanyFilter("");
     setStatusFilter("all");
     setFormStatusFilter("all");
+    setCustomerDeliveryFilter("all");
   }
 
   const normalizedSearch = searchText.trim().toLowerCase();
@@ -1087,9 +1104,25 @@ function RequestsPageContent() {
           return false;
         }
 
+        const hasSharedReportWithCustomer = Boolean(item.reportMetadata?.customerSharedAt);
+        if (customerDeliveryFilter === "sent" && !hasSharedReportWithCustomer) {
+          return false;
+        }
+
+        if (customerDeliveryFilter === "not-sent" && hasSharedReportWithCustomer) {
+          return false;
+        }
+
         return true;
       }),
-    [normalizedCompanyFilter, normalizedSearch, requests, statusFilter, formStatusFilter],
+    [
+      normalizedCompanyFilter,
+      normalizedSearch,
+      requests,
+      statusFilter,
+      formStatusFilter,
+      customerDeliveryFilter,
+    ],
   );
 
   const groupedRequests = useMemo<CompanyRequestGroup[]>(() => {
@@ -1153,6 +1186,15 @@ function RequestsPageContent() {
     }
 
     const targetGroup = companyGroupKey(targetRequest);
+    const targetGroupItems = requests
+      .filter((item) => companyGroupKey(item) === targetGroup)
+      .slice()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const targetIndex = targetGroupItems.findIndex((item) => item._id === focusRequestId);
+    const targetPage =
+      targetIndex >= 0
+        ? Math.floor(targetIndex / REQUESTS_PER_COMPANY_GROUP_PAGE) + 1
+        : 1;
 
     const stateUpdateTimer = window.setTimeout(() => {
       setSearchText("");
@@ -1163,6 +1205,10 @@ function RequestsPageContent() {
       setExpandedCompanyGroups((prev) => ({
         ...prev,
         [targetGroup]: true,
+      }));
+      setCompanyGroupPageByKey((prev) => ({
+        ...prev,
+        [targetGroup]: targetPage,
       }));
       setHighlightedRequestId(focusRequestId);
     }, 0);
@@ -1312,11 +1358,11 @@ function RequestsPageContent() {
       <div className="glass-card" style={{ padding: "1rem", marginBottom: "1rem", background: "#F8FAFC" }}>
         <h4 style={{ margin: "0 0 0.4rem", color: "#1E293B" }}>Service Verification Workspace</h4>
         <p style={{ margin: "0 0 0.85rem", color: "#64748B", fontSize: "0.85rem" }}>
-          Log verification attempts per service with result, mode, and comments.
+          Log verification attempts per service with result, mode, comments, and internal verifier notes.
         </p>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: "1080px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
+          <table style={{ width: "100%", minWidth: "1320px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
             <thead>
               <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Service</th>
@@ -1324,6 +1370,9 @@ function RequestsPageContent() {
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Verification Mode</th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Result</th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Comment</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>
+                  Verifier Note (Internal)
+                </th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Screenshot (Max 2MB)</th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Action</th>
               </tr>
@@ -1334,6 +1383,7 @@ function RequestsPageContent() {
                   status: service.status === "unverified" ? "unverified" : "verified",
                   verificationMode: service.verificationMode || "manual",
                   comment: service.comment || "",
+                  verifierNote: service.attempts?.[service.attempts.length - 1]?.verifierNote || "",
                   screenshotFileName: "",
                   screenshotMimeType: "",
                   screenshotFileSize: null,
@@ -1478,6 +1528,20 @@ function RequestsPageContent() {
                       />
                     </td>
                     <td style={{ padding: "0.65rem", minWidth: "260px" }}>
+                      <textarea
+                        className="input"
+                        rows={2}
+                        style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
+                        value={draft.verifierNote}
+                        placeholder="Internal note for verification method (not shown in report)"
+                        onChange={(e) =>
+                          updateServiceDraft(item._id, service.serviceId, {
+                            verifierNote: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td style={{ padding: "0.65rem", minWidth: "260px" }}>
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <input
                           type="file"
@@ -1540,13 +1604,16 @@ function RequestsPageContent() {
                 <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
               ) : (
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: "900px", borderCollapse: "collapse" }}>
+                  <table style={{ width: "100%", minWidth: "1080px", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ textAlign: "left", borderBottom: "1px solid #E2E8F0" }}>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Date/Time</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Result</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Mode</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Comment</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>
+                          Verifier Note (Internal)
+                        </th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Screenshot</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Verifier</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Manager</th>
@@ -1569,6 +1636,9 @@ function RequestsPageContent() {
                             </td>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {attempt.comment || "-"}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.verifierNote || "-"}
                             </td>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {attempt.screenshotData ? (
@@ -1878,6 +1948,19 @@ function RequestsPageContent() {
   function renderCompanyGroup(group: CompanyRequestGroup, companyIndex: number) {
     const isExpanded = Boolean(expandedCompanyGroups[group.key]);
     const isCollapsed = !isExpanded;
+    const totalPages = Math.max(
+      1,
+      Math.ceil(group.items.length / REQUESTS_PER_COMPANY_GROUP_PAGE),
+    );
+    const currentPage = Math.min(
+      Math.max(companyGroupPageByKey[group.key] ?? 1, 1),
+      totalPages,
+    );
+    const pageStart = (currentPage - 1) * REQUESTS_PER_COMPANY_GROUP_PAGE;
+    const pageEndExclusive = pageStart + REQUESTS_PER_COMPANY_GROUP_PAGE;
+    const pagedItems = group.items.slice(pageStart, pageEndExclusive);
+    const firstItemNumber = group.items.length === 0 ? 0 : pageStart + 1;
+    const lastItemNumber = Math.min(pageEndExclusive, group.items.length);
 
     return (
       <section key={group.key} className="glass-card" style={{ padding: "1.25rem", marginTop: companyIndex === 0 ? 0 : "1.5rem", borderRadius: "16px", boxShadow: "0 4px 20px rgba(0,0,0,0.03)" }}>
@@ -1932,7 +2015,7 @@ function RequestsPageContent() {
                 </tr>
               </thead>
               <tbody>
-                {group.items.map((item, index) => {
+                {pagedItems.map((item, index) => {
                   const formSubmitted = item.candidateFormStatus === "submitted";
                   const canViewStatus = canVerifyWorkflow;
                   const canVerifyNow =
@@ -1953,17 +2036,25 @@ function RequestsPageContent() {
                     item.verifierNames && item.verifierNames.length > 0
                       ? item.verifierNames.join(", ")
                       : "No verifier assigned";
+                  const baseRowBackground = hasSharedReportWithCustomer
+                    ? index % 2 === 1
+                      ? "#ECFDF3"
+                      : "#F0FDF4"
+                    : index % 2 === 1
+                      ? "#F8FAFC"
+                      : "#FFFFFF";
+                  const hoverRowBackground = hasSharedReportWithCustomer ? "#DCFCE7" : "#F1F5F9";
 
                   return (
                     <tr
                       key={`${group.key}-${item._id}`}
                       id={`request-${item._id}`}
                       style={{
-                        background: highlightedRequestId === item._id ? "#EFF6FF" : index % 2 === 1 ? "#F8FAFC" : "#FFFFFF",
+                        background: highlightedRequestId === item._id ? "#EFF6FF" : baseRowBackground,
                         transition: "background-color 0.2s ease"
                       }}
-                      onMouseEnter={(e) => { if (highlightedRequestId !== item._id) e.currentTarget.style.background = "#F1F5F9"; }}
-                      onMouseLeave={(e) => { if (highlightedRequestId !== item._id) e.currentTarget.style.background = index % 2 === 1 ? "#F8FAFC" : "#FFFFFF"; }}
+                      onMouseEnter={(e) => { if (highlightedRequestId !== item._id) e.currentTarget.style.background = hoverRowBackground; }}
+                      onMouseLeave={(e) => { if (highlightedRequestId !== item._id) e.currentTarget.style.background = baseRowBackground; }}
                     >
                       <td style={{ padding: "1rem", fontWeight: 600, color: "#1E293B", borderBottom: "1px solid #F1F5F9" }}>
                         {item.candidateName}
@@ -2126,6 +2217,47 @@ function RequestsPageContent() {
                 })}
               </tbody>
             </table>
+
+            <div
+              style={{
+                marginTop: "0.75rem",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: "0.65rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ color: "#64748B", fontSize: "0.85rem" }}>
+                Showing {firstItemNumber}-{lastItemNumber} of {group.items.length} requests
+              </span>
+
+              {totalPages > 1 ? (
+                <div style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={currentPage <= 1}
+                    onClick={() => setCompanyGroupPage(group.key, currentPage - 1, totalPages)}
+                    style={{ padding: "0.28rem 0.62rem", fontSize: "0.82rem" }}
+                  >
+                    Prev
+                  </button>
+                  <span style={{ color: "#334155", fontSize: "0.85rem", fontWeight: 600 }}>
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={currentPage >= totalPages}
+                    onClick={() => setCompanyGroupPage(group.key, currentPage + 1, totalPages)}
+                    style={{ padding: "0.28rem 0.62rem", fontSize: "0.82rem" }}
+                  >
+                    Next
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </section>
@@ -2252,6 +2384,22 @@ function RequestsPageContent() {
                   <option value="pending">Waiting on Candidate</option>
                 </select>
               </div>
+
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                <label style={{ fontWeight: 600, color: "#334155", fontSize: "0.85rem" }}>Customer Delivery</label>
+                <select
+                  className="input"
+                  style={{ borderRadius: "8px" }}
+                  value={customerDeliveryFilter}
+                  onChange={(e) =>
+                    setCustomerDeliveryFilter(e.target.value as "all" | "sent" | "not-sent")
+                  }
+                >
+                  <option value="all">All Requests</option>
+                  <option value="sent">Sent To Customer</option>
+                  <option value="not-sent">Not Sent To Customer</option>
+                </select>
+              </div>
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -2301,9 +2449,10 @@ function RequestsPageContent() {
           <div
             className="glass-card"
             style={{
-              width: "70vw",
-              maxWidth: "calc(100vw - 2rem)",
-              maxHeight: "86vh",
+              width: "min(1640px, calc(100vw - 1rem))",
+              maxWidth: "calc(100vw - 1rem)",
+              height: "94vh",
+              maxHeight: "94vh",
               overflowY: "auto",
               padding: "1rem",
               background: "#FFFFFF",

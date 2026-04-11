@@ -48,6 +48,23 @@ function asString(value: unknown, fallback = "") {
   return value;
 }
 
+function normalizeGstRate(value: unknown, fallback = 18) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  if (numeric < 0) {
+    return 0;
+  }
+
+  if (numeric > 100) {
+    return 100;
+  }
+
+  return Math.round(numeric * 100) / 100;
+}
+
 function normalizeAddress(value: unknown): CompanyPartnerProfile["companyInformation"]["address"] {
   const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
@@ -138,6 +155,8 @@ function normalizePartnerProfile(value: unknown): CompanyPartnerProfile {
     invoicingInformation: {
       billingSameAsCompany: Boolean(invoicingInformation.billingSameAsCompany),
       invoiceEmail: asString(invoicingInformation.invoiceEmail),
+      gstEnabled: Boolean(invoicingInformation.gstEnabled),
+      gstRate: normalizeGstRate(invoicingInformation.gstRate, 18),
       address: normalizeAddress(invoicingInformation.address),
     },
     primaryContactInformation: {
@@ -162,12 +181,70 @@ function normalizePartnerProfile(value: unknown): CompanyPartnerProfile {
 
 export async function GET(req: NextRequest) {
   const auth = await getAdminAuthFromRequest(req);
-  if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
+  if (
+    !auth ||
+    (auth.role !== "admin" &&
+      auth.role !== "superadmin" &&
+      auth.role !== "manager" &&
+      auth.role !== "verifier")
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   await connectMongo();
-  const items = await User.find({ role: "customer" }).sort({ createdAt: -1 }).lean();
+  let customerFilter: Record<string, unknown> = { role: "customer" };
+
+  if (auth.role === "verifier") {
+    const verifier = await User.findOne({ _id: auth.userId, role: "verifier" })
+      .select("assignedCompanies")
+      .lean();
+    if (!verifier) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const assignedCompanies = [...new Set((verifier.assignedCompanies ?? []).map((id) => String(id)))];
+    if (assignedCompanies.length === 0) {
+      return NextResponse.json({ items: [] });
+    }
+
+    customerFilter = {
+      role: "customer",
+      _id: { $in: assignedCompanies },
+    };
+  }
+
+  if (auth.role === "manager") {
+    const manager = await User.findOne({ _id: auth.userId, role: "manager" })
+      .select("assignedCompanies")
+      .lean();
+    if (!manager) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const managedVerifiers = await User.find({ role: "verifier", manager: auth.userId })
+      .select("assignedCompanies")
+      .lean();
+
+    const scopedCompanySet = new Set<string>(
+      (manager.assignedCompanies ?? []).map((id) => String(id)),
+    );
+    for (const verifier of managedVerifiers) {
+      for (const companyId of verifier.assignedCompanies ?? []) {
+        scopedCompanySet.add(String(companyId));
+      }
+    }
+
+    if (scopedCompanySet.size === 0) {
+      return NextResponse.json({ items: [] });
+    }
+
+    customerFilter = {
+      role: "customer",
+      _id: { $in: [...scopedCompanySet] },
+    };
+  }
+
+  const items = await User.find(customerFilter).sort({ createdAt: -1 }).lean();
 
   const customerIds = items.map((i) => i._id);
 

@@ -21,6 +21,7 @@ export type ServiceVerificationAttempt = {
   status: Exclude<ServiceVerificationStatus, "pending">;
   verificationMode: string;
   comment: string;
+  verifierNote?: string;
   attemptedAt: string;
   verifierId?: string | null;
   verifierName?: string;
@@ -170,6 +171,8 @@ export type CompanyPartnerProfile = {
     billingSameAsCompany: boolean;
     invoiceEmail: string;
     address: CompanyProfileAddress;
+    gstEnabled?: boolean;
+    gstRate?: number;
   };
   primaryContactInformation: {
     firstName: string;
@@ -208,7 +211,9 @@ export type InvoicePartyDetails = {
 export type InvoiceLineItem = {
   serviceId: string;
   serviceName: string;
+  usageCount: number;
   price: number;
+  lineTotal: number;
   currency: SupportedCurrency;
 };
 
@@ -220,6 +225,9 @@ export type InvoiceCurrencyTotal = {
 export type InvoiceRecord = {
   id: string;
   invoiceNumber: string;
+  billingMonth: string;
+  gstEnabled: boolean;
+  gstRate: number;
   customerId: string;
   customerName: string;
   customerEmail: string;

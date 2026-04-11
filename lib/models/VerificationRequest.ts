@@ -132,6 +132,7 @@ const VerificationRequestSchema = new Schema(
             },
             verificationMode: { type: String, default: "" },
             comment: { type: String, default: "" },
+            verifierNote: { type: String, default: "" },
             screenshotFileName: { type: String, default: "" },
             screenshotMimeType: { type: String, default: "" },
             screenshotFileSize: { type: Number, default: null },
@@ -203,6 +204,7 @@ if (
     !models.VerificationRequest.schema.path("enterpriseDecisionLockedAt") ||
     !models.VerificationRequest.schema.path("serviceVerifications") ||
     !models.VerificationRequest.schema.path("serviceVerifications.attempts.screenshotData") ||
+    !models.VerificationRequest.schema.path("serviceVerifications.attempts.verifierNote") ||
     !models.VerificationRequest.schema.path("serviceVerifications.attempts.attemptedAt") ||
     !models.VerificationRequest.schema.path("reportMetadata") ||
     !models.VerificationRequest.schema.path("reportMetadata.customerSharedAt") ||
