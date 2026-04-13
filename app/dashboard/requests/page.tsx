@@ -540,6 +540,8 @@ function RequestsPageContent() {
     me?.role === "verifier";
   const canGenerateReport =
     me?.role === "admin" || me?.role === "superadmin" || me?.role === "manager";
+  const canDeleteVerificationLogs =
+    me?.role === "admin" || me?.role === "superadmin" || me?.role === "manager";
   const [searchText, setSearchText] = useState("");
   const [message, setMessage] = useState("");
   const [highlightedRequestId, setHighlightedRequestId] = useState("");
@@ -551,6 +553,7 @@ function RequestsPageContent() {
   const [showCustomModeInputByService, setShowCustomModeInputByService] = useState<Record<string, boolean>>({});
   const [customModeInputByService, setCustomModeInputByService] = useState<Record<string, string>>({});
   const [verifyingServiceKey, setVerifyingServiceKey] = useState("");
+  const [deletingAttemptKey, setDeletingAttemptKey] = useState("");
   const [reportingRequestId, setReportingRequestId] = useState("");
   const [sharingReportRequestId, setSharingReportRequestId] = useState("");
   const [savingReportDraftRequestId, setSavingReportDraftRequestId] = useState("");
@@ -824,6 +827,50 @@ function RequestsPageContent() {
 
     setMessage(data.message ?? "Service verification attempt logged.");
     clearAttemptScreenshot(requestId, serviceId);
+    await loadRequests();
+  }
+
+  async function deleteServiceAttemptLog(
+    requestId: string,
+    serviceId: string,
+    attemptIndex: number,
+  ) {
+    if (!canDeleteVerificationLogs) {
+      setMessage("Only manager or admin roles can delete verification logs.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete this verification log entry? This action cannot be undone.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setMessage("");
+    const attemptKey = `${requestId}:${serviceId}:${attemptIndex}`;
+    setDeletingAttemptKey(attemptKey);
+
+    const res = await fetch("/api/requests", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "delete-service-attempt-log",
+        requestId,
+        serviceId,
+        attemptIndex,
+      }),
+    });
+
+    const data = (await res.json()) as { message?: string; error?: string };
+    setDeletingAttemptKey("");
+
+    if (!res.ok) {
+      setMessage(data.error ?? "Could not delete verification attempt log.");
+      return;
+    }
+
+    setMessage(data.message ?? "Verification attempt log deleted.");
     await loadRequests();
   }
 
@@ -1655,14 +1702,21 @@ function RequestsPageContent() {
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Screenshot</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Verifier</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Manager</th>
+                        {canDeleteVerificationLogs ? (
+                          <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Action</th>
+                        ) : null}
                       </tr>
                     </thead>
                     <tbody>
                       {service.attempts
                         .slice()
                         .reverse()
-                        .map((attempt, attemptIndex) => (
-                          <tr key={`${item._id}-${service.serviceId}-attempt-${attemptIndex}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                        .map((attempt, attemptIndex) => {
+                          const originalAttemptIndex = service.attempts.length - 1 - attemptIndex;
+                          const attemptKey = `${item._id}:${service.serviceId}:${originalAttemptIndex}`;
+
+                          return (
+                          <tr key={`${item._id}-${service.serviceId}-attempt-${originalAttemptIndex}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {new Date(attempt.attemptedAt).toLocaleString()}
                             </td>
@@ -1693,7 +1747,7 @@ function RequestsPageContent() {
                                   </a>
                                   <a
                                     href={attempt.screenshotData}
-                                    download={attempt.screenshotFileName || `attempt-screenshot-${attemptIndex + 1}`}
+                                    download={attempt.screenshotFileName || `attempt-screenshot-${originalAttemptIndex + 1}`}
                                     style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
                                     onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
                                     onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
@@ -1711,8 +1765,34 @@ function RequestsPageContent() {
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {attempt.managerName || "-"}
                             </td>
+                            {canDeleteVerificationLogs ? (
+                              <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  style={{
+                                    padding: "0.25rem 0.55rem",
+                                    fontSize: "0.74rem",
+                                    color: "#B91C1C",
+                                    borderColor: "#FCA5A5",
+                                    background: "#FEF2F2",
+                                  }}
+                                  disabled={deletingAttemptKey === attemptKey}
+                                  onClick={() =>
+                                    deleteServiceAttemptLog(
+                                      item._id,
+                                      service.serviceId,
+                                      originalAttemptIndex,
+                                    )
+                                  }
+                                >
+                                  {deletingAttemptKey === attemptKey ? "Deleting..." : "Delete"}
+                                </button>
+                              </td>
+                            ) : null}
                           </tr>
-                        ))}
+                        );
+                        })}
                     </tbody>
                   </table>
                 </div>

@@ -227,7 +227,8 @@ function normalizeReportDataForGeneration(
     },
     status: parsed.status.trim() || fallback.status,
     createdAt: parsed.createdAt.trim() || fallback.createdAt || nowIso,
-    services: parsed.services.length > 0 ? parsed.services : fallbackServices,
+    // Always use latest verification snapshot when regenerating report.
+    services: fallbackServices,
   };
 }
 

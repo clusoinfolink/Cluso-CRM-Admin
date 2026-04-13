@@ -26,7 +26,8 @@ const schema = z.object({
     .default([]),
 });
 
-const updateSchema = z.object({
+const updateServicesSchema = z.object({
+  action: z.literal("update-services"),
   customerId: z.string().min(1),
   selectedServices: z
     .array(
@@ -39,6 +40,17 @@ const updateSchema = z.object({
     .optional()
     .default([]),
 });
+
+const updateCompanyAccessSchema = z.object({
+  action: z.literal("set-company-access"),
+  customerId: z.string().min(1),
+  companyAccessStatus: z.enum(["active", "inactive"]),
+});
+
+const updateSchema = z.discriminatedUnion("action", [
+  updateServicesSchema,
+  updateCompanyAccessSchema,
+]);
 
 function asString(value: unknown, fallback = "") {
   if (typeof value !== "string") {
@@ -295,6 +307,7 @@ export async function GET(req: NextRequest) {
         id: idStr,
         name: item.name,
         email: item.email,
+        companyAccessStatus: item.companyAccessStatus === "inactive" ? "inactive" : "active",
         selectedServices: (item.selectedServices ?? []).map((service) => ({
           serviceId: String(service.serviceId),
           serviceName: service.serviceName,
@@ -366,6 +379,7 @@ export async function POST(req: NextRequest) {
     role: "customer",
     parentCustomer: null,
     selectedServices,
+    companyAccessStatus: "active",
   });
 
   return NextResponse.json({ message: "Enterprise login issued successfully." }, { status: 201 });
@@ -378,16 +392,65 @@ export async function PATCH(req: NextRequest) {
   }
 
   const body = await req.json();
-  const parsed = updateSchema.safeParse(body);
+  const normalizedBody =
+    body &&
+    typeof body === "object" &&
+    !Array.isArray(body) &&
+    !Object.prototype.hasOwnProperty.call(body, "action")
+      ? {
+          ...(body as Record<string, unknown>),
+          action: "update-services",
+        }
+      : body;
+
+  const parsed = updateSchema.safeParse(normalizedBody);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid input." }, { status: 400 });
   }
 
   await connectMongo();
 
-  const customer = await User.findOne({ _id: parsed.data.customerId, role: "customer" }).lean();
+  const customer = await User.findOne({ _id: parsed.data.customerId, role: "customer" })
+    .select("_id name companyAccessStatus")
+    .lean();
   if (!customer) {
     return NextResponse.json({ error: "Enterprise company not found." }, { status: 404 });
+  }
+
+  if (parsed.data.action === "set-company-access") {
+    const currentStatus = customer.companyAccessStatus === "inactive" ? "inactive" : "active";
+    const nextStatus = parsed.data.companyAccessStatus;
+
+    if (currentStatus === nextStatus) {
+      return NextResponse.json({
+        message:
+          nextStatus === "inactive"
+            ? "Company access is already deactivated."
+            : "Company access is already active.",
+      });
+    }
+
+    await User.updateMany(
+      {
+        $or: [
+          { _id: parsed.data.customerId, role: "customer" },
+          {
+            parentCustomer: parsed.data.customerId,
+            role: { $in: ["delegate", "delegate_user"] },
+          },
+        ],
+      },
+      {
+        $set: { companyAccessStatus: nextStatus },
+      },
+    );
+
+    return NextResponse.json({
+      message:
+        nextStatus === "inactive"
+          ? "Company and linked delegate accounts were deactivated for request access."
+          : "Company and linked delegate accounts were reactivated for request access.",
+    });
   }
 
   const selectedServiceIds = parsed.data.selectedServices.map((item) => item.serviceId);

@@ -24,6 +24,8 @@ type MonthlySummaryRow = {
   srNo: number;
   requestedAt: string;
   candidateName: string;
+  userName: string;
+  verifierName: string;
   requestStatus: string;
   serviceName: string;
   currency: string;
@@ -64,6 +66,8 @@ function createEmptyPartyDetails(): InvoicePartyDetails {
     loginEmail: "",
     gstin: "",
     cinRegistrationNumber: "",
+    sacCode: "",
+    ltuCode: "",
     address: "",
     invoiceEmail: "",
     billingSameAsCompany: true,
@@ -106,6 +110,8 @@ function buildEnterpriseDraft(company: CompanyItem): InvoicePartyDetails {
     loginEmail: company.email,
     gstin: profile.companyInformation.gstin,
     cinRegistrationNumber: profile.companyInformation.cinRegistrationNumber,
+    sacCode: profile.companyInformation.sacCode?.trim() || "",
+    ltuCode: profile.companyInformation.ltuCode?.trim() || "",
     address: companyAddress,
     invoiceEmail: profile.invoicingInformation.invoiceEmail.trim() || company.email,
     billingSameAsCompany,
@@ -193,6 +199,16 @@ function formatBillingPeriod(value: string) {
   };
 
   return `${parsedStart.toLocaleDateString("en-IN", formatOptions)} to ${parsedEnd.toLocaleDateString("en-IN", formatOptions)}`;
+}
+
+function formatInvoiceTotals(totals: InvoiceRecord["totalsByCurrency"]) {
+  if (!Array.isArray(totals) || totals.length === 0) {
+    return "-";
+  }
+
+  return totals
+    .map((entry) => formatMoney(entry.subtotal, entry.currency))
+    .join(" | ");
 }
 
 function clampGstRate(value: number) {
@@ -297,6 +313,9 @@ export default function InvoicesPage() {
   const [savingFields, setSavingFields] = useState(false);
   const [savingGstDefaults, setSavingGstDefaults] = useState(false);
   const [sendingInvoiceId, setSendingInvoiceId] = useState("");
+  const [historyCompanyFilter, setHistoryCompanyFilter] = useState("all");
+  const [historyMonthFilter, setHistoryMonthFilter] = useState("all");
+  const [historySearchText, setHistorySearchText] = useState("");
   const [loadingMonthlySummary, setLoadingMonthlySummary] = useState(false);
   const [monthlySummary, setMonthlySummary] = useState<MonthlySummaryData | null>(null);
   const monthlySummaryPrintRef = useRef<HTMLDivElement | null>(null);
@@ -330,6 +349,74 @@ export default function InvoicesPage() {
 
     return [...months].sort((first, second) => second.localeCompare(first));
   }, [companyInvoices]);
+
+  const historyCompanyOptions = useMemo(
+    () =>
+      [...companies].sort((first, second) =>
+        first.name.localeCompare(second.name),
+      ),
+    [companies],
+  );
+
+  const historyMonthOptions = useMemo(() => {
+    const months = new Set<string>();
+    for (const invoice of invoices) {
+      if (invoice.billingMonth) {
+        months.add(invoice.billingMonth);
+      }
+    }
+
+    return [...months].sort((first, second) => second.localeCompare(first));
+  }, [invoices]);
+
+  const normalizedHistorySearch = historySearchText.trim().toLowerCase();
+
+  const historyInvoices = useMemo(
+    () =>
+      invoices
+        .filter((invoice) => {
+          if (
+            historyCompanyFilter !== "all" &&
+            invoice.customerId !== historyCompanyFilter
+          ) {
+            return false;
+          }
+
+          if (
+            historyMonthFilter !== "all" &&
+            invoice.billingMonth !== historyMonthFilter
+          ) {
+            return false;
+          }
+
+          if (!normalizedHistorySearch) {
+            return true;
+          }
+
+          const searchableText = [
+            invoice.invoiceNumber,
+            invoice.customerName,
+            invoice.customerEmail,
+            invoice.billingMonth,
+            invoice.generatedByName,
+          ]
+            .join(" ")
+            .toLowerCase();
+
+          return searchableText.includes(normalizedHistorySearch);
+        })
+        .sort(
+          (first, second) =>
+            new Date(second.createdAt).getTime() -
+            new Date(first.createdAt).getTime(),
+        ),
+    [
+      invoices,
+      historyCompanyFilter,
+      historyMonthFilter,
+      normalizedHistorySearch,
+    ],
+  );
 
   const visibleCompanyInvoices = useMemo(
     () =>
@@ -921,6 +1008,19 @@ export default function InvoicesPage() {
     }
   }
 
+  function openInvoiceInWorkspace(invoice: InvoiceRecord) {
+    setSelectedCompanyId(invoice.customerId);
+    setSelectedBillingMonth(invoice.billingMonth || getCurrentBillingMonth());
+    setSelectedInvoiceId(invoice.id);
+    setEnterpriseDraft(invoice.enterpriseDetails);
+    setClusoDraft(invoice.clusoDetails);
+    setGstEnabled(invoice.gstEnabled);
+    setGstRate(invoice.gstRate);
+    setMessage(
+      `Loaded ${invoice.invoiceNumber} for ${invoice.customerName} (${formatBillingMonth(invoice.billingMonth)}).`,
+    );
+  }
+
   function printMonthlySummary() {
     if (!monthlySummaryPrintRef.current) {
       setMessage("No month summary content available to print.");
@@ -1099,6 +1199,175 @@ export default function InvoicesPage() {
                         >
                           {isSelected ? "Selected" : "Open"}
                         </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="glass-card" style={{ padding: "1rem", marginBottom: "1rem" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            gap: "0.75rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.45rem", color: "#1E293B" }}>
+              <FileText size={19} color="#4A90E2" />
+              Invoice History Explorer
+            </h2>
+            <p style={{ margin: "0.35rem 0 0", color: "#64748B", fontSize: "0.85rem" }}>
+              Access all previous invoices across every company and billing month.
+            </p>
+          </div>
+
+          <div style={{ color: "#475569", fontSize: "0.85rem", fontWeight: 600 }}>
+            Showing {historyInvoices.length} of {invoices.length} invoice(s)
+          </div>
+        </div>
+
+        <div
+          style={{
+            marginTop: "0.8rem",
+            display: "grid",
+            gap: "0.7rem",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          }}
+        >
+          <div>
+            <label className="label" htmlFor="history-company-filter" style={{ marginBottom: "0.25rem" }}>
+              Company
+            </label>
+            <select
+              id="history-company-filter"
+              className="input"
+              value={historyCompanyFilter}
+              onChange={(event) => setHistoryCompanyFilter(event.target.value)}
+            >
+              <option value="all">All companies</option>
+              {historyCompanyOptions.map((company) => (
+                <option key={`history-company-${company.id}`} value={company.id}>
+                  {company.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="history-month-filter" style={{ marginBottom: "0.25rem" }}>
+              Billing Month
+            </label>
+            <select
+              id="history-month-filter"
+              className="input"
+              value={historyMonthFilter}
+              onChange={(event) => setHistoryMonthFilter(event.target.value)}
+            >
+              <option value="all">All months</option>
+              {historyMonthOptions.map((monthValue) => (
+                <option key={`history-month-${monthValue}`} value={monthValue}>
+                  {formatBillingMonth(monthValue)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="label" htmlFor="history-search" style={{ marginBottom: "0.25rem" }}>
+              Search
+            </label>
+            <input
+              id="history-search"
+              className="input"
+              placeholder="Invoice number, company, email, month"
+              value={historySearchText}
+              onChange={(event) => setHistorySearchText(event.target.value)}
+            />
+          </div>
+        </div>
+
+        {historyInvoices.length === 0 ? (
+          <p style={{ margin: "0.8rem 0 0", color: "#64748B" }}>
+            No invoices found for the current filters.
+          </p>
+        ) : (
+          <div style={{ overflowX: "auto", marginTop: "0.8rem" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1160px" }}>
+              <thead>
+                <tr style={{ textAlign: "left", borderBottom: "1px solid #E2E8F0" }}>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Invoice</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Company</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Billing Month</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Generated</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Totals</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Generated By</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyInvoices.map((invoice) => {
+                  const isActive = invoice.id === selectedInvoiceId;
+                  return (
+                    <tr key={`history-invoice-${invoice.id}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                      <td style={{ padding: "0.55rem", color: "#1E293B", fontWeight: 700 }}>
+                        {invoice.invoiceNumber}
+                      </td>
+                      <td style={{ padding: "0.55rem", color: "#334155" }}>
+                        <div>{invoice.customerName}</div>
+                        <div style={{ color: "#64748B", fontSize: "0.8rem" }}>{invoice.customerEmail}</div>
+                      </td>
+                      <td style={{ padding: "0.55rem", color: "#334155" }}>
+                        <div>{formatBillingMonth(invoice.billingMonth)}</div>
+                        <div style={{ color: "#64748B", fontSize: "0.8rem" }}>
+                          {formatBillingPeriod(invoice.billingMonth)}
+                        </div>
+                      </td>
+                      <td style={{ padding: "0.55rem", color: "#334155" }}>{formatDateTime(invoice.createdAt)}</td>
+                      <td style={{ padding: "0.55rem", color: "#1E293B", fontWeight: 600 }}>
+                        {formatInvoiceTotals(invoice.totalsByCurrency)}
+                      </td>
+                      <td style={{ padding: "0.55rem", color: "#334155" }}>
+                        {invoice.generatedByName || "-"}
+                      </td>
+                      <td style={{ padding: "0.55rem" }}>
+                        <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{
+                              borderColor: isActive ? "#93C5FD" : undefined,
+                              color: isActive ? "#1D4ED8" : undefined,
+                            }}
+                            onClick={() => openInvoiceInWorkspace(invoice)}
+                          >
+                            {isActive ? "Opened" : "Open"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => downloadInvoicePdf(invoice.id)}
+                          >
+                            Download PDF
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => void sendInvoiceToCustomer(invoice.id)}
+                            disabled={Boolean(sendingInvoiceId)}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+                          >
+                            <Send size={14} />
+                            {sendingInvoiceId === invoice.id ? "Sending..." : "Send"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1310,6 +1579,34 @@ export default function InvoicesPage() {
                 onChange={(event) =>
                   setClusoDraft((prev) =>
                     updatePartyDraft(prev, "cinRegistrationNumber", event.target.value),
+                  )
+                }
+              />
+            </div>
+
+            <div>
+              <label className="label" htmlFor="cluso-sac-code">SAC Code</label>
+              <input
+                id="cluso-sac-code"
+                className="input"
+                value={clusoDraft.sacCode}
+                onChange={(event) =>
+                  setClusoDraft((prev) =>
+                    updatePartyDraft(prev, "sacCode", event.target.value),
+                  )
+                }
+              />
+            </div>
+
+            <div>
+              <label className="label" htmlFor="cluso-ltu-code">LTU Code</label>
+              <input
+                id="cluso-ltu-code"
+                className="input"
+                value={clusoDraft.ltuCode}
+                onChange={(event) =>
+                  setClusoDraft((prev) =>
+                    updatePartyDraft(prev, "ltuCode", event.target.value),
                   )
                 }
               />
@@ -1920,6 +2217,8 @@ export default function InvoicesPage() {
                     <div><strong>Login Email:</strong> {monthlySummary.clusoDetails.loginEmail || "-"}</div>
                     <div><strong>GSTIN:</strong> {monthlySummary.clusoDetails.gstin || "-"}</div>
                     <div><strong>CIN / Registration:</strong> {monthlySummary.clusoDetails.cinRegistrationNumber || "-"}</div>
+                    <div><strong>SAC Code:</strong> {monthlySummary.clusoDetails.sacCode || "-"}</div>
+                    <div><strong>LTU Code:</strong> {monthlySummary.clusoDetails.ltuCode || "-"}</div>
                     <div><strong>Address:</strong> {monthlySummary.clusoDetails.address || "-"}</div>
                     <div><strong>Invoice Email:</strong> {monthlySummary.clusoDetails.invoiceEmail || "-"}</div>
                     <div>
@@ -1941,14 +2240,16 @@ export default function InvoicesPage() {
                     </p>
                   ) : (
                     <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", minWidth: "1120px", borderCollapse: "collapse", fontSize: "0.92rem" }}>
+                      <table style={{ width: "100%", minWidth: "1360px", borderCollapse: "collapse", fontSize: "0.92rem" }}>
                         <thead>
                           <tr style={{ borderTop: "1px solid #232323", borderBottom: "1px solid #666666", textAlign: "left" }}>
                             <th style={{ padding: "0.35rem 0.2rem", width: "6%" }}>Sr No.</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "14%" }}>Requested Date</th>
-                            <th style={{ padding: "0.35rem 0.2rem", width: "16%" }}>Name of Candidate</th>
+                            <th style={{ padding: "0.35rem 0.2rem", width: "14%" }}>Name of Candidate</th>
+                            <th style={{ padding: "0.35rem 0.2rem", width: "14%" }}>User Name</th>
+                            <th style={{ padding: "0.35rem 0.2rem", width: "12%" }}>Verifier Name</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "10%" }} title="Only requests with generated and customer-shared reports are included.">Status</th>
-                            <th style={{ padding: "0.35rem 0.2rem", width: "22%" }}>Service</th>
+                            <th style={{ padding: "0.35rem 0.2rem", width: "16%" }}>Service</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "8%" }}>Currency</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "9%" }}>Price (Excl. GST)</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "7%" }}>
@@ -1965,6 +2266,8 @@ export default function InvoicesPage() {
                               <td style={{ padding: "0.35rem 0.2rem" }}>{row.srNo}</td>
                               <td style={{ padding: "0.35rem 0.2rem" }}>{formatSummaryDate(row.requestedAt)}</td>
                               <td style={{ padding: "0.35rem 0.2rem" }}>{row.candidateName}</td>
+                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.userName || "-"}</td>
+                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.verifierName || "-"}</td>
                               <td style={{ padding: "0.35rem 0.2rem", textTransform: "capitalize" }}>{row.requestStatus}</td>
                               <td style={{ padding: "0.35rem 0.2rem" }}>{row.serviceName}</td>
                               <td style={{ padding: "0.35rem 0.2rem" }}>{row.currency}</td>
@@ -2130,6 +2433,8 @@ export default function InvoicesPage() {
                     <div><strong>Login Email:</strong> {selectedInvoice.clusoDetails.loginEmail || "-"}</div>
                     <div><strong>GSTIN:</strong> {selectedInvoice.clusoDetails.gstin || "-"}</div>
                     <div><strong>CIN / Registration:</strong> {selectedInvoice.clusoDetails.cinRegistrationNumber || "-"}</div>
+                    <div><strong>SAC Code:</strong> {selectedInvoice.clusoDetails.sacCode || "-"}</div>
+                    <div><strong>LTU Code:</strong> {selectedInvoice.clusoDetails.ltuCode || "-"}</div>
                     <div><strong>Address:</strong> {selectedInvoice.clusoDetails.address || "-"}</div>
                     <div><strong>Invoice Email:</strong> {selectedInvoice.clusoDetails.invoiceEmail || "-"}</div>
                     <div>

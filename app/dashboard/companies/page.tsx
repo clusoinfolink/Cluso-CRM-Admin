@@ -45,6 +45,7 @@ export default function CompaniesPage() {
   const [manageCompanyServices, setManageCompanyServices] = useState<CompanyServiceSelection[]>([]);
   const [viewCompanyId, setViewCompanyId] = useState("");
   const [profileModalCompanyId, setProfileModalCompanyId] = useState("");
+  const [accessActionCompanyId, setAccessActionCompanyId] = useState("");
 
   const [issueServiceSearch, setIssueServiceSearch] = useState("");
   const [manageServiceSearch, setManageServiceSearch] = useState("");
@@ -323,6 +324,7 @@ export default function CompaniesPage() {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        action: "update-services",
         customerId: manageCompanyId,
         selectedServices: manageCompanyServices,
       }),
@@ -336,6 +338,32 @@ export default function CompaniesPage() {
 
     setMessage(data.message ?? "Company services updated.");
     setSaveServicesNotice("Successfully saved");
+    await loadData();
+  }
+
+  async function setCompanyAccessStatus(companyId: string, nextStatus: "active" | "inactive") {
+    setMessage("");
+    setAccessActionCompanyId(companyId);
+
+    const res = await fetch("/api/customers", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "set-company-access",
+        customerId: companyId,
+        companyAccessStatus: nextStatus,
+      }),
+    });
+
+    const data = (await res.json()) as { message?: string; error?: string };
+    if (!res.ok) {
+      setMessage(data.error ?? "Could not update company access status.");
+      setAccessActionCompanyId("");
+      return;
+    }
+
+    setMessage(data.message ?? "Company access status updated.");
+    setAccessActionCompanyId("");
     await loadData();
   }
 
@@ -813,6 +841,7 @@ export default function CompaniesPage() {
                 <th style={{ padding: "0.8rem", fontWeight: 600 }}>Latest Request Date</th>
                 <th style={{ padding: "0.8rem", fontWeight: 600 }}>Profile Status</th>
                 <th style={{ padding: "0.8rem", fontWeight: 600 }}>Assigned Verifiers</th>
+                <th style={{ padding: "0.8rem", fontWeight: 600 }}>Portal Access</th>
               </tr>
             </thead>
             <tbody>
@@ -880,11 +909,64 @@ export default function CompaniesPage() {
                       <span style={{ color: "#94A3B8", fontStyle: "italic", fontSize: "0.85rem" }}>Unassigned</span>
                     )}
                   </td>
+                  <td style={{ padding: "0.8rem" }}>
+                    <div style={{ display: "grid", gap: "0.45rem", justifyItems: "start" }}>
+                      <span
+                        style={{
+                          padding: "0.22rem 0.6rem",
+                          borderRadius: "999px",
+                          border: company.companyAccessStatus === "inactive" ? "1px solid #FECACA" : "1px solid #BBF7D0",
+                          background: company.companyAccessStatus === "inactive" ? "#FEF2F2" : "#F0FDF4",
+                          color: company.companyAccessStatus === "inactive" ? "#B91C1C" : "#166534",
+                          fontWeight: 700,
+                          fontSize: "0.75rem",
+                        }}
+                      >
+                        {company.companyAccessStatus === "inactive" ? "Deactivated" : "Active"}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={accessActionCompanyId === company.id}
+                        onClick={() => {
+                          const nextStatus = company.companyAccessStatus === "inactive" ? "active" : "inactive";
+                          const confirmed =
+                            nextStatus === "inactive"
+                              ? window.confirm(
+                                  `Deactivate ${company.name}? Delegates and users will still log in but only Invoices and Settings will remain accessible.`,
+                                )
+                              : true;
+
+                          if (!confirmed) {
+                            return;
+                          }
+
+                          void setCompanyAccessStatus(company.id, nextStatus);
+                        }}
+                        style={{
+                          padding: "0.25rem 0.65rem",
+                          borderRadius: "7px",
+                          border: "1px solid #CBD5E1",
+                          background: "#FFFFFF",
+                          color: "#1E293B",
+                          fontSize: "0.8rem",
+                          fontWeight: 600,
+                          cursor: accessActionCompanyId === company.id ? "not-allowed" : "pointer",
+                          opacity: accessActionCompanyId === company.id ? 0.65 : 1,
+                        }}
+                      >
+                        {accessActionCompanyId === company.id
+                          ? "Saving..."
+                          : company.companyAccessStatus === "inactive"
+                            ? "Activate"
+                            : "Deactivate"}
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {companies.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: "2rem", textAlign: "center", color: "#64748B" }}>
+                  <td colSpan={6} style={{ padding: "2rem", textAlign: "center", color: "#64748B" }}>
                     No enterprise companies found in the database.
                   </td>
                 </tr>

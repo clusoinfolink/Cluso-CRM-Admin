@@ -105,6 +105,7 @@ export type RequestItem = {
   candidateFormResponses?: Array<{
     serviceId: string;
     serviceName: string;
+    serviceEntryCount?: number;
     answers: Array<{
       fieldKey?: string;
       question: string;
@@ -186,6 +187,8 @@ export type CompanyPartnerProfile = {
     companyName: string;
     gstin: string;
     cinRegistrationNumber: string;
+    sacCode?: string;
+    ltuCode?: string;
     address: CompanyProfileAddress;
     documents: CompanyProfileDocument[];
   };
@@ -224,6 +227,8 @@ export type InvoicePartyDetails = {
   loginEmail: string;
   gstin: string;
   cinRegistrationNumber: string;
+  sacCode: string;
+  ltuCode: string;
   address: string;
   invoiceEmail: string;
   billingSameAsCompany: boolean;
@@ -271,6 +276,7 @@ export type CompanyItem = {
   id: string;
   name: string;
   email: string;
+  companyAccessStatus: "active" | "inactive";
   selectedServices: CompanyServiceSelection[];
   partnerProfile: CompanyPartnerProfile;
   stats?: {

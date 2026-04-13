@@ -35,6 +35,8 @@ const ClusoProfileSchema = new Schema(
       companyName: { type: String, default: "", trim: true },
       gstin: { type: String, default: "", trim: true },
       cinRegistrationNumber: { type: String, default: "", trim: true },
+      sacCode: { type: String, default: "", trim: true },
+      ltuCode: { type: String, default: "", trim: true },
       address: { type: AddressSchema, default: () => ({}) },
       documents: { type: [CompanyDocumentSchema], default: [] },
     },
@@ -87,8 +89,10 @@ export type ClusoDetailsDocument = InferSchemaType<typeof ClusoDetailsSchema> & 
 
 const hasSlugPath = Boolean(models.ClusoDetails?.schema.path("slug"));
 const hasProfilePath = Boolean(models.ClusoDetails?.schema.path("profile"));
+const hasSacCodePath = Boolean(models.ClusoDetails?.schema.path("profile.companyInformation.sacCode"));
+const hasLtuCodePath = Boolean(models.ClusoDetails?.schema.path("profile.companyInformation.ltuCode"));
 
-if (models.ClusoDetails && (!hasSlugPath || !hasProfilePath)) {
+if (models.ClusoDetails && (!hasSlugPath || !hasProfilePath || !hasSacCodePath || !hasLtuCodePath)) {
   delete models.ClusoDetails;
 }
 

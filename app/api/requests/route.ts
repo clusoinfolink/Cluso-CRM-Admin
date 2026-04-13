@@ -32,10 +32,18 @@ const saveReportDraftPatchSchema = z.object({
   reportData: z.unknown().optional(),
 });
 
+const deleteServiceAttemptLogPatchSchema = z.object({
+  action: z.literal("delete-service-attempt-log"),
+  requestId: z.string().min(1),
+  serviceId: z.string().min(1),
+  attemptIndex: z.number().int().nonnegative(),
+});
+
 const patchSchema = z.discriminatedUnion("action", [
   verifyServicePatchSchema,
   saveReportDraftPatchSchema,
   shareReportPatchSchema,
+  deleteServiceAttemptLogPatchSchema,
 ]);
 
 type SelectedServiceLike = {
@@ -714,6 +722,12 @@ export async function GET(req: NextRequest) {
       candidateFormResponses: (item.candidateFormResponses ?? []).map((serviceResponse) => ({
         serviceId: String(serviceResponse.serviceId),
         serviceName: serviceResponse.serviceName,
+        serviceEntryCount:
+          typeof serviceResponse.serviceEntryCount === "number" &&
+          Number.isFinite(serviceResponse.serviceEntryCount) &&
+          serviceResponse.serviceEntryCount > 0
+            ? Math.floor(serviceResponse.serviceEntryCount)
+            : 1,
         answers: (serviceResponse.answers ?? []).map((answer) => ({
           question: answer.question,
           fieldType: answer.fieldType,
@@ -755,7 +769,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "Invalid input. Expected verify-service, save-report-draft, or share-report-to-customer action payload.",
+          "Invalid input. Expected verify-service, delete-service-attempt-log, save-report-draft, or share-report-to-customer action payload.",
       },
       { status: 400 },
     );
@@ -815,6 +829,131 @@ export async function PATCH(req: NextRequest) {
     if (!assignedCompanies.has(String(scopedRequest.customer))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+  }
+
+  if (
+    parsed.data.action === "delete-service-attempt-log"
+  ) {
+    if (auth.role === "verifier") {
+      return NextResponse.json(
+        {
+          error: "Only admin or manager roles can delete verification logs.",
+        },
+        { status: 403 },
+      );
+    }
+
+    const deletePayload = parsed.data;
+    const requestDoc = await VerificationRequest.findById(deletePayload.requestId)
+      .select(
+        "candidateFormStatus status selectedServices serviceVerifications reportData reportMetadata invoiceSnapshot",
+      )
+      .lean();
+
+    if (!requestDoc) {
+      return NextResponse.json({ error: "Request not found." }, { status: 404 });
+    }
+
+    if (requestDoc.candidateFormStatus !== "submitted") {
+      return NextResponse.json(
+        { error: "Candidate form is not submitted yet." },
+        { status: 400 },
+      );
+    }
+
+    if (requestDoc.status !== "approved" && requestDoc.status !== "verified") {
+      return NextResponse.json(
+        {
+          error:
+            "Request must be approved by enterprise before verification logs can be modified.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const normalizedServiceVerifications = normalizeServiceVerifications(
+      (requestDoc.selectedServices ?? []) as SelectedServiceLike[],
+      (requestDoc.serviceVerifications ?? []) as ServiceVerificationLike[],
+    );
+
+    const targetIndex = normalizedServiceVerifications.findIndex(
+      (service) => service.serviceId === deletePayload.serviceId,
+    );
+    if (targetIndex === -1) {
+      return NextResponse.json(
+        { error: "Selected service does not belong to this request." },
+        { status: 400 },
+      );
+    }
+
+    const target = normalizedServiceVerifications[targetIndex];
+    if (deletePayload.attemptIndex >= target.attempts.length) {
+      return NextResponse.json(
+        { error: "Verification log was not found." },
+        { status: 404 },
+      );
+    }
+
+    target.attempts.splice(deletePayload.attemptIndex, 1);
+
+    if (target.attempts.length > 0) {
+      const latestAttempt = target.attempts[target.attempts.length - 1];
+      target.status = latestAttempt.status;
+      target.verificationMode = latestAttempt.verificationMode;
+      target.comment = latestAttempt.comment;
+    } else {
+      target.status = "pending";
+      target.verificationMode = "";
+      target.comment = "";
+    }
+
+    const isVerificationComplete = normalizedServiceVerifications.every(
+      (service) => service.status === "verified" || service.status === "unverified",
+    );
+    const nextStatus = isVerificationComplete ? "verified" : "approved";
+
+    const reportMetadata = asRecord(requestDoc.reportMetadata);
+    const hadGeneratedReport =
+      Boolean(requestDoc.reportData) || Boolean(reportMetadata?.generatedAt);
+    const hadSharedWithCustomer = Boolean(reportMetadata?.customerSharedAt);
+    const shouldResetReportArtifacts = hadGeneratedReport || hadSharedWithCustomer;
+
+    const updatePayload: Record<string, unknown> = {
+      status: nextStatus,
+      rejectionNote: "",
+      candidateFormStatus: "submitted",
+      serviceVerifications: normalizedServiceVerifications,
+    };
+
+    if (shouldResetReportArtifacts) {
+      updatePayload.reportData = null;
+      updatePayload.invoiceSnapshot = null;
+      updatePayload["reportMetadata.generatedAt"] = null;
+      updatePayload["reportMetadata.generatedBy"] = null;
+      updatePayload["reportMetadata.generatedByName"] = "";
+      updatePayload["reportMetadata.reportNumber"] = "";
+      updatePayload["reportMetadata.customerSharedAt"] = null;
+    }
+
+    const updated = await VerificationRequest.findByIdAndUpdate(
+      deletePayload.requestId,
+      updatePayload,
+      {
+        new: true,
+        runValidators: true,
+      },
+    ).lean();
+
+    if (!updated) {
+      return NextResponse.json({ error: "Request not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      message: shouldResetReportArtifacts
+        ? "Verification attempt log deleted. Existing report was cleared. Generate and share an updated report with customer."
+        : "Verification attempt log deleted.",
+      requestStatus: nextStatus,
+    });
   }
 
   if (
@@ -1023,7 +1162,9 @@ export async function PATCH(req: NextRequest) {
   }
 
   const requestDoc = await VerificationRequest.findById(verifyPayload.requestId)
-    .select("candidateFormStatus status selectedServices serviceVerifications")
+    .select(
+      "candidateFormStatus status selectedServices serviceVerifications reportData reportMetadata invoiceSnapshot",
+    )
     .lean();
 
   if (!requestDoc) {
@@ -1107,14 +1248,33 @@ export async function PATCH(req: NextRequest) {
   );
   const nextStatus = isVerificationComplete ? "verified" : "approved";
 
+  const reportMetadata = asRecord(requestDoc.reportMetadata);
+  const hadGeneratedReport =
+    Boolean(requestDoc.reportData) || Boolean(reportMetadata?.generatedAt);
+  const hadSharedWithCustomer = Boolean(reportMetadata?.customerSharedAt);
+  const shouldResetReportArtifacts =
+    requestDoc.status === "verified" && (hadGeneratedReport || hadSharedWithCustomer);
+
+  const updatePayload: Record<string, unknown> = {
+    status: nextStatus,
+    rejectionNote: "",
+    candidateFormStatus: "submitted",
+    serviceVerifications: normalizedServiceVerifications,
+  };
+
+  if (shouldResetReportArtifacts) {
+    updatePayload.reportData = null;
+    updatePayload.invoiceSnapshot = null;
+    updatePayload["reportMetadata.generatedAt"] = null;
+    updatePayload["reportMetadata.generatedBy"] = null;
+    updatePayload["reportMetadata.generatedByName"] = "";
+    updatePayload["reportMetadata.reportNumber"] = "";
+    updatePayload["reportMetadata.customerSharedAt"] = null;
+  }
+
   const updated = await VerificationRequest.findByIdAndUpdate(
     verifyPayload.requestId,
-    {
-      status: nextStatus,
-      rejectionNote: "",
-      candidateFormStatus: "submitted",
-      serviceVerifications: normalizedServiceVerifications,
-    },
+    updatePayload,
     {
       new: true,
       runValidators: true,
@@ -1126,7 +1286,9 @@ export async function PATCH(req: NextRequest) {
   }
 
   return NextResponse.json({
-    message: `Service verification attempt logged (${verifyPayload.serviceStatus}).`,
+    message: shouldResetReportArtifacts
+      ? `Service verification attempt logged (${verifyPayload.serviceStatus}). Existing report was cleared. Generate and share an updated report with customer.`
+      : `Service verification attempt logged (${verifyPayload.serviceStatus}).`,
     requestStatus: nextStatus,
   });
 }

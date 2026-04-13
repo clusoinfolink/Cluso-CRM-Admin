@@ -118,6 +118,11 @@ const UserSchema = new Schema(
       type: PartnerProfileSchema,
       default: () => ({}),
     },
+    companyAccessStatus: {
+      type: String,
+      enum: ["active", "inactive"],
+      default: "active",
+    },
   },
   { timestamps: true },
 );
@@ -139,6 +144,7 @@ const hasPartnerProfileGstEnabledPath = Boolean(
 const hasPartnerProfileGstRatePath = Boolean(
   models.User?.schema.path("partnerProfile.invoicingInformation.gstRate"),
 );
+const hasCompanyAccessStatusPath = Boolean(models.User?.schema.path("companyAccessStatus"));
 
 if (
   models.User &&
@@ -150,7 +156,8 @@ if (
     !hasPartnerProfilePath ||
     !hasManagerPath ||
     !hasPartnerProfileGstEnabledPath ||
-    !hasPartnerProfileGstRatePath)
+    !hasPartnerProfileGstRatePath ||
+    !hasCompanyAccessStatusPath)
 ) {
   delete models.User;
 }
