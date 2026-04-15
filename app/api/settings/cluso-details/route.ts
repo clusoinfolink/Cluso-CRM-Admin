@@ -88,6 +88,31 @@ function normalizeDocuments(
     .slice(0, MAX_DOCUMENTS);
 }
 
+function normalizePaymentMethods(
+  value: unknown,
+): NonNullable<CompanyPartnerProfile["invoicingInformation"]["paymentMethods"]> {
+  const raw =
+    value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const wireTransferRaw =
+    raw.wireTransfer && typeof raw.wireTransfer === "object"
+      ? (raw.wireTransfer as Record<string, unknown>)
+      : {};
+
+  return {
+    upiId: asString(raw.upiId),
+    upiQrCodeImageUrl: asString(raw.upiQrCodeImageUrl),
+    wireTransfer: {
+      accountHolderName: asString(wireTransferRaw.accountHolderName),
+      accountNumber: asString(wireTransferRaw.accountNumber),
+      bankName: asString(wireTransferRaw.bankName),
+      ifscCode: asString(wireTransferRaw.ifscCode),
+      branchName: asString(wireTransferRaw.branchName),
+      swiftCode: asString(wireTransferRaw.swiftCode),
+      instructions: asString(wireTransferRaw.instructions),
+    },
+  };
+}
+
 function normalizePartnerProfile(value: unknown): CompanyPartnerProfile {
   const raw =
     value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -131,6 +156,7 @@ function normalizePartnerProfile(value: unknown): CompanyPartnerProfile {
       billingSameAsCompany: Boolean(invoicingInformation.billingSameAsCompany),
       invoiceEmail: asString(invoicingInformation.invoiceEmail),
       address: normalizeAddress(invoicingInformation.address),
+      paymentMethods: normalizePaymentMethods(invoicingInformation.paymentMethods),
     },
     primaryContactInformation: {
       firstName: asString(primaryContactInformation.firstName),
@@ -218,6 +244,9 @@ export async function PATCH(req: NextRequest) {
       billingSameAsCompany: normalizedProfile.invoicingInformation.billingSameAsCompany,
       invoiceEmail: normalizedProfile.invoicingInformation.invoiceEmail,
       address: invoiceAddress,
+      paymentMethods: normalizePaymentMethods(
+        normalizedProfile.invoicingInformation.paymentMethods,
+      ),
     },
     primaryContactInformation: normalizedProfile.primaryContactInformation,
     additionalQuestions: normalizedProfile.additionalQuestions,

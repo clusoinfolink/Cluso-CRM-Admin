@@ -29,6 +29,31 @@ const CompanyDocumentSchema = new Schema(
   { _id: false },
 );
 
+const WireTransferDetailsSchema = new Schema(
+  {
+    accountHolderName: { type: String, default: "", trim: true },
+    accountNumber: { type: String, default: "", trim: true },
+    bankName: { type: String, default: "", trim: true },
+    ifscCode: { type: String, default: "", trim: true },
+    branchName: { type: String, default: "", trim: true },
+    swiftCode: { type: String, default: "", trim: true },
+    instructions: { type: String, default: "", trim: true },
+  },
+  { _id: false },
+);
+
+const InvoicingPaymentMethodsSchema = new Schema(
+  {
+    upiId: { type: String, default: "", trim: true },
+    upiQrCodeImageUrl: { type: String, default: "", trim: true },
+    wireTransfer: {
+      type: WireTransferDetailsSchema,
+      default: () => ({}),
+    },
+  },
+  { _id: false },
+);
+
 const ClusoProfileSchema = new Schema(
   {
     companyInformation: {
@@ -44,6 +69,10 @@ const ClusoProfileSchema = new Schema(
       billingSameAsCompany: { type: Boolean, default: true },
       invoiceEmail: { type: String, default: "", trim: true },
       address: { type: AddressSchema, default: () => ({}) },
+      paymentMethods: {
+        type: InvoicingPaymentMethodsSchema,
+        default: () => ({}),
+      },
     },
     primaryContactInformation: {
       firstName: { type: String, default: "", trim: true },
@@ -91,8 +120,20 @@ const hasSlugPath = Boolean(models.ClusoDetails?.schema.path("slug"));
 const hasProfilePath = Boolean(models.ClusoDetails?.schema.path("profile"));
 const hasSacCodePath = Boolean(models.ClusoDetails?.schema.path("profile.companyInformation.sacCode"));
 const hasLtuCodePath = Boolean(models.ClusoDetails?.schema.path("profile.companyInformation.ltuCode"));
+const hasPaymentMethodsPath = Boolean(models.ClusoDetails?.schema.path("profile.invoicingInformation.paymentMethods"));
+const hasUpiPath = Boolean(models.ClusoDetails?.schema.path("profile.invoicingInformation.paymentMethods.upiId"));
+const hasWirePath = Boolean(models.ClusoDetails?.schema.path("profile.invoicingInformation.paymentMethods.wireTransfer.accountNumber"));
 
-if (models.ClusoDetails && (!hasSlugPath || !hasProfilePath || !hasSacCodePath || !hasLtuCodePath)) {
+if (
+  models.ClusoDetails &&
+  (!hasSlugPath ||
+    !hasProfilePath ||
+    !hasSacCodePath ||
+    !hasLtuCodePath ||
+    !hasPaymentMethodsPath ||
+    !hasUpiPath ||
+    !hasWirePath)
+) {
   delete models.ClusoDetails;
 }
 

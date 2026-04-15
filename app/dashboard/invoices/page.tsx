@@ -5,7 +5,9 @@ import {
   Building2,
   CheckCircle2,
   FileText,
+  Landmark,
   Printer,
+  QrCode,
   Save,
   Send,
   UserCircle2,
@@ -15,6 +17,7 @@ import { getAlertTone } from "@/lib/alerts";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import type {
   CompanyItem,
+  InvoicePaymentDetails,
   InvoicePartyDetails,
   InvoiceRecord,
   InvoiceWorkspaceResponse,
@@ -72,6 +75,24 @@ function createEmptyPartyDetails(): InvoicePartyDetails {
     invoiceEmail: "",
     billingSameAsCompany: true,
     billingAddress: "",
+  };
+}
+
+function createEmptyPaymentDetails(): InvoicePaymentDetails {
+  return {
+    upi: {
+      upiId: "",
+      qrCodeImageUrl: "",
+    },
+    wireTransfer: {
+      accountHolderName: "",
+      accountNumber: "",
+      bankName: "",
+      ifscCode: "",
+      branchName: "",
+      swiftCode: "",
+      instructions: "",
+    },
   };
 }
 
@@ -288,12 +309,41 @@ function updatePartyDraft(
   return next;
 }
 
+function getPaymentStatusMeta(status: InvoiceRecord["paymentStatus"]) {
+  if (status === "paid") {
+    return {
+      label: "Paid",
+      background: "#DCFCE7",
+      border: "#86EFAC",
+      color: "#166534",
+    };
+  }
+
+  if (status === "submitted") {
+    return {
+      label: "Receipt Uploaded",
+      background: "#FEF3C7",
+      border: "#FDE68A",
+      color: "#92400E",
+    };
+  }
+
+  return {
+    label: "Click to Pay",
+    background: "#E2E8F0",
+    border: "#CBD5E1",
+    color: "#334155",
+  };
+}
+
 export default function InvoicesPage() {
   const { me, loading, logout } = useAdminSession();
   const [companies, setCompanies] = useState<CompanyItem[]>([]);
   const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
   const [clusoDefaultDetails, setClusoDefaultDetails] =
     useState<InvoicePartyDetails>(createEmptyPartyDetails);
+  const [clusoDefaultPaymentDetails, setClusoDefaultPaymentDetails] =
+    useState<InvoicePaymentDetails>(createEmptyPaymentDetails);
 
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [selectedBillingMonth, setSelectedBillingMonth] =
@@ -306,6 +356,8 @@ export default function InvoicesPage() {
   const [clusoDraft, setClusoDraft] = useState<InvoicePartyDetails>(
     createEmptyPartyDetails,
   );
+  const [paymentDraft, setPaymentDraft] =
+    useState<InvoicePaymentDetails>(createEmptyPaymentDetails);
 
   const [loadingWorkspace, setLoadingWorkspace] = useState(true);
   const [message, setMessage] = useState("");
@@ -313,6 +365,7 @@ export default function InvoicesPage() {
   const [savingFields, setSavingFields] = useState(false);
   const [savingGstDefaults, setSavingGstDefaults] = useState(false);
   const [sendingInvoiceId, setSendingInvoiceId] = useState("");
+  const [updatingPaymentInvoiceId, setUpdatingPaymentInvoiceId] = useState("");
   const [historyCompanyFilter, setHistoryCompanyFilter] = useState("all");
   const [historyMonthFilter, setHistoryMonthFilter] = useState("all");
   const [historySearchText, setHistorySearchText] = useState("");
@@ -528,6 +581,7 @@ export default function InvoicesPage() {
       if (!company) {
         setEnterpriseDraft(createEmptyPartyDetails());
         setClusoDraft(clusoDefaultDetails);
+        setPaymentDraft(createEmptyPaymentDetails());
         setGstEnabled(false);
         setGstRate(18);
         if (!keepCurrentInvoiceSelection) {
@@ -543,6 +597,7 @@ export default function InvoicesPage() {
       if (invoiceForCompany) {
         setEnterpriseDraft(invoiceForCompany.enterpriseDetails);
         setClusoDraft(invoiceForCompany.clusoDetails);
+        setPaymentDraft(invoiceForCompany.paymentDetails);
         setGstEnabled(invoiceForCompany.gstEnabled);
         setGstRate(invoiceForCompany.gstRate);
         return;
@@ -551,13 +606,20 @@ export default function InvoicesPage() {
       const companyGstDefaults = buildCompanyGstDefaults(company);
       setEnterpriseDraft(buildEnterpriseDraft(company));
       setClusoDraft(clusoDefaultDetails);
+      setPaymentDraft(clusoDefaultPaymentDetails);
       setGstEnabled(companyGstDefaults.gstEnabled);
       setGstRate(companyGstDefaults.gstRate);
       if (!keepCurrentInvoiceSelection) {
         setSelectedInvoiceId("");
       }
     },
-    [companies, invoices, selectedInvoiceId, clusoDefaultDetails],
+    [
+      companies,
+      invoices,
+      selectedInvoiceId,
+      clusoDefaultDetails,
+      clusoDefaultPaymentDetails,
+    ],
   );
 
   const loadWorkspace = useCallback(
@@ -596,10 +658,13 @@ export default function InvoicesPage() {
         const nextInvoices = invoicesPayload?.invoices ?? [];
         const nextClusoDefaults =
           invoicesPayload?.clusoDefaultDetails ?? createEmptyPartyDetails();
+        const nextClusoPaymentDefaults =
+          invoicesPayload?.clusoDefaultPaymentDetails ?? createEmptyPaymentDetails();
 
         setCompanies(nextCompanies);
         setInvoices(nextInvoices);
         setClusoDefaultDetails(nextClusoDefaults);
+        setClusoDefaultPaymentDetails(nextClusoPaymentDefaults);
 
         const targetCompanyId =
           preferredCompanyId &&
@@ -641,17 +706,20 @@ export default function InvoicesPage() {
         if (targetInvoice && targetInvoice.customerId === targetCompanyId) {
           setEnterpriseDraft(targetInvoice.enterpriseDetails);
           setClusoDraft(targetInvoice.clusoDetails);
+          setPaymentDraft(targetInvoice.paymentDetails);
           setGstEnabled(targetInvoice.gstEnabled);
           setGstRate(targetInvoice.gstRate);
         } else if (targetCompany) {
           const companyGstDefaults = buildCompanyGstDefaults(targetCompany);
           setEnterpriseDraft(buildEnterpriseDraft(targetCompany));
           setClusoDraft(nextClusoDefaults);
+          setPaymentDraft(nextClusoPaymentDefaults);
           setGstEnabled(companyGstDefaults.gstEnabled);
           setGstRate(companyGstDefaults.gstRate);
         } else {
           setEnterpriseDraft(createEmptyPartyDetails());
           setClusoDraft(nextClusoDefaults);
+          setPaymentDraft(createEmptyPaymentDetails());
           setGstEnabled(false);
           setGstRate(18);
         }
@@ -683,6 +751,7 @@ export default function InvoicesPage() {
         const companyGstDefaults = buildCompanyGstDefaults(company);
         setEnterpriseDraft(buildEnterpriseDraft(company));
         setClusoDraft(clusoDefaultDetails);
+        setPaymentDraft(clusoDefaultPaymentDetails);
         setGstEnabled(companyGstDefaults.gstEnabled);
         setGstRate(companyGstDefaults.gstRate);
       }
@@ -693,6 +762,7 @@ export default function InvoicesPage() {
     if (invoice && invoice.customerId === selectedCompanyId) {
       setEnterpriseDraft(invoice.enterpriseDetails);
       setClusoDraft(invoice.clusoDetails);
+      setPaymentDraft(invoice.paymentDetails);
       setGstEnabled(invoice.gstEnabled);
       setGstRate(invoice.gstRate);
       return;
@@ -703,6 +773,7 @@ export default function InvoicesPage() {
       const companyGstDefaults = buildCompanyGstDefaults(company);
       setEnterpriseDraft(buildEnterpriseDraft(company));
       setClusoDraft(clusoDefaultDetails);
+      setPaymentDraft(clusoDefaultPaymentDetails);
       setGstEnabled(companyGstDefaults.gstEnabled);
       setGstRate(companyGstDefaults.gstRate);
     }
@@ -712,6 +783,7 @@ export default function InvoicesPage() {
     companies,
     invoices,
     clusoDefaultDetails,
+    clusoDefaultPaymentDetails,
   ]);
 
   useEffect(() => {
@@ -733,6 +805,7 @@ export default function InvoicesPage() {
       const companyGstDefaults = buildCompanyGstDefaults(selectedCompany);
       setEnterpriseDraft(buildEnterpriseDraft(selectedCompany));
       setClusoDraft(clusoDefaultDetails);
+      setPaymentDraft(clusoDefaultPaymentDetails);
       setGstEnabled(companyGstDefaults.gstEnabled);
       setGstRate(companyGstDefaults.gstRate);
     }
@@ -743,6 +816,7 @@ export default function InvoicesPage() {
     companyInvoices,
     selectedCompany,
     clusoDefaultDetails,
+    clusoDefaultPaymentDetails,
   ]);
 
   useEffect(() => {
@@ -770,6 +844,7 @@ export default function InvoicesPage() {
           gstRate: clampGstRate(gstRate),
           enterpriseDetails: enterpriseDraft,
           clusoDetails: clusoDraft,
+          paymentDetails: paymentDraft,
         }),
       });
 
@@ -814,6 +889,7 @@ export default function InvoicesPage() {
           gstRate: clampGstRate(gstRate),
           enterpriseDetails: enterpriseDraft,
           clusoDetails: clusoDraft,
+          paymentDetails: paymentDraft,
         }),
       });
 
@@ -945,6 +1021,7 @@ export default function InvoicesPage() {
         body: JSON.stringify({
           action: "update-cluso-defaults",
           clusoDetails: clusoDraft,
+          paymentDetails: paymentDraft,
         }),
       });
 
@@ -1014,6 +1091,7 @@ export default function InvoicesPage() {
     setSelectedInvoiceId(invoice.id);
     setEnterpriseDraft(invoice.enterpriseDetails);
     setClusoDraft(invoice.clusoDetails);
+    setPaymentDraft(invoice.paymentDetails);
     setGstEnabled(invoice.gstEnabled);
     setGstRate(invoice.gstRate);
     setMessage(
@@ -1107,6 +1185,63 @@ export default function InvoicesPage() {
       setMessage("Could not send invoice to customer.");
     } finally {
       setSendingInvoiceId("");
+    }
+  }
+
+  async function updateInvoicePaymentStatus(
+    invoiceId: string,
+    paymentStatus: "unpaid" | "submitted" | "paid",
+  ) {
+    if (!invoiceId) {
+      return;
+    }
+
+    setUpdatingPaymentInvoiceId(invoiceId);
+    setMessage("");
+
+    try {
+      const response = await fetch("/api/invoices", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update-payment-status",
+          invoiceId,
+          paymentStatus,
+        }),
+      });
+
+      const data = (await response.json()) as {
+        message?: string;
+        error?: string;
+        invoice?: InvoiceRecord;
+      };
+
+      if (!response.ok) {
+        setMessage(data.error ?? "Could not update invoice payment status.");
+        return;
+      }
+
+      setMessage(data.message ?? "Invoice payment status updated.");
+
+      if (data.invoice) {
+        setInvoices((previous) =>
+          previous.map((invoice) =>
+            invoice.id === data.invoice?.id ? data.invoice : invoice,
+          ),
+        );
+
+        if (selectedInvoiceId === data.invoice.id) {
+          setEnterpriseDraft(data.invoice.enterpriseDetails);
+          setClusoDraft(data.invoice.clusoDetails);
+          setPaymentDraft(data.invoice.paymentDetails);
+          setGstEnabled(data.invoice.gstEnabled);
+          setGstRate(data.invoice.gstRate);
+        }
+      }
+    } catch {
+      setMessage("Could not update invoice payment status.");
+    } finally {
+      setUpdatingPaymentInvoiceId("");
     }
   }
 
@@ -1300,7 +1435,7 @@ export default function InvoicesPage() {
           </p>
         ) : (
           <div style={{ overflowX: "auto", marginTop: "0.8rem" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1160px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1280px" }}>
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid #E2E8F0" }}>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Invoice</th>
@@ -1309,12 +1444,14 @@ export default function InvoicesPage() {
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Generated</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Totals</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Generated By</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Payment</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {historyInvoices.map((invoice) => {
                   const isActive = invoice.id === selectedInvoiceId;
+                  const paymentStatusMeta = getPaymentStatusMeta(invoice.paymentStatus);
                   return (
                     <tr key={`history-invoice-${invoice.id}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
                       <td style={{ padding: "0.55rem", color: "#1E293B", fontWeight: 700 }}>
@@ -1336,6 +1473,28 @@ export default function InvoicesPage() {
                       </td>
                       <td style={{ padding: "0.55rem", color: "#334155" }}>
                         {invoice.generatedByName || "-"}
+                      </td>
+                      <td style={{ padding: "0.55rem", color: "#334155" }}>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            borderRadius: "999px",
+                            border: `1px solid ${paymentStatusMeta.border}`,
+                            background: paymentStatusMeta.background,
+                            color: paymentStatusMeta.color,
+                            fontSize: "0.75rem",
+                            fontWeight: 700,
+                            padding: "0.2rem 0.55rem",
+                          }}
+                        >
+                          {paymentStatusMeta.label}
+                        </span>
+                        {invoice.paymentProof ? (
+                          <div style={{ color: "#0F766E", fontSize: "0.76rem", marginTop: "0.3rem" }}>
+                            Receipt attached
+                          </div>
+                        ) : null}
                       </td>
                       <td style={{ padding: "0.55rem" }}>
                         <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
@@ -1366,6 +1525,32 @@ export default function InvoicesPage() {
                           >
                             <Send size={14} />
                             {sendingInvoiceId === invoice.id ? "Sending..." : "Send"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() =>
+                              void updateInvoicePaymentStatus(
+                                invoice.id,
+                                invoice.paymentStatus === "paid" ? "unpaid" : "paid",
+                              )
+                            }
+                            disabled={updatingPaymentInvoiceId === invoice.id}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.4rem",
+                              borderColor:
+                                invoice.paymentStatus === "paid" ? "#FCA5A5" : "#86EFAC",
+                              color:
+                                invoice.paymentStatus === "paid" ? "#991B1B" : "#166534",
+                            }}
+                          >
+                            {updatingPaymentInvoiceId === invoice.id
+                              ? "Updating..."
+                              : invoice.paymentStatus === "paid"
+                                ? "Mark Unpaid"
+                                : "Mark Paid"}
                           </button>
                         </div>
                       </td>
@@ -1673,6 +1858,227 @@ export default function InvoicesPage() {
             />
           </div>
 
+          <div
+            style={{
+              borderTop: "1px solid #E2E8F0",
+              paddingTop: "0.8rem",
+              display: "grid",
+              gap: "0.75rem",
+            }}
+          >
+            <h4
+              style={{
+                margin: 0,
+                color: "#1E293B",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.45rem",
+                fontSize: "0.95rem",
+              }}
+            >
+              <QrCode size={16} color="#0F766E" />
+              Payment Collection Details
+            </h4>
+
+            <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              <div>
+                <label className="label" htmlFor="cluso-upi-id">UPI ID</label>
+                <input
+                  id="cluso-upi-id"
+                  className="input"
+                  value={paymentDraft.upi.upiId}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      upi: {
+                        ...prev.upi,
+                        upiId: event.target.value,
+                      },
+                    }))
+                  }
+                  placeholder="company@upi"
+                />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="cluso-upi-qr-url">UPI QR Code Image URL</label>
+                <input
+                  id="cluso-upi-qr-url"
+                  className="input"
+                  value={paymentDraft.upi.qrCodeImageUrl}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      upi: {
+                        ...prev.upi,
+                        qrCodeImageUrl: event.target.value,
+                      },
+                    }))
+                  }
+                  placeholder="https://.../upi-qr.png"
+                />
+              </div>
+            </div>
+
+            {paymentDraft.upi.qrCodeImageUrl ? (
+              <div style={{ display: "inline-flex", flexDirection: "column", gap: "0.35rem" }}>
+                <span style={{ color: "#475569", fontSize: "0.78rem", fontWeight: 600 }}>
+                  QR Preview
+                </span>
+                <img
+                  src={paymentDraft.upi.qrCodeImageUrl}
+                  alt="UPI QR preview"
+                  style={{ width: "130px", height: "130px", objectFit: "contain", border: "1px solid #CBD5E1", borderRadius: "10px", padding: "0.4rem", background: "#FFFFFF" }}
+                />
+              </div>
+            ) : null}
+
+            <h4
+              style={{
+                margin: 0,
+                color: "#1E293B",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.45rem",
+                fontSize: "0.95rem",
+              }}
+            >
+              <Landmark size={16} color="#1D4ED8" />
+              Wire Transfer Details
+            </h4>
+
+            <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              <div>
+                <label className="label" htmlFor="wire-account-holder">Account Holder Name</label>
+                <input
+                  id="wire-account-holder"
+                  className="input"
+                  value={paymentDraft.wireTransfer.accountHolderName}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      wireTransfer: {
+                        ...prev.wireTransfer,
+                        accountHolderName: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="wire-account-number">Account Number</label>
+                <input
+                  id="wire-account-number"
+                  className="input"
+                  value={paymentDraft.wireTransfer.accountNumber}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      wireTransfer: {
+                        ...prev.wireTransfer,
+                        accountNumber: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="wire-bank-name">Bank Name</label>
+                <input
+                  id="wire-bank-name"
+                  className="input"
+                  value={paymentDraft.wireTransfer.bankName}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      wireTransfer: {
+                        ...prev.wireTransfer,
+                        bankName: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="wire-ifsc">IFSC Code</label>
+                <input
+                  id="wire-ifsc"
+                  className="input"
+                  value={paymentDraft.wireTransfer.ifscCode}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      wireTransfer: {
+                        ...prev.wireTransfer,
+                        ifscCode: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="wire-branch">Branch Name</label>
+                <input
+                  id="wire-branch"
+                  className="input"
+                  value={paymentDraft.wireTransfer.branchName}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      wireTransfer: {
+                        ...prev.wireTransfer,
+                        branchName: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="label" htmlFor="wire-swift">SWIFT Code</label>
+                <input
+                  id="wire-swift"
+                  className="input"
+                  value={paymentDraft.wireTransfer.swiftCode}
+                  onChange={(event) =>
+                    setPaymentDraft((prev) => ({
+                      ...prev,
+                      wireTransfer: {
+                        ...prev.wireTransfer,
+                        swiftCode: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="wire-instructions">Transfer Instructions</label>
+              <textarea
+                id="wire-instructions"
+                className="input"
+                rows={2}
+                value={paymentDraft.wireTransfer.instructions}
+                onChange={(event) =>
+                  setPaymentDraft((prev) => ({
+                    ...prev,
+                    wireTransfer: {
+                      ...prev.wireTransfer,
+                      instructions: event.target.value,
+                    },
+                  }))
+                }
+                style={{ resize: "vertical" }}
+                placeholder="Add any remittance instructions or reference notes"
+              />
+            </div>
+          </div>
+
           <button
             type="button"
             className="btn btn-secondary"
@@ -1890,6 +2296,7 @@ export default function InvoicesPage() {
                 setSelectedInvoiceId("");
                 setEnterpriseDraft(buildEnterpriseDraft(selectedCompany));
                 setClusoDraft(clusoDefaultDetails);
+                setPaymentDraft(clusoDefaultPaymentDetails);
                 const companyGstDefaults = buildCompanyGstDefaults(selectedCompany);
                 setGstEnabled(companyGstDefaults.gstEnabled);
                 setGstRate(companyGstDefaults.gstRate);
@@ -1928,6 +2335,21 @@ export default function InvoicesPage() {
             </button>
             {selectedInvoice ? (
               <>
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    borderRadius: "999px",
+                    border: `1px solid ${getPaymentStatusMeta(selectedInvoice.paymentStatus).border}`,
+                    background: getPaymentStatusMeta(selectedInvoice.paymentStatus).background,
+                    color: getPaymentStatusMeta(selectedInvoice.paymentStatus).color,
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                    padding: "0.32rem 0.7rem",
+                  }}
+                >
+                  {getPaymentStatusMeta(selectedInvoice.paymentStatus).label}
+                </span>
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -1944,6 +2366,29 @@ export default function InvoicesPage() {
                 >
                   <Send size={16} />
                   {sendingInvoiceId === selectedInvoice.id ? "Sending..." : "Send to Customer"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() =>
+                    void updateInvoicePaymentStatus(
+                      selectedInvoice.id,
+                      selectedInvoice.paymentStatus === "paid" ? "unpaid" : "paid",
+                    )
+                  }
+                  disabled={updatingPaymentInvoiceId === selectedInvoice.id}
+                  style={{
+                    borderColor:
+                      selectedInvoice.paymentStatus === "paid" ? "#FCA5A5" : "#86EFAC",
+                    color:
+                      selectedInvoice.paymentStatus === "paid" ? "#991B1B" : "#166534",
+                  }}
+                >
+                  {updatingPaymentInvoiceId === selectedInvoice.id
+                    ? "Updating..."
+                    : selectedInvoice.paymentStatus === "paid"
+                      ? "Mark Unpaid"
+                      : "Mark Paid"}
                 </button>
               </>
             ) : null}
@@ -2003,6 +2448,7 @@ export default function InvoicesPage() {
             <div style={{ display: "grid", gap: "0.55rem", marginTop: "0.65rem" }}>
               {visibleCompanyInvoices.map((invoice) => {
                 const active = invoice.id === selectedInvoiceId;
+                const paymentStatusMeta = getPaymentStatusMeta(invoice.paymentStatus);
                 return (
                   <div
                     key={invoice.id}
@@ -2025,6 +2471,28 @@ export default function InvoicesPage() {
                         <div style={{ color: "#64748B", fontSize: "0.82rem" }}>
                           Generated: {formatDateTime(invoice.createdAt)}
                         </div>
+                        <div style={{ marginTop: "0.35rem" }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              borderRadius: "999px",
+                              border: `1px solid ${paymentStatusMeta.border}`,
+                              background: paymentStatusMeta.background,
+                              color: paymentStatusMeta.color,
+                              fontSize: "0.74rem",
+                              fontWeight: 700,
+                              padding: "0.2rem 0.55rem",
+                            }}
+                          >
+                            {paymentStatusMeta.label}
+                          </span>
+                          {invoice.paymentProof ? (
+                            <span style={{ marginLeft: "0.45rem", color: "#0F766E", fontSize: "0.76rem" }}>
+                              Receipt uploaded
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
                         <button
@@ -2035,6 +2503,7 @@ export default function InvoicesPage() {
                             setSelectedInvoiceId(invoice.id);
                             setEnterpriseDraft(invoice.enterpriseDetails);
                             setClusoDraft(invoice.clusoDetails);
+                            setPaymentDraft(invoice.paymentDetails);
                             setGstEnabled(invoice.gstEnabled);
                             setGstRate(invoice.gstRate);
                           }}
@@ -2057,6 +2526,29 @@ export default function InvoicesPage() {
                         >
                           <Send size={15} />
                           {sendingInvoiceId === invoice.id ? "Sending..." : "Send to Customer"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() =>
+                            void updateInvoicePaymentStatus(
+                              invoice.id,
+                              invoice.paymentStatus === "paid" ? "unpaid" : "paid",
+                            )
+                          }
+                          disabled={updatingPaymentInvoiceId === invoice.id}
+                          style={{
+                            borderColor:
+                              invoice.paymentStatus === "paid" ? "#FCA5A5" : "#86EFAC",
+                            color:
+                              invoice.paymentStatus === "paid" ? "#991B1B" : "#166534",
+                          }}
+                        >
+                          {updatingPaymentInvoiceId === invoice.id
+                            ? "Updating..."
+                            : invoice.paymentStatus === "paid"
+                              ? "Mark Unpaid"
+                              : "Mark Paid"}
                         </button>
                       </div>
                     </div>
@@ -2442,6 +2934,79 @@ export default function InvoicesPage() {
                       {selectedInvoice.clusoDetails.billingSameAsCompany ? "Yes" : "No"}
                     </div>
                     <div><strong>Billing Address:</strong> {selectedInvoice.clusoDetails.billingAddress || "-"}</div>
+                    <div style={{ marginTop: "0.35rem", paddingTop: "0.35rem", borderTop: "1px dashed #CBD5E1" }}>
+                      <strong>UPI ID:</strong> {selectedInvoice.paymentDetails.upi.upiId || "-"}
+                    </div>
+                    <div>
+                      <strong>UPI QR:</strong>{" "}
+                      {selectedInvoice.paymentDetails.upi.qrCodeImageUrl ? "Configured" : "-"}
+                    </div>
+                    <div>
+                      <strong>Wire Account Holder:</strong>{" "}
+                      {selectedInvoice.paymentDetails.wireTransfer.accountHolderName || "-"}
+                    </div>
+                    <div>
+                      <strong>Wire Account Number:</strong>{" "}
+                      {selectedInvoice.paymentDetails.wireTransfer.accountNumber || "-"}
+                    </div>
+                    <div>
+                      <strong>Wire Bank / IFSC:</strong>{" "}
+                      {selectedInvoice.paymentDetails.wireTransfer.bankName || "-"}
+                      {selectedInvoice.paymentDetails.wireTransfer.ifscCode
+                        ? ` / ${selectedInvoice.paymentDetails.wireTransfer.ifscCode}`
+                        : ""}
+                    </div>
+                    <div style={{ marginTop: "0.35rem", paddingTop: "0.35rem", borderTop: "1px dashed #CBD5E1" }}>
+                      <strong>Payment Status:</strong>{" "}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          borderRadius: "999px",
+                          border: `1px solid ${getPaymentStatusMeta(selectedInvoice.paymentStatus).border}`,
+                          background: getPaymentStatusMeta(selectedInvoice.paymentStatus).background,
+                          color: getPaymentStatusMeta(selectedInvoice.paymentStatus).color,
+                          fontSize: "0.74rem",
+                          fontWeight: 700,
+                          padding: "0.12rem 0.5rem",
+                        }}
+                      >
+                        {getPaymentStatusMeta(selectedInvoice.paymentStatus).label}
+                      </span>
+                    </div>
+                    {selectedInvoice.paymentProof ? (
+                      <>
+                        <div>
+                          <strong>Receipt Method:</strong>{" "}
+                          {selectedInvoice.paymentProof.method === "wireTransfer"
+                            ? "Wire Transfer"
+                            : "UPI"}
+                        </div>
+                        <div>
+                          <strong>Receipt Uploaded At:</strong>{" "}
+                          {formatDateTime(selectedInvoice.paymentProof.uploadedAt)}
+                        </div>
+                        <div style={{ marginTop: "0.45rem" }}>
+                          <img
+                            src={selectedInvoice.paymentProof.screenshotData}
+                            alt="Client uploaded payment receipt"
+                            style={{
+                              width: "160px",
+                              maxWidth: "100%",
+                              border: "1px solid #CBD5E1",
+                              borderRadius: "8px",
+                              background: "#FFFFFF",
+                              padding: "0.25rem",
+                              objectFit: "contain",
+                            }}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: "#64748B", fontSize: "0.85rem", marginTop: "0.25rem" }}>
+                        Client receipt not uploaded yet.
+                      </div>
+                    )}
                   </div>
                 </section>
 

@@ -10,6 +10,10 @@ import VerificationRequest from "@/lib/models/VerificationRequest";
 import type {
   InvoiceCurrencyTotal,
   InvoiceLineItem,
+  InvoicePaymentDetails,
+  InvoicePaymentMethod,
+  InvoicePaymentProof,
+  InvoicePaymentStatus,
   InvoicePartyDetails,
   InvoiceRecord,
 } from "@/lib/types";
@@ -26,6 +30,7 @@ const generateInvoiceSchema = z.object({
   gstRate: z.number().min(0).max(100).optional(),
   enterpriseDetails: z.unknown().optional(),
   clusoDetails: z.unknown().optional(),
+  paymentDetails: z.unknown().optional(),
 });
 
 const updateInvoiceSchema = z.object({
@@ -34,13 +39,16 @@ const updateInvoiceSchema = z.object({
     "update-enterprise-defaults",
     "update-cluso-defaults",
     "update-company-gst-defaults",
+    "update-payment-status",
   ]),
   invoiceId: z.string().min(1).optional(),
   companyId: z.string().min(1).optional(),
   gstEnabled: z.boolean().optional(),
   gstRate: z.number().min(0).max(100).optional(),
+  paymentStatus: z.enum(["unpaid", "submitted", "paid"]).optional(),
   enterpriseDetails: z.unknown().optional(),
   clusoDetails: z.unknown().optional(),
+  paymentDetails: z.unknown().optional(),
 });
 
 const emptyPartyDetails: InvoicePartyDetails = {
@@ -55,6 +63,65 @@ const emptyPartyDetails: InvoicePartyDetails = {
   billingSameAsCompany: true,
   billingAddress: "",
 };
+
+const emptyPaymentDetails: InvoicePaymentDetails = {
+  upi: {
+    upiId: "",
+    qrCodeImageUrl: "",
+  },
+  wireTransfer: {
+    accountHolderName: "",
+    accountNumber: "",
+    bankName: "",
+    ifscCode: "",
+    branchName: "",
+    swiftCode: "",
+    instructions: "",
+  },
+};
+
+function normalizeInvoicePaymentStatus(
+  value: unknown,
+  fallback: InvoicePaymentStatus = "unpaid",
+): InvoicePaymentStatus {
+  if (value === "unpaid" || value === "submitted" || value === "paid") {
+    return value;
+  }
+
+  return fallback;
+}
+
+function normalizeInvoicePaymentProof(value: unknown): InvoicePaymentProof | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const raw = asRecord(value);
+  const methodRaw = asString(raw.method).trim();
+  const method: InvoicePaymentMethod =
+    methodRaw === "wireTransfer" ? "wireTransfer" : "upi";
+  const screenshotData = asString(raw.screenshotData).trim();
+  const screenshotFileName = asString(raw.screenshotFileName).trim();
+  const screenshotMimeType = asString(raw.screenshotMimeType).trim();
+  const screenshotFileSize = Number(raw.screenshotFileSize);
+  const uploadedAt = parseDateValue(raw.uploadedAt);
+
+  if (!screenshotData || !screenshotFileName || !screenshotMimeType || !uploadedAt) {
+    return null;
+  }
+
+  return {
+    method,
+    screenshotData,
+    screenshotFileName,
+    screenshotMimeType,
+    screenshotFileSize:
+      Number.isFinite(screenshotFileSize) && screenshotFileSize > 0
+        ? Math.trunc(screenshotFileSize)
+        : 0,
+    uploadedAt: uploadedAt.toISOString(),
+  };
+}
 
 type NormalizedServiceSelection = {
   serviceId: string;
@@ -557,6 +624,50 @@ function normalizePartyDetails(
   };
 }
 
+function normalizeInvoicePaymentDetails(
+  value: unknown,
+  fallback: InvoicePaymentDetails,
+): InvoicePaymentDetails {
+  const raw = asRecord(value);
+  const upiRaw = asRecord(raw.upi);
+  const wireTransferRaw = asRecord(raw.wireTransfer);
+
+  return {
+    upi: {
+      upiId: normalizeWhitespace(asString(upiRaw.upiId, fallback.upi.upiId)),
+      qrCodeImageUrl: normalizeWhitespace(
+        asString(upiRaw.qrCodeImageUrl, fallback.upi.qrCodeImageUrl),
+      ),
+    },
+    wireTransfer: {
+      accountHolderName: normalizeWhitespace(
+        asString(
+          wireTransferRaw.accountHolderName,
+          fallback.wireTransfer.accountHolderName,
+        ),
+      ),
+      accountNumber: normalizeWhitespace(
+        asString(wireTransferRaw.accountNumber, fallback.wireTransfer.accountNumber),
+      ),
+      bankName: normalizeWhitespace(
+        asString(wireTransferRaw.bankName, fallback.wireTransfer.bankName),
+      ),
+      ifscCode: normalizeWhitespace(
+        asString(wireTransferRaw.ifscCode, fallback.wireTransfer.ifscCode),
+      ).toUpperCase(),
+      branchName: normalizeWhitespace(
+        asString(wireTransferRaw.branchName, fallback.wireTransfer.branchName),
+      ),
+      swiftCode: normalizeWhitespace(
+        asString(wireTransferRaw.swiftCode, fallback.wireTransfer.swiftCode),
+      ).toUpperCase(),
+      instructions: normalizeWhitespace(
+        asString(wireTransferRaw.instructions, fallback.wireTransfer.instructions),
+      ),
+    },
+  };
+}
+
 function normalizeInvoiceLineItems(value: unknown): InvoiceLineItem[] {
   if (!Array.isArray(value)) {
     return [];
@@ -848,6 +959,33 @@ function buildClusoDefaults(profile: unknown): InvoicePartyDetails {
   };
 }
 
+function buildClusoPaymentDefaults(profile: unknown): InvoicePaymentDetails {
+  const root = asRecord(profile);
+  const invoicingInformation = asRecord(root.invoicingInformation);
+  const paymentMethods = asRecord(invoicingInformation.paymentMethods);
+  const wireTransfer = asRecord(paymentMethods.wireTransfer);
+
+  return {
+    upi: {
+      upiId: normalizeWhitespace(asString(paymentMethods.upiId)),
+      qrCodeImageUrl: normalizeWhitespace(
+        asString(paymentMethods.upiQrCodeImageUrl),
+      ),
+    },
+    wireTransfer: {
+      accountHolderName: normalizeWhitespace(
+        asString(wireTransfer.accountHolderName),
+      ),
+      accountNumber: normalizeWhitespace(asString(wireTransfer.accountNumber)),
+      bankName: normalizeWhitespace(asString(wireTransfer.bankName)),
+      ifscCode: normalizeWhitespace(asString(wireTransfer.ifscCode)).toUpperCase(),
+      branchName: normalizeWhitespace(asString(wireTransfer.branchName)),
+      swiftCode: normalizeWhitespace(asString(wireTransfer.swiftCode)).toUpperCase(),
+      instructions: normalizeWhitespace(asString(wireTransfer.instructions)),
+    },
+  };
+}
+
 function resolveInvoiceBillingMonth(doc: Record<string, unknown>) {
   const explicitBillingMonth = normalizeBillingMonth(doc.billingMonth);
   if (explicitBillingMonth) {
@@ -882,6 +1020,13 @@ function normalizeInvoiceRecord(doc: Record<string, unknown>): InvoiceRecord {
     customerEmail: asString(doc.customerEmail),
     enterpriseDetails: normalizePartyDetails(doc.enterpriseDetails, emptyPartyDetails),
     clusoDetails: normalizePartyDetails(doc.clusoDetails, emptyPartyDetails),
+    paymentDetails: normalizeInvoicePaymentDetails(
+      doc.paymentDetails,
+      emptyPaymentDetails,
+    ),
+    paymentStatus: normalizeInvoicePaymentStatus(doc.paymentStatus, "unpaid"),
+    paymentProof: normalizeInvoicePaymentProof(doc.paymentProof),
+    paidAt: parseDateValue(doc.paidAt)?.toISOString() ?? "",
     lineItems: normalizeInvoiceLineItems(doc.lineItems),
     totalsByCurrency: Array.isArray(doc.totalsByCurrency)
       ? (doc.totalsByCurrency as Array<Record<string, unknown>>)
@@ -1034,6 +1179,7 @@ export async function GET(req: NextRequest) {
       normalizeInvoiceRecord(doc as unknown as Record<string, unknown>),
     ),
     clusoDefaultDetails: buildClusoDefaults(clusoDoc?.profile),
+    clusoDefaultPaymentDetails: buildClusoPaymentDefaults(clusoDoc?.profile),
   });
 }
 
@@ -1104,12 +1250,17 @@ export async function POST(req: NextRequest) {
 
   const enterpriseDefaults = buildEnterpriseDefaults(customer);
   const clusoDefaults = buildClusoDefaults(clusoDoc?.profile);
+  const clusoPaymentDefaults = buildClusoPaymentDefaults(clusoDoc?.profile);
 
   const enterpriseDetails = normalizePartyDetails(
     parsed.data.enterpriseDetails,
     enterpriseDefaults,
   );
   const clusoDetails = normalizePartyDetails(parsed.data.clusoDetails, clusoDefaults);
+  const paymentDetails = normalizeInvoicePaymentDetails(
+    parsed.data.paymentDetails,
+    clusoPaymentDefaults,
+  );
   const enterpriseGstDefaults = buildEnterpriseGstDefaults(customer);
   const gstEnabled = asBoolean(parsed.data.gstEnabled, enterpriseGstDefaults.gstEnabled);
   const gstRate = normalizeGstRate(parsed.data.gstRate, enterpriseGstDefaults.gstRate);
@@ -1139,6 +1290,10 @@ export async function POST(req: NextRequest) {
     customerEmail: customer.email ?? "",
     enterpriseDetails,
     clusoDetails,
+    paymentDetails,
+    paymentStatus: "unpaid",
+    paymentProof: null,
+    paidAt: null,
     gstEnabled,
     gstRate,
     lineItems,
@@ -1247,6 +1402,11 @@ export async function PATCH(req: NextRequest) {
     const clusoDoc =
       (await ClusoDetails.findOne({ slug: CLUSO_DETAILS_SLUG })) ||
       new ClusoDetails({ slug: CLUSO_DETAILS_SLUG });
+    const currentPaymentDefaults = buildClusoPaymentDefaults(clusoDoc.profile);
+    const paymentDetails = normalizeInvoicePaymentDetails(
+      parsed.data.paymentDetails,
+      currentPaymentDefaults,
+    );
 
     clusoDoc.set("profile.companyInformation.companyName", clusoDetails.companyName);
     clusoDoc.set("profile.companyInformation.gstin", clusoDetails.gstin);
@@ -1265,6 +1425,42 @@ export async function PATCH(req: NextRequest) {
     clusoDoc.set(
       "profile.invoicingInformation.invoiceEmail",
       normalizeEmail(clusoDetails.invoiceEmail),
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.upiId",
+      paymentDetails.upi.upiId,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.upiQrCodeImageUrl",
+      paymentDetails.upi.qrCodeImageUrl,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.wireTransfer.accountHolderName",
+      paymentDetails.wireTransfer.accountHolderName,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.wireTransfer.accountNumber",
+      paymentDetails.wireTransfer.accountNumber,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.wireTransfer.bankName",
+      paymentDetails.wireTransfer.bankName,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.wireTransfer.ifscCode",
+      paymentDetails.wireTransfer.ifscCode,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.wireTransfer.branchName",
+      paymentDetails.wireTransfer.branchName,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.wireTransfer.swiftCode",
+      paymentDetails.wireTransfer.swiftCode,
+    );
+    clusoDoc.set(
+      "profile.invoicingInformation.paymentMethods.wireTransfer.instructions",
+      paymentDetails.wireTransfer.instructions,
     );
     setAddressFromText(
       clusoDoc,
@@ -1309,6 +1505,43 @@ export async function PATCH(req: NextRequest) {
     });
   }
 
+  if (parsed.data.action === "update-payment-status") {
+    if (!parsed.data.invoiceId) {
+      return NextResponse.json({ error: "Missing invoiceId." }, { status: 400 });
+    }
+
+    const invoiceDoc = await Invoice.findById(parsed.data.invoiceId);
+    if (!invoiceDoc) {
+      return NextResponse.json({ error: "Invoice not found." }, { status: 404 });
+    }
+
+    const nextStatus = normalizeInvoicePaymentStatus(
+      parsed.data.paymentStatus,
+      normalizeInvoicePaymentStatus(invoiceDoc.paymentStatus, "unpaid"),
+    );
+
+    invoiceDoc.paymentStatus = nextStatus;
+    if (nextStatus === "paid") {
+      invoiceDoc.paidAt = new Date();
+    } else {
+      invoiceDoc.paidAt = null;
+    }
+
+    await invoiceDoc.save();
+
+    return NextResponse.json({
+      message:
+        nextStatus === "paid"
+          ? "Invoice marked as paid."
+          : nextStatus === "submitted"
+            ? "Invoice moved to payment submitted state."
+            : "Invoice marked as unpaid.",
+      invoice: normalizeInvoiceRecord(
+        invoiceDoc.toObject() as unknown as Record<string, unknown>,
+      ),
+    });
+  }
+
   if (!parsed.data.invoiceId) {
     return NextResponse.json({ error: "Missing invoiceId." }, { status: 400 });
   }
@@ -1323,6 +1556,10 @@ export async function PATCH(req: NextRequest) {
     emptyPartyDetails,
   );
   const currentCluso = normalizePartyDetails(invoiceDoc.clusoDetails, emptyPartyDetails);
+  const currentPaymentDetails = normalizeInvoicePaymentDetails(
+    invoiceDoc.paymentDetails,
+    emptyPaymentDetails,
+  );
   const currentGstEnabled = asBoolean(invoiceDoc.gstEnabled, false);
   const currentGstRate = normalizeGstRate(invoiceDoc.gstRate, 18);
 
@@ -1333,6 +1570,10 @@ export async function PATCH(req: NextRequest) {
   invoiceDoc.clusoDetails = normalizePartyDetails(
     parsed.data.clusoDetails,
     currentCluso,
+  );
+  invoiceDoc.paymentDetails = normalizeInvoicePaymentDetails(
+    parsed.data.paymentDetails,
+    currentPaymentDetails,
   );
   invoiceDoc.gstEnabled = asBoolean(parsed.data.gstEnabled, currentGstEnabled);
   invoiceDoc.gstRate = normalizeGstRate(parsed.data.gstRate, currentGstRate);
