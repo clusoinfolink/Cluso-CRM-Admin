@@ -109,7 +109,22 @@ export type RequestItem = {
     answers: Array<{
       fieldKey?: string;
       question: string;
-      fieldType: "text" | "long_text" | "number" | "file" | "date";
+      fieldType:
+        | "text"
+        | "long_text"
+        | "number"
+        | "file"
+        | "date"
+        | "dropdown"
+        | "composite";
+      subFields?: Array<{
+        fieldKey?: string;
+        question: string;
+        fieldType: "text" | "number" | "date" | "dropdown";
+        value: string;
+        required?: boolean;
+        dropdownOptions?: string[];
+      }>;
       required?: boolean;
       repeatable?: boolean;
       notApplicable?: boolean;
@@ -126,11 +141,28 @@ export type RequestItem = {
   customerEmail: string;
 };
 
+export type ServiceFormSubField = {
+  fieldKey?: string;
+  question: string;
+  fieldType: "text" | "number" | "date" | "dropdown";
+  dropdownOptions?: string[];
+  required: boolean;
+};
+
 export type ServiceFormField = {
   fieldKey?: string;
   question: string;
   iconKey?: string;
-  fieldType: "text" | "long_text" | "number" | "file" | "date";
+  fieldType:
+    | "text"
+    | "long_text"
+    | "number"
+    | "file"
+    | "date"
+    | "dropdown"
+    | "composite";
+  subFields?: ServiceFormSubField[];
+  dropdownOptions?: string[];
   required: boolean;
   repeatable?: boolean;
   minLength?: number | null;
@@ -160,6 +192,7 @@ export type CompanyServiceSelection = {
   serviceName: string;
   price: number;
   currency: SupportedCurrency;
+  yearsOfChecking?: string;
 };
 
 export type CompanyProfileAddress = {
@@ -264,9 +297,17 @@ export type InvoicePaymentDetails = {
   };
 };
 
-export type InvoicePaymentMethod = "upi" | "wireTransfer";
+export type InvoicePaymentMethod = "upi" | "wireTransfer" | "adminUpload";
 
 export type InvoicePaymentStatus = "unpaid" | "submitted" | "paid";
+
+export type InvoicePaymentRelatedFile = {
+  fileData: string;
+  fileName: string;
+  fileMimeType: string;
+  fileSize: number;
+  uploadedAt: string;
+};
 
 export type InvoicePaymentProof = {
   method: InvoicePaymentMethod;
@@ -275,6 +316,7 @@ export type InvoicePaymentProof = {
   screenshotMimeType: string;
   screenshotFileSize: number;
   uploadedAt: string;
+  relatedFiles: InvoicePaymentRelatedFile[];
 };
 
 export type InvoiceLineItem = {

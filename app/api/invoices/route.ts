@@ -21,6 +21,10 @@ import type {
 const CLUSO_DETAILS_SLUG = "cluso-details";
 const SUPPORTED_CURRENCY_SET = new Set<string>(SUPPORTED_CURRENCIES);
 const BILLING_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
+const MAX_PAYMENT_PROOF_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const IMAGE_DATA_URL_REGEX = /^data:image\/[a-zA-Z0-9.+-]+;base64,/i;
+const RELATED_FILE_DATA_URL_REGEX =
+  /^data:(image\/[a-zA-Z0-9.+-]+|application\/pdf);base64,/i;
 
 const generateInvoiceSchema = z.object({
   action: z.literal("generate"),
@@ -46,6 +50,8 @@ const updateInvoiceSchema = z.object({
   gstEnabled: z.boolean().optional(),
   gstRate: z.number().min(0).max(100).optional(),
   paymentStatus: z.enum(["unpaid", "submitted", "paid"]).optional(),
+  paymentProof: z.unknown().optional(),
+  clearPaymentProof: z.boolean().optional(),
   enterpriseDetails: z.unknown().optional(),
   clusoDetails: z.unknown().optional(),
   paymentDetails: z.unknown().optional(),
@@ -91,6 +97,41 @@ function normalizeInvoicePaymentStatus(
   return fallback;
 }
 
+function normalizeInvoicePaymentRelatedFile(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const raw = asRecord(value);
+  const fileData = asString(raw.fileData).trim();
+  const fileName = asString(raw.fileName).trim();
+  const fileMimeType = asString(raw.fileMimeType).trim().toLowerCase();
+  const fileSizeRaw = Number(raw.fileSize);
+  const uploadedAt = parseDateValue(raw.uploadedAt);
+  const normalizedFileSize =
+    Number.isFinite(fileSizeRaw) && fileSizeRaw > 0 ? Math.trunc(fileSizeRaw) : 0;
+
+  if (
+    !fileData ||
+    !fileName ||
+    !fileMimeType ||
+    !uploadedAt ||
+    !RELATED_FILE_DATA_URL_REGEX.test(fileData) ||
+    normalizedFileSize <= 0 ||
+    normalizedFileSize > MAX_PAYMENT_PROOF_FILE_SIZE_BYTES
+  ) {
+    return null;
+  }
+
+  return {
+    fileData,
+    fileName,
+    fileMimeType,
+    fileSize: normalizedFileSize,
+    uploadedAt: uploadedAt.toISOString(),
+  };
+}
+
 function normalizeInvoicePaymentProof(value: unknown): InvoicePaymentProof | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -98,15 +139,41 @@ function normalizeInvoicePaymentProof(value: unknown): InvoicePaymentProof | nul
 
   const raw = asRecord(value);
   const methodRaw = asString(raw.method).trim();
-  const method: InvoicePaymentMethod =
-    methodRaw === "wireTransfer" ? "wireTransfer" : "upi";
+  let method: InvoicePaymentMethod = "upi";
+  if (methodRaw === "wireTransfer" || methodRaw === "adminUpload") {
+    method = methodRaw;
+  }
   const screenshotData = asString(raw.screenshotData).trim();
   const screenshotFileName = asString(raw.screenshotFileName).trim();
   const screenshotMimeType = asString(raw.screenshotMimeType).trim();
   const screenshotFileSize = Number(raw.screenshotFileSize);
   const uploadedAt = parseDateValue(raw.uploadedAt);
+  const normalizedMimeType = screenshotMimeType.toLowerCase();
+  const relatedFiles = Array.isArray(raw.relatedFiles)
+    ? raw.relatedFiles
+        .map((entry) => normalizeInvoicePaymentRelatedFile(entry))
+        .filter(
+          (
+            entry,
+          ): entry is NonNullable<ReturnType<typeof normalizeInvoicePaymentRelatedFile>> =>
+            Boolean(entry),
+        )
+    : [];
+  const normalizedFileSize =
+    Number.isFinite(screenshotFileSize) && screenshotFileSize > 0
+      ? Math.trunc(screenshotFileSize)
+      : 0;
 
-  if (!screenshotData || !screenshotFileName || !screenshotMimeType || !uploadedAt) {
+  if (
+    !screenshotData ||
+    !screenshotFileName ||
+    !screenshotMimeType ||
+    !uploadedAt ||
+    !normalizedMimeType.startsWith("image/") ||
+    !IMAGE_DATA_URL_REGEX.test(screenshotData) ||
+    normalizedFileSize <= 0 ||
+    normalizedFileSize > MAX_PAYMENT_PROOF_FILE_SIZE_BYTES
+  ) {
     return null;
   }
 
@@ -114,12 +181,10 @@ function normalizeInvoicePaymentProof(value: unknown): InvoicePaymentProof | nul
     method,
     screenshotData,
     screenshotFileName,
-    screenshotMimeType,
-    screenshotFileSize:
-      Number.isFinite(screenshotFileSize) && screenshotFileSize > 0
-        ? Math.trunc(screenshotFileSize)
-        : 0,
+    screenshotMimeType: normalizedMimeType,
+    screenshotFileSize: normalizedFileSize,
     uploadedAt: uploadedAt.toISOString(),
+    relatedFiles,
   };
 }
 
@@ -1519,8 +1584,26 @@ export async function PATCH(req: NextRequest) {
       parsed.data.paymentStatus,
       normalizeInvoicePaymentStatus(invoiceDoc.paymentStatus, "unpaid"),
     );
+    const nextPaymentProof = normalizeInvoicePaymentProof(parsed.data.paymentProof);
+    const clearPaymentProof = asBoolean(parsed.data.clearPaymentProof, false);
 
     invoiceDoc.paymentStatus = nextStatus;
+    if (clearPaymentProof) {
+      invoiceDoc.paymentProof = null;
+    } else if (nextPaymentProof) {
+      invoiceDoc.set("paymentProof", {
+        ...nextPaymentProof,
+        uploadedAt: new Date(nextPaymentProof.uploadedAt),
+        relatedFiles: nextPaymentProof.relatedFiles.map((entry) => ({
+          fileData: entry.fileData,
+          fileName: entry.fileName,
+          fileMimeType: entry.fileMimeType,
+          fileSize: entry.fileSize,
+          uploadedAt: new Date(entry.uploadedAt),
+        })),
+      });
+    }
+
     if (nextStatus === "paid") {
       invoiceDoc.paidAt = new Date();
     } else {
@@ -1529,13 +1612,24 @@ export async function PATCH(req: NextRequest) {
 
     await invoiceDoc.save();
 
-    return NextResponse.json({
-      message:
+    let responseMessage =
+      nextStatus === "paid"
+        ? nextPaymentProof
+          ? "Invoice marked as paid and payment document uploaded."
+          : "Invoice marked as paid."
+        : nextStatus === "submitted"
+          ? "Invoice moved to payment submitted state."
+          : "Invoice marked as unpaid.";
+
+    if (clearPaymentProof) {
+      responseMessage =
         nextStatus === "paid"
-          ? "Invoice marked as paid."
-          : nextStatus === "submitted"
-            ? "Invoice moved to payment submitted state."
-            : "Invoice marked as unpaid.",
+          ? "Invoice kept as paid and uploaded payment file removed."
+          : "Uploaded payment file removed.";
+    }
+
+    return NextResponse.json({
+      message: responseMessage,
       invoice: normalizeInvoiceRecord(
         invoiceDoc.toObject() as unknown as Record<string, unknown>,
       ),

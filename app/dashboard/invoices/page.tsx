@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Building2,
   CheckCircle2,
+  Eye,
   FileText,
   Landmark,
   Printer,
@@ -11,6 +12,7 @@ import {
   Save,
   Send,
   UserCircle2,
+  X,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { getAlertTone } from "@/lib/alerts";
@@ -36,6 +38,7 @@ type MonthlySummaryRow = {
   gstAmount: number;
   total: number;
 };
+
 type BuilderLineItem = {
   key: string;
   serviceName: string;
@@ -222,13 +225,19 @@ function formatBillingPeriod(value: string) {
   return `${parsedStart.toLocaleDateString("en-IN", formatOptions)} to ${parsedEnd.toLocaleDateString("en-IN", formatOptions)}`;
 }
 
-function formatInvoiceTotals(totals: InvoiceRecord["totalsByCurrency"]) {
-  if (!Array.isArray(totals) || totals.length === 0) {
+function formatInvoiceTotals(invoice: InvoiceRecord) {
+  const totalsWithGst = buildGstBreakdownRows(
+    invoice.totalsByCurrency,
+    invoice.gstEnabled,
+    invoice.gstRate,
+  );
+
+  if (!Array.isArray(totalsWithGst) || totalsWithGst.length === 0) {
     return "-";
   }
 
-  return totals
-    .map((entry) => formatMoney(entry.subtotal, entry.currency))
+  return totalsWithGst
+    .map((entry) => formatMoney(entry.total, entry.currency))
     .join(" | ");
 }
 
@@ -321,7 +330,7 @@ function getPaymentStatusMeta(status: InvoiceRecord["paymentStatus"]) {
 
   if (status === "submitted") {
     return {
-      label: "Receipt Uploaded",
+      label: "Payment In Process",
       background: "#FEF3C7",
       border: "#FDE68A",
       color: "#92400E",
@@ -329,11 +338,62 @@ function getPaymentStatusMeta(status: InvoiceRecord["paymentStatus"]) {
   }
 
   return {
-    label: "Click to Pay",
+    label: "Unpaid",
     background: "#E2E8F0",
     border: "#CBD5E1",
     color: "#334155",
   };
+}
+
+function canReviewPaymentProof(invoice: InvoiceRecord) {
+  return Boolean(invoice.paymentProof);
+}
+
+function canMarkInvoiceAsPaid(invoice: InvoiceRecord) {
+  return invoice.paymentStatus !== "paid";
+}
+
+function canMarkInvoiceAsUnpaid(invoice: InvoiceRecord) {
+  return invoice.paymentStatus === "paid";
+}
+
+function getPaymentProofMethodLabel(method: "upi" | "wireTransfer" | "adminUpload") {
+  if (method === "adminUpload") {
+    return "Admin Upload";
+  }
+
+  return method === "wireTransfer" ? "Wire Transfer" : "UPI";
+}
+
+function hasAdminUploadedProof(invoice: InvoiceRecord) {
+  return invoice.paymentProof?.method === "adminUpload";
+}
+
+function hasCustomerRelatedFiles(invoice: InvoiceRecord) {
+  return Boolean(
+    invoice.paymentProof &&
+      invoice.paymentProof.method !== "adminUpload" &&
+      invoice.paymentProof.relatedFiles.length > 0,
+  );
+}
+
+function getPaymentProofViewLabel(invoice: InvoiceRecord) {
+  return hasCustomerRelatedFiles(invoice) ? "View Customer Files" : "View Screenshot";
+}
+
+function getPaymentProofSummaryText(invoice: InvoiceRecord) {
+  if (!invoice.paymentProof) {
+    return "";
+  }
+
+  if (hasCustomerRelatedFiles(invoice)) {
+    const relatedFilesCount = invoice.paymentProof.relatedFiles.length;
+    return `Payment in process + ${relatedFilesCount} related file${relatedFilesCount === 1 ? "" : "s"}`;
+  }
+
+  return hasAdminUploadedProof(invoice)
+    ? "Admin payment document uploaded"
+    : "Payment in process";
 }
 
 export default function InvoicesPage() {
@@ -366,6 +426,13 @@ export default function InvoicesPage() {
   const [savingGstDefaults, setSavingGstDefaults] = useState(false);
   const [sendingInvoiceId, setSendingInvoiceId] = useState("");
   const [updatingPaymentInvoiceId, setUpdatingPaymentInvoiceId] = useState("");
+  const [adminUploadInvoiceId, setAdminUploadInvoiceId] = useState("");
+  const [adminUploadData, setAdminUploadData] = useState("");
+  const [adminUploadFileName, setAdminUploadFileName] = useState("");
+  const [adminUploadMimeType, setAdminUploadMimeType] = useState("");
+  const [adminUploadFileSize, setAdminUploadFileSize] = useState(0);
+  const [uploadingAdminProofInvoiceId, setUploadingAdminProofInvoiceId] = useState("");
+  const [paymentProofPreviewInvoiceId, setPaymentProofPreviewInvoiceId] = useState("");
   const [historyCompanyFilter, setHistoryCompanyFilter] = useState("all");
   const [historyMonthFilter, setHistoryMonthFilter] = useState("all");
   const [historySearchText, setHistorySearchText] = useState("");
@@ -487,6 +554,19 @@ export default function InvoicesPage() {
     () => companyInvoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null,
     [companyInvoices, selectedInvoiceId],
   );
+
+  const paymentProofPreviewInvoice = useMemo(
+    () => invoices.find((invoice) => invoice.id === paymentProofPreviewInvoiceId) ?? null,
+    [invoices, paymentProofPreviewInvoiceId],
+  );
+
+  const adminUploadInvoice = useMemo(
+    () => invoices.find((invoice) => invoice.id === adminUploadInvoiceId) ?? null,
+    [invoices, adminUploadInvoiceId],
+  );
+
+  const adminUploadHasExistingProof =
+    adminUploadInvoice?.paymentProof?.method === "adminUpload";
 
   const selectedMonthInvoice = useMemo(
     () => companyInvoices.find((invoice) => invoice.billingMonth === selectedBillingMonth) ?? null,
@@ -1191,6 +1271,10 @@ export default function InvoicesPage() {
   async function updateInvoicePaymentStatus(
     invoiceId: string,
     paymentStatus: "unpaid" | "submitted" | "paid",
+    options?: {
+      paymentProof?: InvoiceRecord["paymentProof"];
+      clearPaymentProof?: boolean;
+    },
   ) {
     if (!invoiceId) {
       return;
@@ -1207,6 +1291,8 @@ export default function InvoicesPage() {
           action: "update-payment-status",
           invoiceId,
           paymentStatus,
+          paymentProof: options?.paymentProof ?? undefined,
+          clearPaymentProof: options?.clearPaymentProof ?? undefined,
         }),
       });
 
@@ -1242,6 +1328,99 @@ export default function InvoicesPage() {
       setMessage("Could not update invoice payment status.");
     } finally {
       setUpdatingPaymentInvoiceId("");
+    }
+  }
+
+  function resetAdminUploadState() {
+    setAdminUploadInvoiceId("");
+    clearSelectedAdminUploadFile();
+  }
+
+  function clearSelectedAdminUploadFile() {
+    setAdminUploadData("");
+    setAdminUploadFileName("");
+    setAdminUploadMimeType("");
+    setAdminUploadFileSize(0);
+  }
+
+  function openAdminUploadModal(invoice: InvoiceRecord) {
+    setAdminUploadInvoiceId(invoice.id);
+    if (invoice.paymentProof?.method === "adminUpload") {
+      setAdminUploadData(invoice.paymentProof.screenshotData);
+      setAdminUploadFileName(invoice.paymentProof.screenshotFileName);
+      setAdminUploadMimeType(invoice.paymentProof.screenshotMimeType);
+      setAdminUploadFileSize(invoice.paymentProof.screenshotFileSize);
+    } else {
+      clearSelectedAdminUploadFile();
+    }
+    setMessage("");
+  }
+
+  async function onAdminProofFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      clearSelectedAdminUploadFile();
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setMessage("Please upload an image document (screenshot/photo).");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setMessage("Payment document must be 5 MB or smaller.");
+      event.target.value = "";
+      return;
+    }
+
+    const fileData = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(new Error("Could not read the selected document."));
+      reader.readAsDataURL(file);
+    }).catch(() => "");
+
+    if (!fileData) {
+      setMessage("Could not read the selected document.");
+      return;
+    }
+
+    setAdminUploadData(fileData);
+    setAdminUploadFileName(file.name);
+    setAdminUploadMimeType(file.type);
+    setAdminUploadFileSize(file.size);
+  }
+
+  async function submitAdminPaymentProofAndMarkPaid() {
+    if (!adminUploadInvoice) {
+      return;
+    }
+
+    if (!adminUploadData || !adminUploadFileName || !adminUploadMimeType) {
+      setMessage("Upload a payment document before marking as paid.");
+      return;
+    }
+
+    setUploadingAdminProofInvoiceId(adminUploadInvoice.id);
+    setMessage("");
+
+    const paymentProof: InvoiceRecord["paymentProof"] = {
+      method: "adminUpload",
+      screenshotData: adminUploadData,
+      screenshotFileName: adminUploadFileName,
+      screenshotMimeType: adminUploadMimeType,
+      screenshotFileSize: adminUploadFileSize,
+      uploadedAt: new Date().toISOString(),
+      relatedFiles: [],
+    };
+
+    try {
+      await updateInvoicePaymentStatus(adminUploadInvoice.id, "paid", { paymentProof });
+      resetAdminUploadState();
+    } finally {
+      setUploadingAdminProofInvoiceId("");
     }
   }
 
@@ -1442,7 +1621,7 @@ export default function InvoicesPage() {
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Company</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Billing Month</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Generated</th>
-                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Totals</th>
+                  <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Totals (Incl GST)</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Generated By</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Payment</th>
                   <th style={{ padding: "0.55rem", fontSize: "0.8rem", color: "#64748B" }}>Actions</th>
@@ -1469,7 +1648,7 @@ export default function InvoicesPage() {
                       </td>
                       <td style={{ padding: "0.55rem", color: "#334155" }}>{formatDateTime(invoice.createdAt)}</td>
                       <td style={{ padding: "0.55rem", color: "#1E293B", fontWeight: 600 }}>
-                        {formatInvoiceTotals(invoice.totalsByCurrency)}
+                        {formatInvoiceTotals(invoice)}
                       </td>
                       <td style={{ padding: "0.55rem", color: "#334155" }}>
                         {invoice.generatedByName || "-"}
@@ -1491,8 +1670,15 @@ export default function InvoicesPage() {
                           {paymentStatusMeta.label}
                         </span>
                         {invoice.paymentProof ? (
-                          <div style={{ color: "#0F766E", fontSize: "0.76rem", marginTop: "0.3rem" }}>
-                            Receipt attached
+                          <div
+                            style={{
+                              color: hasAdminUploadedProof(invoice) ? "#1D4ED8" : "#0F766E",
+                              fontSize: "0.76rem",
+                              marginTop: "0.3rem",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {getPaymentProofSummaryText(invoice)}
                           </div>
                         ) : null}
                       </td>
@@ -1529,29 +1715,46 @@ export default function InvoicesPage() {
                           <button
                             type="button"
                             className="btn btn-secondary"
-                            onClick={() =>
-                              void updateInvoicePaymentStatus(
-                                invoice.id,
-                                invoice.paymentStatus === "paid" ? "unpaid" : "paid",
-                              )
-                            }
-                            disabled={updatingPaymentInvoiceId === invoice.id}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "0.4rem",
-                              borderColor:
-                                invoice.paymentStatus === "paid" ? "#FCA5A5" : "#86EFAC",
-                              color:
-                                invoice.paymentStatus === "paid" ? "#991B1B" : "#166534",
-                            }}
+                            onClick={() => openAdminUploadModal(invoice)}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
                           >
-                            {updatingPaymentInvoiceId === invoice.id
-                              ? "Updating..."
-                              : invoice.paymentStatus === "paid"
-                                ? "Mark Unpaid"
-                                : "Mark Paid"}
+                            <FileText size={14} />
+                            Upload & Mark Paid
                           </button>
+                          {canReviewPaymentProof(invoice) ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => setPaymentProofPreviewInvoiceId(invoice.id)}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+                            >
+                              <Eye size={14} />
+                              {getPaymentProofViewLabel(invoice)}
+                            </button>
+                          ) : null}
+                          {canMarkInvoiceAsPaid(invoice) ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => void updateInvoicePaymentStatus(invoice.id, "paid")}
+                              disabled={updatingPaymentInvoiceId === invoice.id}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#86EFAC", color: "#166534" }}
+                            >
+                              <CheckCircle2 size={14} />
+                              {updatingPaymentInvoiceId === invoice.id ? "Updating..." : "Mark Paid"}
+                            </button>
+                          ) : canMarkInvoiceAsUnpaid(invoice) ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => void updateInvoicePaymentStatus(invoice.id, "unpaid")}
+                              disabled={updatingPaymentInvoiceId === invoice.id}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                            >
+                              <X size={14} />
+                              {updatingPaymentInvoiceId === invoice.id ? "Updating..." : "Mark Unpaid"}
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -2370,26 +2573,46 @@ export default function InvoicesPage() {
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  onClick={() =>
-                    void updateInvoicePaymentStatus(
-                      selectedInvoice.id,
-                      selectedInvoice.paymentStatus === "paid" ? "unpaid" : "paid",
-                    )
-                  }
-                  disabled={updatingPaymentInvoiceId === selectedInvoice.id}
-                  style={{
-                    borderColor:
-                      selectedInvoice.paymentStatus === "paid" ? "#FCA5A5" : "#86EFAC",
-                    color:
-                      selectedInvoice.paymentStatus === "paid" ? "#991B1B" : "#166534",
-                  }}
+                  onClick={() => openAdminUploadModal(selectedInvoice)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}
                 >
-                  {updatingPaymentInvoiceId === selectedInvoice.id
-                    ? "Updating..."
-                    : selectedInvoice.paymentStatus === "paid"
-                      ? "Mark Unpaid"
-                      : "Mark Paid"}
+                  <FileText size={16} />
+                  Upload Document & Mark Paid
                 </button>
+                {canReviewPaymentProof(selectedInvoice) ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setPaymentProofPreviewInvoiceId(selectedInvoice.id)}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem" }}
+                  >
+                    <Eye size={16} />
+                    {getPaymentProofViewLabel(selectedInvoice)}
+                  </button>
+                ) : null}
+                {canMarkInvoiceAsPaid(selectedInvoice) ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void updateInvoicePaymentStatus(selectedInvoice.id, "paid")}
+                    disabled={updatingPaymentInvoiceId === selectedInvoice.id}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", borderColor: "#86EFAC", color: "#166534" }}
+                  >
+                    <CheckCircle2 size={16} />
+                    {updatingPaymentInvoiceId === selectedInvoice.id ? "Updating..." : "Mark Paid"}
+                  </button>
+                ) : canMarkInvoiceAsUnpaid(selectedInvoice) ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void updateInvoicePaymentStatus(selectedInvoice.id, "unpaid")}
+                    disabled={updatingPaymentInvoiceId === selectedInvoice.id}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                  >
+                    <X size={16} />
+                    {updatingPaymentInvoiceId === selectedInvoice.id ? "Updating..." : "Mark Unpaid"}
+                  </button>
+                ) : null}
               </>
             ) : null}
           </div>
@@ -2488,8 +2711,15 @@ export default function InvoicesPage() {
                             {paymentStatusMeta.label}
                           </span>
                           {invoice.paymentProof ? (
-                            <span style={{ marginLeft: "0.45rem", color: "#0F766E", fontSize: "0.76rem" }}>
-                              Receipt uploaded
+                            <span
+                              style={{
+                                marginLeft: "0.45rem",
+                                color: hasAdminUploadedProof(invoice) ? "#1D4ED8" : "#0F766E",
+                                fontSize: "0.76rem",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {getPaymentProofSummaryText(invoice)}
                             </span>
                           ) : null}
                         </div>
@@ -2530,26 +2760,46 @@ export default function InvoicesPage() {
                         <button
                           type="button"
                           className="btn btn-secondary"
-                          onClick={() =>
-                            void updateInvoicePaymentStatus(
-                              invoice.id,
-                              invoice.paymentStatus === "paid" ? "unpaid" : "paid",
-                            )
-                          }
-                          disabled={updatingPaymentInvoiceId === invoice.id}
-                          style={{
-                            borderColor:
-                              invoice.paymentStatus === "paid" ? "#FCA5A5" : "#86EFAC",
-                            color:
-                              invoice.paymentStatus === "paid" ? "#991B1B" : "#166534",
-                          }}
+                          onClick={() => openAdminUploadModal(invoice)}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
                         >
-                          {updatingPaymentInvoiceId === invoice.id
-                            ? "Updating..."
-                            : invoice.paymentStatus === "paid"
-                              ? "Mark Unpaid"
-                              : "Mark Paid"}
+                          <FileText size={15} />
+                          Upload & Mark Paid
                         </button>
+                        {canReviewPaymentProof(invoice) ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setPaymentProofPreviewInvoiceId(invoice.id)}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+                          >
+                            <Eye size={15} />
+                            {getPaymentProofViewLabel(invoice)}
+                          </button>
+                        ) : null}
+                        {canMarkInvoiceAsPaid(invoice) ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => void updateInvoicePaymentStatus(invoice.id, "paid")}
+                            disabled={updatingPaymentInvoiceId === invoice.id}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#86EFAC", color: "#166534" }}
+                          >
+                            <CheckCircle2 size={15} />
+                            {updatingPaymentInvoiceId === invoice.id ? "Updating..." : "Mark Paid"}
+                          </button>
+                        ) : canMarkInvoiceAsUnpaid(invoice) ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => void updateInvoicePaymentStatus(invoice.id, "unpaid")}
+                            disabled={updatingPaymentInvoiceId === invoice.id}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                          >
+                            <X size={15} />
+                            {updatingPaymentInvoiceId === invoice.id ? "Updating..." : "Mark Unpaid"}
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -2561,45 +2811,23 @@ export default function InvoicesPage() {
       </section>
 
       {monthlySummary ? (
-        <section className="glass-card" style={{ padding: "1rem", marginTop: "1rem" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: "0.6rem",
-              flexWrap: "wrap",
-            }}
-          >
-            <h3 style={{ marginTop: 0, marginBottom: 0, color: "#1E293B" }}>
-              Billable Requests Summary ({monthlySummary.billingMonthLabel})
-            </h3>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={printMonthlySummary}
-                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
-              >
-                <Printer size={15} />
-                Print Summary
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => selectedMonthInvoice && void sendInvoiceToCustomer(selectedMonthInvoice.id)}
-                disabled={!selectedMonthInvoice || Boolean(sendingInvoiceId)}
-                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
-                title={!selectedMonthInvoice ? "Generate invoice for this month first to send." : undefined}
-              >
-                <Send size={15} />
-                {selectedMonthInvoice
-                  ? sendingInvoiceId === selectedMonthInvoice.id
-                    ? "Sending..."
-                    : "Send to Customer"
-                  : "No Invoice To Send"}
-              </button>
-            </div>
+        <section style={{ marginTop: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => selectedMonthInvoice && void sendInvoiceToCustomer(selectedMonthInvoice.id)}
+              disabled={!selectedMonthInvoice || Boolean(sendingInvoiceId)}
+              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+              title={!selectedMonthInvoice ? "Generate invoice for this month first to send." : undefined}
+            >
+              <Send size={15} />
+              {selectedMonthInvoice
+                ? sendingInvoiceId === selectedMonthInvoice.id
+                  ? "Sending..."
+                  : "Send to Customer"
+                : "No Invoice To Send"}
+            </button>
           </div>
           <div style={{ overflowX: "auto" }}>
             <article
@@ -2975,33 +3203,114 @@ export default function InvoicesPage() {
                       </span>
                     </div>
                     {selectedInvoice.paymentProof ? (
-                      <>
-                        <div>
-                          <strong>Receipt Method:</strong>{" "}
-                          {selectedInvoice.paymentProof.method === "wireTransfer"
-                            ? "Wire Transfer"
-                            : "UPI"}
-                        </div>
-                        <div>
-                          <strong>Receipt Uploaded At:</strong>{" "}
-                          {formatDateTime(selectedInvoice.paymentProof.uploadedAt)}
-                        </div>
-                        <div style={{ marginTop: "0.45rem" }}>
-                          <img
-                            src={selectedInvoice.paymentProof.screenshotData}
-                            alt="Client uploaded payment receipt"
-                            style={{
-                              width: "160px",
-                              maxWidth: "100%",
-                              border: "1px solid #CBD5E1",
-                              borderRadius: "8px",
-                              background: "#FFFFFF",
-                              padding: "0.25rem",
-                              objectFit: "contain",
-                            }}
-                          />
-                        </div>
-                      </>
+                      hasAdminUploadedProof(selectedInvoice) ? (
+                        <>
+                          <div style={{ marginTop: "0.35rem", paddingTop: "0.35rem", borderTop: "1px dashed #CBD5E1" }}>
+                            <strong>Admin Payment Document:</strong> Uploaded by admin
+                          </div>
+                          <div>
+                            <strong>Uploaded At:</strong>{" "}
+                            {formatDateTime(selectedInvoice.paymentProof.uploadedAt)}
+                          </div>
+                          <div style={{ color: "#1D4ED8", fontSize: "0.78rem", fontWeight: 600 }}>
+                            Stored as Admin Upload (separate from customer UPI/Wire receipt).
+                          </div>
+                          <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => setPaymentProofPreviewInvoiceId(selectedInvoice.id)}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+                            >
+                              <Eye size={14} />
+                              {getPaymentProofViewLabel(selectedInvoice)}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => openAdminUploadModal(selectedInvoice)}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#93C5FD", color: "#1D4ED8" }}
+                            >
+                              <FileText size={14} />
+                              Edit File
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() =>
+                                void updateInvoicePaymentStatus(selectedInvoice.id, selectedInvoice.paymentStatus, {
+                                  clearPaymentProof: true,
+                                })
+                              }
+                              disabled={updatingPaymentInvoiceId === selectedInvoice.id}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                            >
+                              <X size={14} />
+                              {updatingPaymentInvoiceId === selectedInvoice.id ? "Removing..." : "Remove File"}
+                            </button>
+                          </div>
+                          <div style={{ marginTop: "0.45rem" }}>
+                            <img
+                              src={selectedInvoice.paymentProof.screenshotData}
+                              alt="Admin uploaded payment document"
+                              style={{
+                                width: "160px",
+                                maxWidth: "100%",
+                                border: "1px solid #CBD5E1",
+                                borderRadius: "8px",
+                                background: "#FFFFFF",
+                                padding: "0.25rem",
+                                objectFit: "contain",
+                              }}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <strong>Receipt Method:</strong>{" "}
+                            {getPaymentProofMethodLabel(selectedInvoice.paymentProof.method)}
+                          </div>
+                          <div>
+                            <strong>Receipt Uploaded At:</strong>{" "}
+                            {formatDateTime(selectedInvoice.paymentProof.uploadedAt)}
+                          </div>
+                          <div style={{ color: "#0F766E", fontSize: "0.78rem", fontWeight: 600 }}>
+                            Payment in process
+                          </div>
+                          {selectedInvoice.paymentProof.relatedFiles.length > 0 ? (
+                            <div style={{ color: "#0F766E", fontSize: "0.78rem", fontWeight: 600 }}>
+                              Customer related files: {selectedInvoice.paymentProof.relatedFiles.length}
+                            </div>
+                          ) : null}
+                          <div style={{ marginTop: "0.45rem" }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => setPaymentProofPreviewInvoiceId(selectedInvoice.id)}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+                            >
+                              <Eye size={14} />
+                              {getPaymentProofViewLabel(selectedInvoice)}
+                            </button>
+                          </div>
+                          <div style={{ marginTop: "0.45rem" }}>
+                            <img
+                              src={selectedInvoice.paymentProof.screenshotData}
+                              alt="Customer uploaded payment receipt"
+                              style={{
+                                width: "160px",
+                                maxWidth: "100%",
+                                border: "1px solid #CBD5E1",
+                                borderRadius: "8px",
+                                background: "#FFFFFF",
+                                padding: "0.25rem",
+                                objectFit: "contain",
+                              }}
+                            />
+                          </div>
+                        </>
+                      )
                     ) : (
                       <div style={{ color: "#64748B", fontSize: "0.85rem", marginTop: "0.25rem" }}>
                         Client receipt not uploaded yet.
@@ -3078,10 +3387,712 @@ export default function InvoicesPage() {
                     </table>
                   </div>
                 </section>
+
+                {paymentProofPreviewInvoice?.paymentProof ? (
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Payment proof preview"
+                    onClick={() => setPaymentProofPreviewInvoiceId("")}
+                    style={{
+                      position: "fixed",
+                      inset: 0,
+                      zIndex: 60,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "1rem",
+                      background: "rgba(15, 23, 42, 0.65)",
+                    }}
+                  >
+                    <div
+                      onClick={(event) => event.stopPropagation()}
+                      style={{
+                        width: "min(940px, 100%)",
+                        maxHeight: "90vh",
+                        overflowY: "auto",
+                        borderRadius: "18px",
+                        background: "#FFFFFF",
+                        padding: "1rem",
+                        boxShadow: "0 24px 80px rgba(15, 23, 42, 0.35)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", marginBottom: "0.9rem" }}>
+                        <div>
+                          <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#0F172A" }}>
+                            {paymentProofPreviewInvoice.invoiceNumber}
+                          </div>
+                          <div style={{ color: "#475569", fontSize: "0.9rem" }}>
+                            {paymentProofPreviewInvoice.customerName}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setPaymentProofPreviewInvoiceId("")}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+                        >
+                          <X size={14} />
+                          Close
+                        </button>
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.75rem" }}>
+                        <div style={{ color: "#64748B", fontSize: "0.9rem" }}>
+                          Uploaded {formatDateTime(paymentProofPreviewInvoice.paymentProof.uploadedAt)} via {getPaymentProofMethodLabel(paymentProofPreviewInvoice.paymentProof.method)}
+                        </div>
+                        <div style={{ color: "#475569", fontSize: "0.85rem" }}>
+                          File: {paymentProofPreviewInvoice.paymentProof.screenshotFileName}
+                        </div>
+                        {paymentProofPreviewInvoice.paymentProof.method !== "adminUpload" &&
+                        paymentProofPreviewInvoice.paymentProof.relatedFiles.length > 0 ? (
+                          <div
+                            style={{
+                              border: "1px solid #BFDBFE",
+                              borderRadius: "10px",
+                              background: "#EFF6FF",
+                              padding: "0.7rem",
+                              display: "grid",
+                              gap: "0.55rem",
+                            }}
+                          >
+                            <div style={{ color: "#1E3A8A", fontSize: "0.82rem", fontWeight: 700 }}>
+                              Customer Related Verification Files
+                            </div>
+                            <div style={{ display: "grid", gap: "0.55rem" }}>
+                              {paymentProofPreviewInvoice.paymentProof.relatedFiles.map((relatedFile, index) => {
+                                const isImage = relatedFile.fileMimeType.startsWith("image/");
+                                return (
+                                  <div
+                                    key={`${paymentProofPreviewInvoice.id}-related-preview-${index}`}
+                                    style={{
+                                      border: "1px solid #93C5FD",
+                                      borderRadius: "8px",
+                                      background: "#FFFFFF",
+                                      padding: "0.5rem",
+                                      display: "grid",
+                                      gap: "0.35rem",
+                                    }}
+                                  >
+                                    <div style={{ color: "#1E293B", fontSize: "0.8rem", fontWeight: 700 }}>
+                                      {relatedFile.fileName || `Related file ${index + 1}`}
+                                    </div>
+                                    <div style={{ color: "#64748B", fontSize: "0.76rem" }}>
+                                      Uploaded: {formatDateTime(relatedFile.uploadedAt)}
+                                    </div>
+                                    <a
+                                      href={relatedFile.fileData}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      download={relatedFile.fileName || `related-file-${index + 1}`}
+                                      style={{
+                                        border: "1px solid #93C5FD",
+                                        background: "#EFF6FF",
+                                        color: "#1D4ED8",
+                                        borderRadius: "8px",
+                                        fontSize: "0.76rem",
+                                        fontWeight: 700,
+                                        padding: "0.3rem 0.52rem",
+                                        textDecoration: "none",
+                                        width: "fit-content",
+                                      }}
+                                    >
+                                      Open or Download
+                                    </a>
+                                    {isImage ? (
+                                      <img
+                                        src={relatedFile.fileData}
+                                        alt={relatedFile.fileName || "Customer related verification file"}
+                                        style={{
+                                          width: "min(220px, 100%)",
+                                          border: "1px solid #CBD5E1",
+                                          borderRadius: "8px",
+                                          background: "#F8FAFC",
+                                          padding: "0.2rem",
+                                          objectFit: "contain",
+                                        }}
+                                      />
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : null}
+                        <img
+                          src={paymentProofPreviewInvoice.paymentProof.screenshotData}
+                          alt={
+                            paymentProofPreviewInvoice.paymentProof.method === "adminUpload"
+                              ? "Admin uploaded payment document"
+                              : "Customer uploaded payment receipt"
+                          }
+                          style={{
+                            width: "100%",
+                            maxHeight: "70vh",
+                            objectFit: "contain",
+                            borderRadius: "14px",
+                            border: "1px solid #CBD5E1",
+                            background: "#F8FAFC",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap" }}>
+                          {paymentProofPreviewInvoice.paymentProof.method === "adminUpload" ? (
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => {
+                                  setPaymentProofPreviewInvoiceId("");
+                                  openAdminUploadModal(paymentProofPreviewInvoice);
+                                }}
+                                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#93C5FD", color: "#1D4ED8" }}
+                              >
+                                <FileText size={14} />
+                                Edit File
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() =>
+                                  void updateInvoicePaymentStatus(
+                                    paymentProofPreviewInvoice.id,
+                                    paymentProofPreviewInvoice.paymentStatus,
+                                    { clearPaymentProof: true },
+                                  )
+                                }
+                                disabled={updatingPaymentInvoiceId === paymentProofPreviewInvoice.id}
+                                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                              >
+                                <X size={14} />
+                                {updatingPaymentInvoiceId === paymentProofPreviewInvoice.id ? "Removing..." : "Remove File"}
+                              </button>
+                            </>
+                          ) : null}
+                          {canMarkInvoiceAsPaid(paymentProofPreviewInvoice) ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => void updateInvoicePaymentStatus(paymentProofPreviewInvoice.id, "paid")}
+                              disabled={updatingPaymentInvoiceId === paymentProofPreviewInvoice.id}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#86EFAC", color: "#166534" }}
+                            >
+                              <CheckCircle2 size={14} />
+                              {updatingPaymentInvoiceId === paymentProofPreviewInvoice.id ? "Updating..." : "Mark as Paid"}
+                            </button>
+                          ) : canMarkInvoiceAsUnpaid(paymentProofPreviewInvoice) ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => void updateInvoicePaymentStatus(paymentProofPreviewInvoice.id, "unpaid")}
+                              disabled={updatingPaymentInvoiceId === paymentProofPreviewInvoice.id}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                            >
+                              <X size={14} />
+                              {updatingPaymentInvoiceId === paymentProofPreviewInvoice.id ? "Updating..." : "Mark as Unpaid"}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {adminUploadInvoice ? (
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Admin payment document upload"
+                    onClick={() => resetAdminUploadState()}
+                    style={{
+                      position: "fixed",
+                      inset: 0,
+                      zIndex: 70,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "1rem",
+                      background: "rgba(15, 23, 42, 0.65)",
+                    }}
+                  >
+                    <div
+                      onClick={(event) => event.stopPropagation()}
+                      style={{
+                        width: "min(720px, 100%)",
+                        borderRadius: "16px",
+                        background: "#FFFFFF",
+                        padding: "1rem",
+                        boxShadow: "0 24px 80px rgba(15, 23, 42, 0.35)",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.7rem" }}>
+                        <div>
+                          <div style={{ fontSize: "1.05rem", fontWeight: 800, color: "#0F172A" }}>
+                            Upload Payment Document
+                          </div>
+                          <div style={{ fontSize: "0.88rem", color: "#475569" }}>
+                            {adminUploadInvoice.invoiceNumber} - {adminUploadInvoice.customerName}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => resetAdminUploadState()}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+                        >
+                          <X size={14} />
+                          Close
+                        </button>
+                      </div>
+
+                      <div style={{ marginTop: "0.9rem", display: "grid", gap: "0.75rem" }}>
+                        <p style={{ margin: 0, color: "#64748B", fontSize: "0.88rem" }}>
+                          {adminUploadHasExistingProof
+                            ? "This invoice already has an admin-uploaded document. Replace it or remove it before saving."
+                            : "Upload payment document (screenshot/photo). It will be stored as Admin Upload and kept separate from customer UPI/Wire receipts."}
+                        </p>
+
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(event) => {
+                            void onAdminProofFileChange(event);
+                          }}
+                          style={{
+                            border: "1px dashed #CBD5E1",
+                            borderRadius: "10px",
+                            padding: "0.65rem",
+                            background: "#F8FAFC",
+                          }}
+                        />
+
+                        {adminUploadFileName ? (
+                          <div
+                            style={{
+                              border: "1px solid #E2E8F0",
+                              borderRadius: "10px",
+                              padding: "0.6rem 0.75rem",
+                              background: "#F8FAFC",
+                              fontSize: "0.84rem",
+                              color: "#334155",
+                            }}
+                          >
+                            <div><strong>File:</strong> {adminUploadFileName}</div>
+                            <div><strong>Type:</strong> {adminUploadMimeType || "-"}</div>
+                            <div><strong>Size:</strong> {Math.round(adminUploadFileSize / 1024)} KB</div>
+                          </div>
+                        ) : null}
+
+                        {adminUploadData ? (
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => clearSelectedAdminUploadFile()}
+                              style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                            >
+                              <X size={14} />
+                              Remove Selected File
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {adminUploadData ? (
+                          <img
+                            src={adminUploadData}
+                            alt="Admin selected payment document"
+                            style={{
+                              width: "100%",
+                              maxHeight: "360px",
+                              objectFit: "contain",
+                              borderRadius: "12px",
+                              border: "1px solid #CBD5E1",
+                              background: "#F8FAFC",
+                            }}
+                          />
+                        ) : null}
+
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.55rem", flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => resetAdminUploadState()}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => void submitAdminPaymentProofAndMarkPaid()}
+                            disabled={uploadingAdminProofInvoiceId === adminUploadInvoice.id || !adminUploadData}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", borderColor: "#86EFAC", color: "#166534" }}
+                          >
+                            <CheckCircle2 size={14} />
+                            {uploadingAdminProofInvoiceId === adminUploadInvoice.id
+                              ? "Uploading..."
+                              : adminUploadInvoice.paymentStatus === "paid"
+                                ? "Save Uploaded File"
+                                : "Upload & Mark Paid"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </article>
           </div>
         </section>
+      ) : null}
+
+      {!selectedInvoice && paymentProofPreviewInvoice?.paymentProof ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Payment proof preview"
+          onClick={() => setPaymentProofPreviewInvoiceId("")}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 60,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+            background: "rgba(15, 23, 42, 0.65)",
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(940px, 100%)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              borderRadius: "18px",
+              background: "#FFFFFF",
+              padding: "1rem",
+              boxShadow: "0 24px 80px rgba(15, 23, 42, 0.35)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", marginBottom: "0.9rem" }}>
+              <div>
+                <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#0F172A" }}>
+                  {paymentProofPreviewInvoice.invoiceNumber}
+                </div>
+                <div style={{ color: "#475569", fontSize: "0.9rem" }}>
+                  {paymentProofPreviewInvoice.customerName}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setPaymentProofPreviewInvoiceId("")}
+                style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+              >
+                <X size={14} />
+                Close
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <div style={{ color: "#64748B", fontSize: "0.9rem" }}>
+                Uploaded {formatDateTime(paymentProofPreviewInvoice.paymentProof.uploadedAt)} via {getPaymentProofMethodLabel(paymentProofPreviewInvoice.paymentProof.method)}
+              </div>
+              <div style={{ color: "#475569", fontSize: "0.85rem" }}>
+                File: {paymentProofPreviewInvoice.paymentProof.screenshotFileName}
+              </div>
+              {paymentProofPreviewInvoice.paymentProof.method !== "adminUpload" &&
+              paymentProofPreviewInvoice.paymentProof.relatedFiles.length > 0 ? (
+                <div
+                  style={{
+                    border: "1px solid #BFDBFE",
+                    borderRadius: "10px",
+                    background: "#EFF6FF",
+                    padding: "0.7rem",
+                    display: "grid",
+                    gap: "0.55rem",
+                  }}
+                >
+                  <div style={{ color: "#1E3A8A", fontSize: "0.82rem", fontWeight: 700 }}>
+                    Customer Related Verification Files
+                  </div>
+                  <div style={{ display: "grid", gap: "0.55rem" }}>
+                    {paymentProofPreviewInvoice.paymentProof.relatedFiles.map((relatedFile, index) => {
+                      const isImage = relatedFile.fileMimeType.startsWith("image/");
+                      return (
+                        <div
+                          key={`${paymentProofPreviewInvoice.id}-related-dialog-${index}`}
+                          style={{
+                            border: "1px solid #93C5FD",
+                            borderRadius: "8px",
+                            background: "#FFFFFF",
+                            padding: "0.5rem",
+                            display: "grid",
+                            gap: "0.35rem",
+                          }}
+                        >
+                          <div style={{ color: "#1E293B", fontSize: "0.8rem", fontWeight: 700 }}>
+                            {relatedFile.fileName || `Related file ${index + 1}`}
+                          </div>
+                          <div style={{ color: "#64748B", fontSize: "0.76rem" }}>
+                            Uploaded: {formatDateTime(relatedFile.uploadedAt)}
+                          </div>
+                          <a
+                            href={relatedFile.fileData}
+                            target="_blank"
+                            rel="noreferrer"
+                            download={relatedFile.fileName || `related-file-${index + 1}`}
+                            style={{
+                              border: "1px solid #93C5FD",
+                              background: "#EFF6FF",
+                              color: "#1D4ED8",
+                              borderRadius: "8px",
+                              fontSize: "0.76rem",
+                              fontWeight: 700,
+                              padding: "0.3rem 0.52rem",
+                              textDecoration: "none",
+                              width: "fit-content",
+                            }}
+                          >
+                            Open or Download
+                          </a>
+                          {isImage ? (
+                            <img
+                              src={relatedFile.fileData}
+                              alt={relatedFile.fileName || "Customer related verification file"}
+                              style={{
+                                width: "min(220px, 100%)",
+                                border: "1px solid #CBD5E1",
+                                borderRadius: "8px",
+                                background: "#F8FAFC",
+                                padding: "0.2rem",
+                                objectFit: "contain",
+                              }}
+                            />
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              <img
+                src={paymentProofPreviewInvoice.paymentProof.screenshotData}
+                alt={
+                  paymentProofPreviewInvoice.paymentProof.method === "adminUpload"
+                    ? "Admin uploaded payment document"
+                    : "Customer uploaded payment receipt"
+                }
+                style={{
+                  width: "100%",
+                  maxHeight: "70vh",
+                  objectFit: "contain",
+                  borderRadius: "14px",
+                  border: "1px solid #CBD5E1",
+                  background: "#F8FAFC",
+                }}
+              />
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap" }}>
+                {paymentProofPreviewInvoice.paymentProof.method === "adminUpload" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setPaymentProofPreviewInvoiceId("");
+                        openAdminUploadModal(paymentProofPreviewInvoice);
+                      }}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#93C5FD", color: "#1D4ED8" }}
+                    >
+                      <FileText size={14} />
+                      Edit File
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() =>
+                        void updateInvoicePaymentStatus(
+                          paymentProofPreviewInvoice.id,
+                          paymentProofPreviewInvoice.paymentStatus,
+                          { clearPaymentProof: true },
+                        )
+                      }
+                      disabled={updatingPaymentInvoiceId === paymentProofPreviewInvoice.id}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                    >
+                      <X size={14} />
+                      {updatingPaymentInvoiceId === paymentProofPreviewInvoice.id ? "Removing..." : "Remove File"}
+                    </button>
+                  </>
+                ) : null}
+                {canMarkInvoiceAsPaid(paymentProofPreviewInvoice) ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void updateInvoicePaymentStatus(paymentProofPreviewInvoice.id, "paid")}
+                    disabled={updatingPaymentInvoiceId === paymentProofPreviewInvoice.id}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#86EFAC", color: "#166534" }}
+                  >
+                    <CheckCircle2 size={14} />
+                    {updatingPaymentInvoiceId === paymentProofPreviewInvoice.id ? "Updating..." : "Mark as Paid"}
+                  </button>
+                ) : canMarkInvoiceAsUnpaid(paymentProofPreviewInvoice) ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void updateInvoicePaymentStatus(paymentProofPreviewInvoice.id, "unpaid")}
+                    disabled={updatingPaymentInvoiceId === paymentProofPreviewInvoice.id}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                  >
+                    <X size={14} />
+                    {updatingPaymentInvoiceId === paymentProofPreviewInvoice.id ? "Updating..." : "Mark as Unpaid"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {!selectedInvoice && adminUploadInvoice ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Admin payment document upload"
+          onClick={() => resetAdminUploadState()}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 70,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+            background: "rgba(15, 23, 42, 0.65)",
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(720px, 100%)",
+              borderRadius: "16px",
+              background: "#FFFFFF",
+              padding: "1rem",
+              boxShadow: "0 24px 80px rgba(15, 23, 42, 0.35)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.7rem" }}>
+              <div>
+                <div style={{ fontSize: "1.05rem", fontWeight: 800, color: "#0F172A" }}>
+                  Upload Payment Document
+                </div>
+                <div style={{ fontSize: "0.88rem", color: "#475569" }}>
+                  {adminUploadInvoice.invoiceNumber} - {adminUploadInvoice.customerName}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => resetAdminUploadState()}
+                style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+              >
+                <X size={14} />
+                Close
+              </button>
+            </div>
+
+            <div style={{ marginTop: "0.9rem", display: "grid", gap: "0.75rem" }}>
+              <p style={{ margin: 0, color: "#64748B", fontSize: "0.88rem" }}>
+                {adminUploadHasExistingProof
+                  ? "This invoice already has an admin-uploaded document. Replace it or remove it before saving."
+                  : "Upload payment document (screenshot/photo). It will be stored as Admin Upload and kept separate from customer UPI/Wire receipts."}
+              </p>
+
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  void onAdminProofFileChange(event);
+                }}
+                style={{
+                  border: "1px dashed #CBD5E1",
+                  borderRadius: "10px",
+                  padding: "0.65rem",
+                  background: "#F8FAFC",
+                }}
+              />
+
+              {adminUploadFileName ? (
+                <div
+                  style={{
+                    border: "1px solid #E2E8F0",
+                    borderRadius: "10px",
+                    padding: "0.6rem 0.75rem",
+                    background: "#F8FAFC",
+                    fontSize: "0.84rem",
+                    color: "#334155",
+                  }}
+                >
+                  <div><strong>File:</strong> {adminUploadFileName}</div>
+                  <div><strong>Type:</strong> {adminUploadMimeType || "-"}</div>
+                  <div><strong>Size:</strong> {Math.round(adminUploadFileSize / 1024)} KB</div>
+                </div>
+              ) : null}
+
+              {adminUploadData ? (
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => clearSelectedAdminUploadFile()}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", borderColor: "#FCA5A5", color: "#991B1B" }}
+                  >
+                    <X size={14} />
+                    Remove Selected File
+                  </button>
+                </div>
+              ) : null}
+
+              {adminUploadData ? (
+                <img
+                  src={adminUploadData}
+                  alt="Admin selected payment document"
+                  style={{
+                    width: "100%",
+                    maxHeight: "360px",
+                    objectFit: "contain",
+                    borderRadius: "12px",
+                    border: "1px solid #CBD5E1",
+                    background: "#F8FAFC",
+                  }}
+                />
+              ) : null}
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.55rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => resetAdminUploadState()}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => void submitAdminPaymentProofAndMarkPaid()}
+                  disabled={uploadingAdminProofInvoiceId === adminUploadInvoice.id || !adminUploadData}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", borderColor: "#86EFAC", color: "#166534" }}
+                >
+                  <CheckCircle2 size={14} />
+                  {uploadingAdminProofInvoiceId === adminUploadInvoice.id
+                    ? "Uploading..."
+                    : adminUploadInvoice.paymentStatus === "paid"
+                      ? "Save Uploaded File"
+                      : "Upload & Mark Paid"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       ) : null}
     </AdminPortalFrame>
   );
