@@ -1450,7 +1450,7 @@ export default function InvoicesPage() {
       me={me}
       onLogout={logout}
       title="Invoices"
-      subtitle="Generate month-wise invoices with billable service usage only (report generated and shared to customer)."
+      subtitle="Generate month-wise invoices with billable service usage only (report generated or shared in the billing month)."
     >
       {message ? <p className={`inline-alert ${getAlertTone(message)}`}>{message}</p> : null}
 

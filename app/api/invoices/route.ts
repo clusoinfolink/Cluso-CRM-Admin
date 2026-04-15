@@ -5,6 +5,7 @@ import { getAdminAuthFromRequest } from "@/lib/auth";
 import { connectMongo } from "@/lib/mongodb";
 import ClusoDetails from "@/lib/models/ClusoDetails";
 import Invoice from "@/lib/models/Invoice";
+import Service from "@/lib/models/Service";
 import User from "@/lib/models/User";
 import VerificationRequest from "@/lib/models/VerificationRequest";
 import type {
@@ -229,6 +230,15 @@ type RequestServiceQuantityMaps = {
   byServiceName: Map<string, number>;
 };
 
+type PackageRateSelection = NormalizedServiceSelection & {
+  includedServiceIds: string[];
+};
+
+type CollapsedPackageBillingServices = {
+  billingServices: NormalizedServiceSelection[];
+  selectedPackageServiceIds: Set<string>;
+};
+
 function asRecord(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {} as Record<string, unknown>;
@@ -337,8 +347,10 @@ function buildBillableRequestFilter(
 ) {
   return {
     customer: companyId,
-    "reportMetadata.generatedAt": { $exists: true, $ne: null },
-    "reportMetadata.customerSharedAt": { $gte: monthStart, $lt: monthEnd },
+    $or: [
+      { "reportMetadata.customerSharedAt": { $gte: monthStart, $lt: monthEnd } },
+      { "reportMetadata.generatedAt": { $gte: monthStart, $lt: monthEnd } },
+    ],
   };
 }
 
@@ -384,6 +396,7 @@ function buildMonthlySummaryRows(
   gstEnabled: boolean,
   gstRate: number,
   invoiceLineItems: InvoiceLineItem[] = [],
+  packageRates: PackageRateSelection[] = [],
 ) {
   const rows: MonthlySummaryRow[] = [];
   const totals = new Map<string, { subtotal: number; gstAmount: number; total: number }>();
@@ -448,7 +461,14 @@ function buildMonthlySummaryRows(
     }
 
     const requestStatus = normalizeWhitespace(asString(request.status)) || "pending";
-    const selectedServices = normalizeServiceSelections(requestRecord.selectedServices);
+    const rawSelectedServices = normalizeServiceSelections(requestRecord.selectedServices);
+    const collapsedBillingServices = collapsePackageBillingServices(
+      rawSelectedServices,
+      packageRates,
+    );
+    const selectedServices = collapsedBillingServices.billingServices;
+    const selectedPackageServiceIds =
+      collapsedBillingServices.selectedPackageServiceIds;
     const serviceQuantities = buildRequestServiceQuantityMaps(requestRecord);
     const requestedDate =
       parseDateValue(requestRecord.createdAt) ??
@@ -470,6 +490,25 @@ function buildMonthlySummaryRows(
       ? selectedServices
       : [{ serviceId: "", serviceName: "Service Not Available", price: 0, currency: "INR" as InvoiceLineItem["currency"] }];
 
+    const selectedServiceReference =
+      rawSelectedServices.length > 0 ? rawSelectedServices : normalizedServices;
+    const selectedServicesById = new Map<string, NormalizedServiceSelection>();
+    const selectedServicesByName = new Map<string, NormalizedServiceSelection>();
+    for (const selectedService of selectedServiceReference) {
+      const normalizedServiceId = normalizeWhitespace(selectedService.serviceId);
+      const normalizedServiceNameKey = normalizeWhitespace(
+        selectedService.serviceName,
+      ).toLowerCase();
+
+      if (normalizedServiceId && !selectedServicesById.has(normalizedServiceId)) {
+        selectedServicesById.set(normalizedServiceId, selectedService);
+      }
+
+      if (normalizedServiceNameKey && !selectedServicesByName.has(normalizedServiceNameKey)) {
+        selectedServicesByName.set(normalizedServiceNameKey, selectedService);
+      }
+    }
+
     const requestServicesByCurrency = new Map<
       string,
       Map<string, { serviceName: string; usageCount: number; subtotal: number }>
@@ -481,7 +520,10 @@ function buildMonthlySummaryRows(
       const matchedInvoiceRate =
         (serviceId ? invoiceRatesByServiceId.get(serviceId) : undefined) ??
         invoiceRatesByServiceName.get(serviceNameKey);
-      const usageCount = resolveServiceUsageCount(service, serviceQuantities);
+      const usageCount =
+        serviceId && selectedPackageServiceIds.has(serviceId)
+          ? 1
+          : resolveServiceUsageCount(service, serviceQuantities);
 
       const currencyRaw = normalizeWhitespace(matchedInvoiceRate?.currency ?? service.currency).toUpperCase();
       const currency = SUPPORTED_CURRENCY_SET.has(currencyRaw) ? currencyRaw : "INR";
@@ -506,6 +548,83 @@ function buildMonthlySummaryRows(
           serviceName: resolvedServiceName,
           usageCount,
           subtotal: serviceSubtotal,
+        });
+      }
+    }
+
+    const verificationEntries = Array.isArray(requestRecord.serviceVerifications)
+      ? requestRecord.serviceVerifications
+      : [];
+
+    for (const verificationEntry of verificationEntries) {
+      const verificationRecord = asRecord(verificationEntry);
+      const verificationServiceId = normalizeWhitespace(
+        toIdString(verificationRecord.serviceId),
+      );
+      const verificationServiceName = normalizeWhitespace(
+        asString(verificationRecord.serviceName),
+      );
+      const verificationServiceNameKey = verificationServiceName.toLowerCase();
+      const attempts = Array.isArray(verificationRecord.attempts)
+        ? verificationRecord.attempts
+        : [];
+
+      let extraChargesSubtotal = 0;
+      for (const attemptEntry of attempts) {
+        const attemptRecord = asRecord(attemptEntry);
+        if (!asBoolean(attemptRecord.extraPaymentDone, false)) {
+          continue;
+        }
+
+        const amountRaw = Number(attemptRecord.extraPaymentAmount);
+        if (!Number.isFinite(amountRaw) || amountRaw <= 0) {
+          continue;
+        }
+
+        extraChargesSubtotal = roundMoney(extraChargesSubtotal + amountRaw);
+      }
+
+      if (extraChargesSubtotal <= 0) {
+        continue;
+      }
+
+      const selectedService =
+        (verificationServiceId ? selectedServicesById.get(verificationServiceId) : undefined) ??
+        selectedServicesByName.get(verificationServiceNameKey);
+      const matchedInvoiceRate =
+        (verificationServiceId
+          ? invoiceRatesByServiceId.get(verificationServiceId)
+          : undefined) ?? invoiceRatesByServiceName.get(verificationServiceNameKey);
+
+      const resolvedBaseServiceName =
+        normalizeWhitespace(
+          matchedInvoiceRate?.serviceName ??
+            selectedService?.serviceName ??
+            verificationServiceName,
+        ) || "Service Not Available";
+      const currencyRaw = normalizeWhitespace(
+        (matchedInvoiceRate?.currency ?? selectedService?.currency ?? "INR") as string,
+      ).toUpperCase();
+      const currency = SUPPORTED_CURRENCY_SET.has(currencyRaw) ? currencyRaw : "INR";
+
+      let currencyServices = requestServicesByCurrency.get(currency);
+      if (!currencyServices) {
+        currencyServices = new Map();
+        requestServicesByCurrency.set(currency, currencyServices);
+      }
+
+      const extraServiceKey =
+        `${verificationServiceId || verificationServiceNameKey || resolvedBaseServiceName.toLowerCase()}::extra`;
+      const existingExtraService = currencyServices.get(extraServiceKey);
+      if (existingExtraService) {
+        existingExtraService.subtotal = roundMoney(
+          existingExtraService.subtotal + extraChargesSubtotal,
+        );
+      } else {
+        currencyServices.set(extraServiceKey, {
+          serviceName: `${resolvedBaseServiceName} (Extra Charges)`,
+          usageCount: 1,
+          subtotal: extraChargesSubtotal,
         });
       }
     }
@@ -803,6 +922,187 @@ function normalizeServiceSelections(value: unknown): NormalizedServiceSelection[
     .filter((entry): entry is NormalizedServiceSelection => Boolean(entry));
 }
 
+async function resolvePackageRateSelections(
+  customerServiceSelections: unknown,
+): Promise<PackageRateSelection[]> {
+  const normalizedSelections = normalizeServiceSelections(customerServiceSelections);
+  if (normalizedSelections.length === 0) {
+    return [];
+  }
+
+  const selectionById = new Map<string, NormalizedServiceSelection>();
+  for (const selection of normalizedSelections) {
+    const serviceId = normalizeWhitespace(selection.serviceId);
+    if (serviceId && !selectionById.has(serviceId)) {
+      selectionById.set(serviceId, selection);
+    }
+  }
+
+  if (selectionById.size === 0) {
+    return [];
+  }
+
+  const serviceDocs = await Service.find({ _id: { $in: [...selectionById.keys()] } })
+    .select("_id isPackage includedServiceIds")
+    .lean();
+
+  const packageRates: PackageRateSelection[] = [];
+
+  for (const doc of serviceDocs) {
+    const serviceRecord = asRecord(doc);
+    if (!asBoolean(serviceRecord.isPackage, false)) {
+      continue;
+    }
+
+    const serviceId = toIdString(serviceRecord._id);
+    if (!serviceId) {
+      continue;
+    }
+
+    const selectedRate = selectionById.get(serviceId);
+    if (!selectedRate) {
+      continue;
+    }
+
+    const includedServiceIds = Array.isArray(serviceRecord.includedServiceIds)
+      ? [
+          ...new Set(
+            serviceRecord.includedServiceIds
+              .map((id) => toIdString(id))
+              .filter((id) => id.length > 0),
+          ),
+        ]
+      : [];
+
+    if (includedServiceIds.length === 0) {
+      continue;
+    }
+
+    packageRates.push({
+      serviceId: selectedRate.serviceId,
+      serviceName: selectedRate.serviceName,
+      price: selectedRate.price,
+      currency: selectedRate.currency,
+      includedServiceIds,
+    });
+  }
+
+  return packageRates.sort((first, second) => {
+    const includedSizeDiff =
+      second.includedServiceIds.length - first.includedServiceIds.length;
+    if (includedSizeDiff !== 0) {
+      return includedSizeDiff;
+    }
+
+    return first.serviceName.localeCompare(second.serviceName);
+  });
+}
+
+function collapsePackageBillingServices(
+  selectedServices: NormalizedServiceSelection[],
+  packageRates: PackageRateSelection[],
+): CollapsedPackageBillingServices {
+  if (selectedServices.length === 0 || packageRates.length === 0) {
+    return {
+      billingServices: selectedServices,
+      selectedPackageServiceIds: new Set<string>(),
+    };
+  }
+
+  const selectedServiceIds = new Set(
+    selectedServices
+      .map((service) => normalizeWhitespace(service.serviceId))
+      .filter((serviceId) => serviceId.length > 0),
+  );
+  const selectedPackageServiceIds = new Set<string>();
+  const coveredServiceIds = new Set<string>();
+  const selectedPackageRateById = new Map<string, PackageRateSelection>();
+
+  for (const packageRate of packageRates) {
+    const packageServiceId = normalizeWhitespace(packageRate.serviceId);
+    if (!packageServiceId || selectedPackageServiceIds.has(packageServiceId)) {
+      continue;
+    }
+
+    const includedServiceIds = [
+      ...new Set(
+        packageRate.includedServiceIds
+          .map((serviceId) => normalizeWhitespace(serviceId))
+          .filter((serviceId) => serviceId.length > 0),
+      ),
+    ];
+    if (includedServiceIds.length === 0) {
+      continue;
+    }
+
+    const hasAllIncludedServices = includedServiceIds.every((serviceId) =>
+      selectedServiceIds.has(serviceId),
+    );
+    if (!hasAllIncludedServices) {
+      continue;
+    }
+
+    const overlapsCoveredServices = includedServiceIds.some((serviceId) =>
+      coveredServiceIds.has(serviceId),
+    );
+    if (overlapsCoveredServices) {
+      continue;
+    }
+
+    selectedPackageServiceIds.add(packageServiceId);
+    selectedPackageRateById.set(packageServiceId, packageRate);
+    for (const serviceId of includedServiceIds) {
+      coveredServiceIds.add(serviceId);
+    }
+  }
+
+  if (selectedPackageServiceIds.size === 0) {
+    return {
+      billingServices: selectedServices,
+      selectedPackageServiceIds,
+    };
+  }
+
+  const billingServices = selectedServices.filter((service) => {
+    const serviceId = normalizeWhitespace(service.serviceId);
+    if (!serviceId) {
+      return true;
+    }
+
+    if (selectedPackageServiceIds.has(serviceId)) {
+      return true;
+    }
+
+    return !coveredServiceIds.has(serviceId);
+  });
+
+  for (const packageServiceId of selectedPackageServiceIds) {
+    const selectedPackageRate = selectedPackageRateById.get(packageServiceId);
+    if (!selectedPackageRate) {
+      continue;
+    }
+
+    const alreadyPresent = billingServices.some(
+      (service) => normalizeWhitespace(service.serviceId) === packageServiceId,
+    );
+    if (alreadyPresent) {
+      continue;
+    }
+
+    billingServices.push({
+      serviceId: selectedPackageRate.serviceId,
+      serviceName: selectedPackageRate.serviceName,
+      price: selectedPackageRate.price,
+      currency: selectedPackageRate.currency,
+    });
+  }
+
+  return {
+    billingServices,
+    selectedPackageServiceIds,
+  };
+}
+
 function normalizeServiceUsageCount(value: unknown) {
   const usageCount = Number(value);
   if (!Number.isFinite(usageCount) || usageCount <= 0) {
@@ -860,6 +1160,7 @@ function resolveServiceUsageCount(
 function buildMonthlyInvoiceLineItems(
   latestRates: InvoiceLineItem[],
   monthlyRequests: Array<Record<string, unknown>>,
+  packageRates: PackageRateSelection[] = [],
 ): InvoiceLineItem[] {
   const ratesById = new Map<string, InvoiceLineItem>();
   const ratesByName = new Map<string, InvoiceLineItem>();
@@ -873,16 +1174,55 @@ function buildMonthlyInvoiceLineItems(
   }
 
   const usageByService = new Map<string, ServiceUsageSummary>();
+  const extraChargesByService = new Map<
+    string,
+    {
+      serviceId: string;
+      serviceName: string;
+      extraAmount: number;
+      fallbackCurrency: InvoiceLineItem["currency"];
+    }
+  >();
 
   for (const request of monthlyRequests) {
     const requestRecord = asRecord(request);
-    const selectedServices = normalizeServiceSelections(requestRecord.selectedServices);
+    const rawSelectedServices = normalizeServiceSelections(requestRecord.selectedServices);
+    const collapsedBillingServices = collapsePackageBillingServices(
+      rawSelectedServices,
+      packageRates,
+    );
+    const selectedServices = collapsedBillingServices.billingServices;
+    const selectedPackageServiceIds =
+      collapsedBillingServices.selectedPackageServiceIds;
     const serviceQuantities = buildRequestServiceQuantityMaps(requestRecord);
+    const selectedServiceReference =
+      rawSelectedServices.length > 0 ? rawSelectedServices : selectedServices;
+    const selectedServicesById = new Map<string, NormalizedServiceSelection>();
+    const selectedServicesByName = new Map<string, NormalizedServiceSelection>();
+
+    for (const selectedService of selectedServiceReference) {
+      const selectedServiceId = normalizeWhitespace(selectedService.serviceId);
+      const selectedServiceNameKey = normalizeWhitespace(
+        selectedService.serviceName,
+      ).toLowerCase();
+
+      if (selectedServiceId && !selectedServicesById.has(selectedServiceId)) {
+        selectedServicesById.set(selectedServiceId, selectedService);
+      }
+
+      if (selectedServiceNameKey && !selectedServicesByName.has(selectedServiceNameKey)) {
+        selectedServicesByName.set(selectedServiceNameKey, selectedService);
+      }
+    }
 
     for (const service of selectedServices) {
       const key = service.serviceId || service.serviceName.toLowerCase();
       const existing = usageByService.get(key);
-      const usageCount = resolveServiceUsageCount(service, serviceQuantities);
+      const normalizedServiceId = normalizeWhitespace(service.serviceId);
+      const usageCount =
+        normalizedServiceId && selectedPackageServiceIds.has(normalizedServiceId)
+          ? 1
+          : resolveServiceUsageCount(service, serviceQuantities);
 
       if (existing) {
         existing.usageCount += usageCount;
@@ -897,9 +1237,77 @@ function buildMonthlyInvoiceLineItems(
         fallbackCurrency: service.currency,
       });
     }
+
+    const serviceVerifications = Array.isArray(requestRecord.serviceVerifications)
+      ? requestRecord.serviceVerifications
+      : [];
+
+    for (const verificationEntry of serviceVerifications) {
+      const verificationRecord = asRecord(verificationEntry);
+      const verificationServiceId = normalizeWhitespace(
+        toIdString(verificationRecord.serviceId),
+      );
+      const verificationServiceName = normalizeWhitespace(
+        asString(verificationRecord.serviceName),
+      );
+      const verificationServiceNameKey = verificationServiceName.toLowerCase();
+      const attempts = Array.isArray(verificationRecord.attempts)
+        ? verificationRecord.attempts
+        : [];
+
+      let extraAmount = 0;
+      for (const attemptEntry of attempts) {
+        const attemptRecord = asRecord(attemptEntry);
+        if (!asBoolean(attemptRecord.extraPaymentDone, false)) {
+          continue;
+        }
+
+        const attemptAmount = Number(attemptRecord.extraPaymentAmount);
+        if (!Number.isFinite(attemptAmount) || attemptAmount <= 0) {
+          continue;
+        }
+
+        extraAmount = roundMoney(extraAmount + attemptAmount);
+      }
+
+      if (extraAmount <= 0) {
+        continue;
+      }
+
+      const selectedService =
+        (verificationServiceId ? selectedServicesById.get(verificationServiceId) : undefined) ??
+        selectedServicesByName.get(verificationServiceNameKey);
+
+      const resolvedServiceName =
+        normalizeWhitespace(
+          selectedService?.serviceName || verificationServiceName,
+        ) || "Service Not Available";
+      const fallbackCurrencyRaw = normalizeWhitespace(
+        (selectedService?.currency || "INR") as string,
+      ).toUpperCase();
+      const fallbackCurrency = SUPPORTED_CURRENCY_SET.has(fallbackCurrencyRaw)
+        ? (fallbackCurrencyRaw as InvoiceLineItem["currency"])
+        : "INR";
+
+      const extraKey =
+        verificationServiceId || verificationServiceNameKey || resolvedServiceName.toLowerCase();
+      const existingExtraCharge = extraChargesByService.get(extraKey);
+      if (existingExtraCharge) {
+        existingExtraCharge.extraAmount = roundMoney(
+          existingExtraCharge.extraAmount + extraAmount,
+        );
+      } else {
+        extraChargesByService.set(extraKey, {
+          serviceId: verificationServiceId,
+          serviceName: resolvedServiceName,
+          extraAmount,
+          fallbackCurrency,
+        });
+      }
+    }
   }
 
-  return [...usageByService.values()]
+  const usageLineItems = [...usageByService.values()]
     .map((usage) => {
       const latestById = ratesById.get(usage.serviceId);
       const latestByName = ratesByName.get(usage.serviceName.toLowerCase());
@@ -919,8 +1327,48 @@ function buildMonthlyInvoiceLineItems(
         currency,
       } as InvoiceLineItem;
     })
-    .filter((lineItem) => lineItem.usageCount > 0)
-    .sort((first, second) => first.serviceName.localeCompare(second.serviceName));
+    .filter((lineItem) => lineItem.usageCount > 0);
+
+  const extraChargeLineItems = [...extraChargesByService.values()]
+    .map((extraCharge) => {
+      const latestById = extraCharge.serviceId
+        ? ratesById.get(extraCharge.serviceId)
+        : undefined;
+      const latestByName = ratesByName.get(extraCharge.serviceName.toLowerCase());
+      const latest = latestById ?? latestByName;
+
+      const resolvedServiceName =
+        normalizeWhitespace(latest?.serviceName ?? extraCharge.serviceName) ||
+        "Service Not Available";
+      const currencyRaw = normalizeWhitespace(
+        (latest?.currency ?? extraCharge.fallbackCurrency ?? "INR") as string,
+      ).toUpperCase();
+      const currency = SUPPORTED_CURRENCY_SET.has(currencyRaw)
+        ? (currencyRaw as InvoiceLineItem["currency"])
+        : "INR";
+      const amount = roundMoney(extraCharge.extraAmount);
+      const idSeed =
+        normalizeWhitespace(extraCharge.serviceId) ||
+        resolvedServiceName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") ||
+        "extra-service";
+
+      return {
+        serviceId: `${idSeed}::extra`,
+        serviceName: `${resolvedServiceName} (Extra Charges)`,
+        usageCount: 1,
+        price: amount,
+        lineTotal: amount,
+        currency,
+      } as InvoiceLineItem;
+    })
+    .filter((lineItem) => lineItem.lineTotal > 0);
+
+  return [...usageLineItems, ...extraChargeLineItems].sort((first, second) =>
+    first.serviceName.localeCompare(second.serviceName),
+  );
 }
 
 function computeTotalsByCurrency(lineItems: InvoiceLineItem[]): InvoiceCurrencyTotal[] {
@@ -1174,7 +1622,7 @@ export async function GET(req: NextRequest) {
         buildBillableRequestFilter(companyId, monthStart, monthEnd),
       )
         .sort({ createdAt: 1 })
-        .select("candidateName status createdBy createdByDelegate selectedServices serviceVerifications.attempts.verifierName serviceVerifications.attempts.managerName serviceVerifications.attempts.attemptedAt candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount createdAt reportMetadata.customerSharedAt reportMetadata.generatedAt")
+        .select("candidateName status createdBy createdByDelegate selectedServices serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.verifierName serviceVerifications.attempts.managerName serviceVerifications.attempts.attemptedAt serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount createdAt reportMetadata.customerSharedAt reportMetadata.generatedAt")
         .populate({ path: "createdBy", select: "name" })
         .populate({ path: "createdByDelegate", select: "name" })
         .lean(),
@@ -1183,6 +1631,10 @@ export async function GET(req: NextRequest) {
     if (!customer) {
       return NextResponse.json({ error: "Company not found." }, { status: 404 });
     }
+
+    const packageRates = await resolvePackageRateSelections(
+      customer.selectedServices ?? [],
+    );
 
     const enterpriseDefaults = buildEnterpriseDefaults(customer);
     const enterpriseGstDefaults = buildEnterpriseGstDefaults(customer);
@@ -1213,6 +1665,7 @@ export async function GET(req: NextRequest) {
       gstEnabled,
       gstRate,
       invoiceLineItems,
+      packageRates,
     );
 
     return NextResponse.json({
@@ -1278,6 +1731,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Company not found." }, { status: 404 });
   }
 
+  const packageRates = await resolvePackageRateSelections(
+    customer.selectedServices ?? [],
+  );
+
   const billingMonth =
     normalizeBillingMonth(parsed.data.billingMonth) || getCurrentBillingMonth();
   const { monthStart, monthEnd } = getBillingMonthRange(billingMonth);
@@ -1296,18 +1753,19 @@ export async function POST(req: NextRequest) {
   const monthlyRequests = await VerificationRequest.find(
     buildBillableRequestFilter(parsed.data.companyId, monthStart, monthEnd),
   )
-    .select("selectedServices candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount")
+    .select("selectedServices serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount")
     .lean();
 
   const lineItems = buildMonthlyInvoiceLineItems(
     latestRates,
     monthlyRequests as unknown as Array<Record<string, unknown>>,
+    packageRates,
   );
   if (lineItems.length === 0) {
     const monthLabel = formatBillingMonthLabel(billingMonth);
     return NextResponse.json(
       {
-        error: `No billable service usage found for ${monthLabel}. Only requests with generated reports that were shared to customer are invoiced in this month.`,
+        error: `No billable service usage found for ${monthLabel}. Only requests with reports generated or shared in this month are invoiced.`,
       },
       { status: 400 },
     );

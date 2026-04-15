@@ -14,6 +14,8 @@ const verifyServicePatchSchema = z.object({
   verificationMode: z.string().trim().max(120).optional().default("manual"),
   comment: z.string().trim().max(500).optional().default(""),
   verifierNote: z.string().trim().max(1200).optional().default(""),
+  extraPaymentDone: z.boolean().optional().default(false),
+  extraPaymentAmount: z.number().nonnegative().optional().nullable().default(null),
   screenshotFileName: z.string().trim().max(180).optional().default(""),
   screenshotMimeType: z.string().trim().max(100).optional().default(""),
   screenshotFileSize: z.number().int().nonnegative().optional().nullable().default(null),
@@ -64,6 +66,8 @@ type ServiceVerificationLike = {
     verificationMode?: string;
     comment?: string;
     verifierNote?: string;
+    extraPaymentDone?: boolean;
+    extraPaymentAmount?: number | null;
     screenshotFileName?: string;
     screenshotMimeType?: string;
     screenshotFileSize?: number | null;
@@ -87,6 +91,8 @@ type NormalizedServiceVerification = {
     verificationMode: string;
     comment: string;
     verifierNote: string;
+    extraPaymentDone: boolean;
+    extraPaymentAmount: number | null;
     screenshotFileName: string;
     screenshotMimeType: string;
     screenshotFileSize: number | null;
@@ -134,9 +140,25 @@ const MAX_ATTEMPT_SCREENSHOT_BYTES = 2 * 1024 * 1024;
 const ATTEMPT_SCREENSHOT_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
-  "image/jpg",
   "image/webp",
 ]);
+
+function normalizeAttemptScreenshotMimeType(rawMimeType: string) {
+  const normalizedMimeType = rawMimeType.trim().toLowerCase();
+  if (!normalizedMimeType) {
+    return "";
+  }
+
+  if (normalizedMimeType === "image/x-png") {
+    return "image/png";
+  }
+
+  if (normalizedMimeType === "image/jpg" || normalizedMimeType === "image/pjpeg") {
+    return "image/jpeg";
+  }
+
+  return normalizedMimeType;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -200,14 +222,14 @@ function getImageExtensionFromMimeType(mimeType: string) {
   return "jpg";
 }
 
-function parseImageDataUrl(dataUrl: string) {
+function parseImageDataUrl(dataUrl: string, fallbackMimeType = "") {
   const trimmed = dataUrl.trim();
-  const match = trimmed.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/);
+  const match = trimmed.match(/^data:([^;,]*);base64,([A-Za-z0-9+/=\r\n]+)$/);
   if (!match) {
     return null;
   }
 
-  const mimeType = match[1].trim().toLowerCase();
+  const mimeType = normalizeAttemptScreenshotMimeType(match[1] || fallbackMimeType);
   if (!ATTEMPT_SCREENSHOT_MIME_TYPES.has(mimeType)) {
     return null;
   }
@@ -395,7 +417,7 @@ function normalizeAttemptScreenshot(payload: {
     };
   }
 
-  const parsed = parseImageDataUrl(rawData);
+  const parsed = parseImageDataUrl(rawData, payload.screenshotMimeType ?? "");
   if (!parsed) {
     return {
       ok: false as const,
@@ -456,7 +478,10 @@ function buildAttemptScreenshotAttachments(
     );
 
     for (const [attemptIndex, attempt] of (verification.attempts ?? []).entries()) {
-      const parsed = parseImageDataUrl(attempt.screenshotData ?? "");
+      const parsed = parseImageDataUrl(
+        attempt.screenshotData ?? "",
+        attempt.screenshotMimeType ?? "",
+      );
       if (!parsed) {
         continue;
       }
@@ -512,6 +537,8 @@ function buildDefaultServiceVerifications(
       verificationMode: string;
       comment: string;
       verifierNote: string;
+      extraPaymentDone: boolean;
+      extraPaymentAmount: number | null;
       screenshotFileName: string;
       screenshotMimeType: string;
       screenshotFileSize: number | null;
@@ -547,6 +574,13 @@ function normalizeServiceVerifications(
         verificationMode: attempt.verificationMode ?? "",
         comment: attempt.comment ?? "",
         verifierNote: attempt.verifierNote ?? "",
+        extraPaymentDone: Boolean(attempt.extraPaymentDone),
+        extraPaymentAmount:
+          typeof attempt.extraPaymentAmount === "number" &&
+          Number.isFinite(attempt.extraPaymentAmount) &&
+          attempt.extraPaymentAmount > 0
+            ? Math.round(attempt.extraPaymentAmount * 100) / 100
+            : null,
         screenshotFileName: attempt.screenshotFileName ?? "",
         screenshotMimeType: attempt.screenshotMimeType ?? "",
         screenshotFileSize: attempt.screenshotFileSize ?? null,
@@ -1161,6 +1195,28 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: normalizedScreenshot.error }, { status: 400 });
   }
 
+  if (verifyPayload.extraPaymentDone && !normalizedScreenshot.value.screenshotData) {
+    return NextResponse.json(
+      { error: "Receipt screenshot is required when extra payment is marked as done." },
+      { status: 400 },
+    );
+  }
+
+  const normalizedExtraPaymentAmount =
+    verifyPayload.extraPaymentDone &&
+    typeof verifyPayload.extraPaymentAmount === "number" &&
+    Number.isFinite(verifyPayload.extraPaymentAmount) &&
+    verifyPayload.extraPaymentAmount > 0
+      ? Math.round(verifyPayload.extraPaymentAmount * 100) / 100
+      : null;
+
+  if (verifyPayload.extraPaymentDone && !normalizedExtraPaymentAmount) {
+    return NextResponse.json(
+      { error: "Extra payment amount must be greater than zero when extra payment is marked as done." },
+      { status: 400 },
+    );
+  }
+
   const requestDoc = await VerificationRequest.findById(verifyPayload.requestId)
     .select(
       "candidateFormStatus status selectedServices serviceVerifications reportData reportMetadata invoiceSnapshot",
@@ -1232,6 +1288,8 @@ export async function PATCH(req: NextRequest) {
     verificationMode: verifyPayload.verificationMode,
     comment: verifyPayload.comment,
     verifierNote: verifyPayload.verifierNote,
+    extraPaymentDone: verifyPayload.extraPaymentDone,
+    extraPaymentAmount: normalizedExtraPaymentAmount,
     screenshotFileName: normalizedScreenshot.value.screenshotFileName,
     screenshotMimeType: normalizedScreenshot.value.screenshotMimeType,
     screenshotFileSize: normalizedScreenshot.value.screenshotFileSize,

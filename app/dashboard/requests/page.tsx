@@ -9,6 +9,7 @@ import {
   ChevronUp,
   FileText,
   ListFilter,
+  RotateCw,
   Search,
   SlidersHorizontal,
   X,
@@ -46,7 +47,6 @@ const MAX_ATTEMPT_SCREENSHOT_BYTES = 2 * 1024 * 1024;
 const ATTEMPT_SCREENSHOT_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
-  "image/jpg",
   "image/webp",
 ]);
 const DEFAULT_VERIFICATION_MODE_OPTIONS = [
@@ -61,6 +61,8 @@ type ServiceAttemptDraft = {
   verificationMode: string;
   comment: string;
   verifierNote: string;
+  extraPaymentDone: boolean;
+  extraPaymentAmount: number | null;
   screenshotFileName: string;
   screenshotMimeType: string;
   screenshotFileSize: number | null;
@@ -466,6 +468,49 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+function normalizeAttemptScreenshotMimeType(rawMimeType: string) {
+  const normalizedMimeType = rawMimeType.trim().toLowerCase();
+  if (!normalizedMimeType) {
+    return "";
+  }
+
+  if (normalizedMimeType === "image/x-png") {
+    return "image/png";
+  }
+
+  if (normalizedMimeType === "image/jpg" || normalizedMimeType === "image/pjpeg") {
+    return "image/jpeg";
+  }
+
+  return normalizedMimeType;
+}
+
+function resolveAttemptScreenshotMimeType(file: File) {
+  const normalizedFromType = normalizeAttemptScreenshotMimeType(file.type || "");
+  if (ATTEMPT_SCREENSHOT_MIME_TYPES.has(normalizedFromType)) {
+    return normalizedFromType;
+  }
+
+  const normalizedName = file.name.trim().toLowerCase();
+  if (normalizedName.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (normalizedName.endsWith(".jpg") || normalizedName.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+
+  if (normalizedName.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  return "";
+}
+
+function normalizeDataUrlMimeType(dataUrl: string, mimeType: string) {
+  return dataUrl.replace(/^data:[^;,]*;base64,/i, `data:${mimeType};base64,`);
+}
+
 function normalizeVerificationModeInput(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -569,6 +614,7 @@ function RequestsPageContent() {
   const [appealQuickFilter, setAppealQuickFilter] = useState(false);
   const [expandedCompanyGroups, setExpandedCompanyGroups] = useState<Record<string, boolean>>({});
   const [companyGroupPageByKey, setCompanyGroupPageByKey] = useState<Record<string, number>>({});
+  const [manualRefreshInProgress, setManualRefreshInProgress] = useState(false);
 
   const focusRequestId = searchParams.get("requestId")?.trim() ?? "";
 
@@ -582,6 +628,24 @@ function RequestsPageContent() {
     },
     [queryClient],
   );
+
+  async function manuallyRefreshRequestTable() {
+    if (manualRefreshInProgress) {
+      return;
+    }
+
+    setMessage("");
+    setManualRefreshInProgress(true);
+
+    try {
+      await loadRequests();
+      setMessage("Requests list refreshed.");
+    } catch {
+      setMessage("Could not refresh requests right now.");
+    } finally {
+      setManualRefreshInProgress(false);
+    }
+  }
 
   const verificationModeOptions = useMemo(
     () => [
@@ -627,6 +691,8 @@ function RequestsPageContent() {
           verificationMode: service.verificationMode || "manual",
           comment: service.comment || "",
           verifierNote: latestAttempt?.verifierNote || "",
+          extraPaymentDone: false,
+          extraPaymentAmount: null,
           screenshotFileName: "",
           screenshotMimeType: "",
           screenshotFileSize: null,
@@ -655,6 +721,8 @@ function RequestsPageContent() {
         verificationMode: "manual",
         comment: "",
         verifierNote: "",
+        extraPaymentDone: false,
+        extraPaymentAmount: null,
         screenshotFileName: "",
         screenshotMimeType: "",
         screenshotFileSize: null,
@@ -760,9 +828,9 @@ function RequestsPageContent() {
       return;
     }
 
-    const normalizedMimeType = selectedFile.type.trim().toLowerCase();
-    if (!ATTEMPT_SCREENSHOT_MIME_TYPES.has(normalizedMimeType)) {
-      setMessage("Screenshot must be PNG, JPG, or WEBP.");
+    const normalizedMimeType = resolveAttemptScreenshotMimeType(selectedFile);
+    if (!normalizedMimeType) {
+      setMessage("Screenshot must be PNG, JPG/JPEG, or WEBP.");
       input.value = "";
       return;
     }
@@ -774,7 +842,8 @@ function RequestsPageContent() {
     }
 
     try {
-      const screenshotData = await readFileAsDataUrl(selectedFile);
+      const rawScreenshotData = await readFileAsDataUrl(selectedFile);
+      const screenshotData = normalizeDataUrlMimeType(rawScreenshotData, normalizedMimeType);
       updateServiceDraft(requestId, serviceId, {
         screenshotFileName: selectedFile.name,
         screenshotMimeType: normalizedMimeType,
@@ -796,6 +865,21 @@ function RequestsPageContent() {
       return;
     }
 
+    if (draft.extraPaymentDone && !draft.screenshotData) {
+      setMessage("Extra payment is marked as done. Please upload receipt before logging attempt.");
+      return;
+    }
+
+    if (
+      draft.extraPaymentDone &&
+      (typeof draft.extraPaymentAmount !== "number" ||
+        !Number.isFinite(draft.extraPaymentAmount) ||
+        draft.extraPaymentAmount <= 0)
+    ) {
+      setMessage("Enter extra payment amount in service currency before logging attempt.");
+      return;
+    }
+
     setMessage("");
     setVerifyingServiceKey(`${requestId}:${serviceId}`);
 
@@ -810,6 +894,8 @@ function RequestsPageContent() {
         verificationMode: draft.verificationMode,
         comment: draft.comment,
         verifierNote: draft.verifierNote,
+        extraPaymentDone: draft.extraPaymentDone,
+        extraPaymentAmount: draft.extraPaymentDone ? draft.extraPaymentAmount : null,
         screenshotFileName: draft.screenshotFileName,
         screenshotMimeType: draft.screenshotMimeType,
         screenshotFileSize: draft.screenshotFileSize,
@@ -827,6 +913,10 @@ function RequestsPageContent() {
 
     setMessage(data.message ?? "Service verification attempt logged.");
     clearAttemptScreenshot(requestId, serviceId);
+    updateServiceDraft(requestId, serviceId, {
+      extraPaymentDone: false,
+      extraPaymentAmount: null,
+    });
     await loadRequests();
   }
 
@@ -1447,7 +1537,7 @@ function RequestsPageContent() {
         </p>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: "1320px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
+          <table style={{ width: "100%", minWidth: "1510px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
             <thead>
               <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Service</th>
@@ -1458,7 +1548,8 @@ function RequestsPageContent() {
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>
                   Verifier Note (Internal)
                 </th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Screenshot (Max 2MB)</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Extra Payment</th>
+                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Screenshot / Receipt (Max 2MB)</th>
                 <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Action</th>
               </tr>
             </thead>
@@ -1469,6 +1560,8 @@ function RequestsPageContent() {
                   verificationMode: service.verificationMode || "manual",
                   comment: service.comment || "",
                   verifierNote: service.attempts?.[service.attempts.length - 1]?.verifierNote || "",
+                  extraPaymentDone: false,
+                  extraPaymentAmount: null,
                   screenshotFileName: "",
                   screenshotMimeType: "",
                   screenshotFileSize: null,
@@ -1491,6 +1584,14 @@ function RequestsPageContent() {
                         },
                       ]
                     : verificationModeOptions;
+                const selectedServiceForCurrency =
+                  (item.selectedServices ?? []).find(
+                    (entry) =>
+                      entry.serviceId === service.serviceId ||
+                      entry.serviceName.toLowerCase() === service.serviceName.toLowerCase(),
+                  ) ?? null;
+                const serviceCurrency =
+                  selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
                 const canSubmitAttempt =
                   canVerifyWorkflow &&
                   item.candidateFormStatus === "submitted" &&
@@ -1626,11 +1727,65 @@ function RequestsPageContent() {
                         }
                       />
                     </td>
+                    <td style={{ padding: "0.65rem", minWidth: "190px" }}>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{
+                            padding: "0.32rem 0.55rem",
+                            fontSize: "0.75rem",
+                            borderColor: draft.extraPaymentDone ? "#16A34A" : "#CBD5E1",
+                            background: draft.extraPaymentDone ? "#ECFDF5" : "#F8FAFC",
+                            color: draft.extraPaymentDone ? "#166534" : "#334155",
+                            fontWeight: 700,
+                          }}
+                          onClick={() => {
+                            const nextValue = !draft.extraPaymentDone;
+                            updateServiceDraft(item._id, service.serviceId, {
+                              extraPaymentDone: nextValue,
+                              extraPaymentAmount: nextValue ? draft.extraPaymentAmount : null,
+                            });
+                            if (nextValue) {
+                              setMessage("Extra payment marked as done. Enter amount and upload receipt.");
+                            }
+                          }}
+                        >
+                          {draft.extraPaymentDone ? "Yes, Receipt Needed" : "No Extra Payment"}
+                        </button>
+
+                        {draft.extraPaymentDone ? (
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="input"
+                            style={{ padding: "0.32rem 0.45rem" }}
+                            value={
+                              typeof draft.extraPaymentAmount === "number"
+                                ? String(draft.extraPaymentAmount)
+                                : ""
+                            }
+                            placeholder={`Extra amount (${serviceCurrency})`}
+                            onChange={(event) => {
+                              const rawValue = event.target.value.trim();
+                              const parsedAmount = Number(rawValue);
+                              updateServiceDraft(item._id, service.serviceId, {
+                                extraPaymentAmount:
+                                  rawValue && Number.isFinite(parsedAmount) && parsedAmount > 0
+                                    ? Math.round(parsedAmount * 100) / 100
+                                    : null,
+                              });
+                            }}
+                          />
+                        ) : null}
+                      </div>
+                    </td>
                     <td style={{ padding: "0.65rem", minWidth: "260px" }}>
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <input
                           type="file"
-                          accept="image/png,image/jpeg,image/jpg,image/webp"
+                          accept=".png,.jpg,.jpeg,.webp,image/png,image/x-png,image/jpeg,image/jpg,image/pjpeg,image/webp"
                           className="input"
                           style={{ padding: "0.35rem 0.45rem" }}
                           onChange={(event) =>
@@ -1640,7 +1795,7 @@ function RequestsPageContent() {
                         {draft.screenshotData ? (
                           <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap", fontSize: "0.75rem", color: "#475569" }}>
                             <span style={{ fontWeight: 600, color: "#1E293B" }}>
-                              {draft.screenshotFileName || "Selected screenshot"}
+                              {draft.screenshotFileName || (draft.extraPaymentDone ? "Selected receipt" : "Selected screenshot")}
                             </span>
                             {typeof draft.screenshotFileSize === "number" ? (
                               <span>({formatFileSize(draft.screenshotFileSize)})</span>
@@ -1654,6 +1809,10 @@ function RequestsPageContent() {
                               Remove
                             </button>
                           </div>
+                        ) : draft.extraPaymentDone ? (
+                          <span style={{ fontSize: "0.75rem", color: "#B45309", fontWeight: 600 }}>
+                            Receipt and amount are required when extra payment is marked done.
+                          </span>
                         ) : (
                           <span style={{ fontSize: "0.75rem", color: "#94A3B8" }}>
                             Optional: attach verification screenshot
@@ -1666,10 +1825,24 @@ function RequestsPageContent() {
                         type="button"
                         className="btn btn-primary"
                         style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem" }}
-                        disabled={!canSubmitAttempt || verifyingServiceKey === serviceKey}
+                        disabled={
+                          !canSubmitAttempt ||
+                          verifyingServiceKey === serviceKey ||
+                          (draft.extraPaymentDone &&
+                            (!draft.screenshotData ||
+                              typeof draft.extraPaymentAmount !== "number" ||
+                              draft.extraPaymentAmount <= 0))
+                        }
                         onClick={() => logServiceAttempt(item._id, service.serviceId)}
                       >
-                        {verifyingServiceKey === serviceKey ? "Saving..." : "Log Attempt"}
+                        {verifyingServiceKey === serviceKey
+                          ? "Saving..."
+                          : draft.extraPaymentDone &&
+                              (!draft.screenshotData ||
+                                typeof draft.extraPaymentAmount !== "number" ||
+                                draft.extraPaymentAmount <= 0)
+                            ? "Add Amount & Receipt"
+                            : "Log Attempt"}
                       </button>
                     </td>
                   </tr>
@@ -1680,7 +1853,17 @@ function RequestsPageContent() {
         </div>
 
         <div style={{ display: "grid", gap: "0.85rem", marginTop: "0.9rem" }}>
-          {services.map((service) => (
+          {services.map((service) => {
+            const selectedServiceForCurrency =
+              (item.selectedServices ?? []).find(
+                (entry) =>
+                  entry.serviceId === service.serviceId ||
+                  entry.serviceName.toLowerCase() === service.serviceName.toLowerCase(),
+              ) ?? null;
+            const serviceCurrency =
+              selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
+
+            return (
             <div key={`${item._id}-${service.serviceId}-attempts`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#FFFFFF", padding: "0.75rem" }}>
               <div style={{ fontWeight: 600, color: "#334155", marginBottom: "0.45rem" }}>
                 Attempts: {service.serviceName}
@@ -1689,7 +1872,7 @@ function RequestsPageContent() {
                 <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
               ) : (
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: "1080px", borderCollapse: "collapse" }}>
+                  <table style={{ width: "100%", minWidth: "1240px", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ textAlign: "left", borderBottom: "1px solid #E2E8F0" }}>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Date/Time</th>
@@ -1699,6 +1882,8 @@ function RequestsPageContent() {
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>
                           Verifier Note (Internal)
                         </th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Extra Payment</th>
+                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Extra Amount</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Screenshot</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Verifier</th>
                         <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Manager</th>
@@ -1731,6 +1916,16 @@ function RequestsPageContent() {
                             </td>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {attempt.verifierNote || "-"}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.extraPaymentDone ? "Yes" : "No"}
+                            </td>
+                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
+                              {attempt.extraPaymentDone &&
+                              typeof attempt.extraPaymentAmount === "number" &&
+                              attempt.extraPaymentAmount > 0
+                                ? `${serviceCurrency} ${attempt.extraPaymentAmount.toFixed(2)}`
+                                : "-"}
                             </td>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {attempt.screenshotData ? (
@@ -1798,7 +1993,8 @@ function RequestsPageContent() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -2481,6 +2677,30 @@ function RequestsPageContent() {
           <button
             type="button"
             className="btn btn-secondary"
+            onClick={() => {
+              void manuallyRefreshRequestTable();
+            }}
+            disabled={manualRefreshInProgress}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.45rem",
+              padding: "0.6rem 1rem",
+              borderRadius: "8px",
+              background: "#F8FAFC",
+              color: "#334155",
+              border: "1px solid #E2E8F0",
+              transition: "all 0.2s",
+              opacity: manualRefreshInProgress ? 0.7 : 1,
+            }}
+          >
+            <RotateCw size={16} className={manualRefreshInProgress ? "animate-spin" : ""} />
+            {manualRefreshInProgress ? "Refreshing..." : "Refresh"}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
             onClick={toggleAppealQuickFilter}
             disabled={appealPendingCount === 0 && !appealQuickFilter}
             style={{
@@ -2646,12 +2866,12 @@ function RequestsPageContent() {
           <div
             className="glass-card"
             style={{
-              width: "min(1640px, calc(100vw - 1rem))",
-              maxWidth: "calc(100vw - 1rem)",
-              height: "94vh",
-              maxHeight: "94vh",
+              width: "min(1780px, calc(100vw - 0.35rem))",
+              maxWidth: "calc(100vw - 0.35rem)",
+              height: "97vh",
+              maxHeight: "97vh",
               overflowY: "auto",
-              padding: "1rem",
+              padding: "1.1rem",
               background: "#FFFFFF",
             }}
           >

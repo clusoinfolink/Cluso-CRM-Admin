@@ -61,9 +61,23 @@ const VerificationRequestSchema = new Schema(
         question: { type: String, required: true },
         fieldType: {
           type: String,
-          enum: ["text", "long_text", "number", "file", "date"],
+          enum: ["text", "long_text", "number", "file", "date", "dropdown", "composite"],
           required: true,
         },
+        subFields: [
+          {
+            fieldKey: { type: String, default: "" },
+            question: { type: String, required: true },
+            fieldType: {
+              type: String,
+              enum: ["text", "number", "date", "dropdown"],
+              required: true,
+            },
+            value: { type: String, default: "" },
+            required: { type: Boolean, default: false },
+            dropdownOptions: { type: [String], default: [] },
+          },
+        ],
       },
     ],
     candidateFormResponses: [
@@ -81,9 +95,23 @@ const VerificationRequestSchema = new Schema(
             question: { type: String, required: true },
             fieldType: {
               type: String,
-              enum: ["text", "long_text", "number", "file", "date"],
+              enum: ["text", "long_text", "number", "file", "date", "dropdown", "composite"],
               required: true,
             },
+            subFields: [
+              {
+                fieldKey: { type: String, default: "" },
+                question: { type: String, required: true },
+                fieldType: {
+                  type: String,
+                  enum: ["text", "number", "date", "dropdown"],
+                  required: true,
+                },
+                value: { type: String, default: "" },
+                required: { type: Boolean, default: false },
+                dropdownOptions: { type: [String], default: [] },
+              },
+            ],
             required: { type: Boolean, default: false },
             repeatable: { type: Boolean, default: false },
             notApplicable: { type: Boolean, default: false },
@@ -107,6 +135,7 @@ const VerificationRequestSchema = new Schema(
         serviceName: { type: String, required: true },
         price: { type: Number, required: true },
         currency: { type: String, enum: SUPPORTED_CURRENCIES, default: "INR" },
+        yearsOfChecking: { type: String, default: "default" },
       },
     ],
     serviceVerifications: [
@@ -134,6 +163,8 @@ const VerificationRequestSchema = new Schema(
             verificationMode: { type: String, default: "" },
             comment: { type: String, default: "" },
             verifierNote: { type: String, default: "" },
+            extraPaymentDone: { type: Boolean, default: false },
+            extraPaymentAmount: { type: Number, default: null, min: 0 },
             screenshotFileName: { type: String, default: "" },
             screenshotMimeType: { type: String, default: "" },
             screenshotFileSize: { type: Number, default: null },

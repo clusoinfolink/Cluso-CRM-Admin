@@ -6,7 +6,15 @@ import { connectMongo } from "@/lib/mongodb";
 import Service from "@/lib/models/Service";
 import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
 
-const formFieldTypeSchema = z.enum(["text", "long_text", "number", "file", "date"]);
+const formFieldTypeSchema = z.enum([
+  "text",
+  "long_text",
+  "number",
+  "file",
+  "date",
+  "dropdown",
+  "composite",
+]);
 
 const SUPPORTED_QUESTION_ICON_KEYS = [
   "none",
@@ -58,12 +66,33 @@ function createFieldKey() {
 
 const DEFAULT_PERSONAL_DETAILS_SERVICE_NAME = "Personal details";
 
+const subFieldSchema = z.object({
+  fieldKey: z.string().trim().max(120).optional(),
+  question: z.string().trim().min(1).max(200),
+  fieldType: z.enum(["text", "number", "date", "dropdown"]),
+  dropdownOptions: z.array(z.string().trim().min(1).max(120)).optional().default([]),
+  required: z.boolean().optional().default(false),
+}).superRefine((subField, ctx) => {
+  if (subField.fieldType === "dropdown") {
+      const normalizedOptions = [...new Set(subField.dropdownOptions.map((option) => option.trim()).filter(Boolean))];
+      if (normalizedOptions.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dropdownOptions"],
+          message: "Sub-field dropdowns must include at least one option.",
+        });
+      }
+  }
+});
+
 const formFieldSchema = z
   .object({
     fieldKey: z.string().trim().min(1).max(120).optional(),
     question: z.string().trim().min(1).max(200),
     iconKey: z.string().trim().max(40).optional().default(DEFAULT_QUESTION_ICON),
     fieldType: formFieldTypeSchema,
+    subFields: z.array(subFieldSchema).optional().default([]),
+    dropdownOptions: z.array(z.string().trim().min(1).max(120)).optional().default([]),
     required: z.boolean().optional().default(false),
     repeatable: z.boolean().optional().default(false),
     minLength: nullableLengthSchema.optional(),
@@ -108,6 +137,27 @@ const formFieldSchema = z
         message: "Not Applicable text is required when enabled.",
       });
     }
+
+    if (field.fieldType === "dropdown") {
+      const normalizedOptions = [...new Set(field.dropdownOptions.map((option) => option.trim()).filter(Boolean))];
+      if (normalizedOptions.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dropdownOptions"],
+          message: "Dropdown fields must include at least one option.",
+        });
+      }
+    }
+
+    if (field.fieldType === "composite") {
+      if (!field.subFields || field.subFields.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["subFields"],
+          message: "Composite fields must include at least one sub-field.",
+        });
+      }
+    }
   });
 
 type ParsedFormField = z.infer<typeof formFieldSchema>;
@@ -119,12 +169,28 @@ function normalizeFormField(field: ParsedFormField) {
     field.fieldType === "number";
   const supportsUppercaseConstraint =
     field.fieldType === "text" || field.fieldType === "long_text";
+  const dropdownOptions =
+    field.fieldType === "dropdown"
+      ? [...new Set((field.dropdownOptions ?? []).map((option) => option.trim()).filter(Boolean))]
+      : [];
+  
+  const subFields = field.fieldType === "composite" && field.subFields ? field.subFields.map(sf => ({
+    fieldKey: sf.fieldKey?.trim() || createFieldKey(),
+    question: sf.question.trim(),
+    fieldType: sf.fieldType,
+    dropdownOptions: sf.fieldType === "dropdown" 
+      ? [...new Set((sf.dropdownOptions ?? []).map(opt => opt.trim()).filter(Boolean))]
+      : [],
+    required: Boolean(sf.required)
+  })) : [];
 
   return {
     fieldKey: field.fieldKey?.trim() || createFieldKey(),
     question: field.question.trim(),
     iconKey: normalizeQuestionIconKey(field.iconKey),
     fieldType: field.fieldType,
+    subFields,
+    dropdownOptions,
     required: Boolean(field.required),
     repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
     minLength: supportsLengthConstraints
@@ -149,7 +215,15 @@ function serializeFormField(field: {
   fieldKey?: string;
   question: string;
   iconKey?: unknown;
-  fieldType: "text" | "long_text" | "number" | "file" | "date";
+  fieldType: "text" | "long_text" | "number" | "file" | "date" | "dropdown" | "composite";
+  subFields?: Array<{
+    fieldKey?: string;
+    question: string;
+    fieldType: "text" | "number" | "date" | "dropdown";
+    dropdownOptions?: unknown;
+    required?: boolean;
+  }>;
+  dropdownOptions?: unknown;
   required?: boolean;
   repeatable?: boolean;
   minLength?: number | null;
@@ -158,25 +232,47 @@ function serializeFormField(field: {
   allowNotApplicable?: boolean;
   notApplicableText?: string;
 }) {
-  const supportsTextConstraints =
+  const supportsLengthConstraints =
+    field.fieldType === "text" ||
+    field.fieldType === "long_text" ||
+    field.fieldType === "number";
+  const supportsUppercaseConstraint =
     field.fieldType === "text" || field.fieldType === "long_text";
+  const dropdownOptions =
+    field.fieldType === "dropdown" && Array.isArray(field.dropdownOptions)
+      ? [...new Set(field.dropdownOptions.map((option) => String(option).trim()).filter(Boolean))]
+      : [];
+
+  const subFields = field.fieldType === "composite" && Array.isArray(field.subFields)
+    ? field.subFields.map(sf => ({
+        fieldKey: sf.fieldKey?.trim() || createFieldKey(),
+        question: String(sf.question).trim(),
+        fieldType: sf.fieldType,
+        dropdownOptions: sf.fieldType === "dropdown" && Array.isArray(sf.dropdownOptions)
+          ? [...new Set(sf.dropdownOptions.map(opt => String(opt).trim()).filter(Boolean))]
+          : [],
+        required: Boolean(sf.required)
+    }))
+    : [];
 
   return {
     fieldKey: field.fieldKey?.trim() || createFieldKey(),
     question: field.question,
     iconKey: normalizeQuestionIconKey(field.iconKey),
     fieldType: field.fieldType,
+    subFields,
+    dropdownOptions,
     required: Boolean(field.required),
     repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
     minLength:
-      supportsTextConstraints && typeof field.minLength === "number"
+      supportsLengthConstraints && typeof field.minLength === "number"
         ? field.minLength
         : null,
     maxLength:
-      supportsTextConstraints && typeof field.maxLength === "number"
+      supportsLengthConstraints && typeof field.maxLength === "number"
         ? field.maxLength
         : null,
-    forceUppercase: supportsTextConstraints ? Boolean(field.forceUppercase) : false,
+    forceUppercase: supportsUppercaseConstraint ? Boolean(field.forceUppercase) : false,
     allowNotApplicable: Boolean(field.allowNotApplicable),
     notApplicableText: Boolean(field.allowNotApplicable)
       ? field.notApplicableText?.trim() || "Not Applicable"
@@ -190,6 +286,8 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     question: "Full name (as per government ID)",
     iconKey: "pen",
     fieldType: "text",
+    subFields: [],
+    dropdownOptions: [],
     required: true,
     repeatable: false,
     minLength: 2,
@@ -203,6 +301,8 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     question: "Date of birth",
     iconKey: "calendar",
     fieldType: "date",
+    subFields: [],
+    dropdownOptions: [],
     required: true,
     repeatable: false,
     minLength: null,
@@ -216,6 +316,8 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     question: "Mobile number",
     iconKey: "phone",
     fieldType: "text",
+    subFields: [],
+    dropdownOptions: [],
     required: true,
     repeatable: false,
     minLength: 7,
@@ -229,6 +331,8 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     question: "Current residential address",
     iconKey: "house",
     fieldType: "long_text",
+    subFields: [],
+    dropdownOptions: [],
     required: true,
     repeatable: false,
     minLength: 10,
@@ -242,6 +346,8 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     question: "Primary government ID number",
     iconKey: "id-card",
     fieldType: "text",
+    subFields: [],
+    dropdownOptions: [],
     required: true,
     repeatable: false,
     minLength: 4,
@@ -383,6 +489,8 @@ export async function GET(req: NextRequest) {
           question: field.question,
           iconKey: field.iconKey,
           fieldType: field.fieldType,
+          subFields: field.subFields,
+          dropdownOptions: field.dropdownOptions,
           required: field.required,
           repeatable: field.repeatable,
           minLength: field.minLength,
@@ -494,6 +602,8 @@ export async function POST(req: NextRequest) {
             question: field.question,
             iconKey: field.iconKey,
             fieldType: field.fieldType,
+            subFields: field.subFields,
+            dropdownOptions: field.dropdownOptions,
             required: field.required,
             repeatable: field.repeatable,
             minLength: field.minLength,
@@ -574,6 +684,8 @@ export async function PATCH(req: NextRequest) {
           question: field.question,
           iconKey: field.iconKey,
           fieldType: field.fieldType,
+          subFields: field.subFields,
+          dropdownOptions: field.dropdownOptions,
           required: field.required,
           repeatable: field.repeatable,
           minLength: field.minLength,

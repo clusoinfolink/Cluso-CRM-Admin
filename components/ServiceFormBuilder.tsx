@@ -10,6 +10,7 @@ import {
   Type,
   FileText,
   Calendar,
+  ChevronDown,
   Hash,
   Upload,
   Settings,
@@ -35,7 +36,14 @@ import {
 import type { SupportedCurrency } from "@/lib/currencies";
 import { SearchableSelect } from "@/components/SearchableSelect";
 
-type ServiceFormFieldType = "text" | "long_text" | "number" | "file" | "date";
+type ServiceFormFieldType =
+  | "text"
+  | "long_text"
+  | "number"
+  | "file"
+  | "date"
+  | "dropdown"
+  | "composite";
 type ServiceQuestionIconKey =
   | "none"
   | "diary"
@@ -88,11 +96,21 @@ function normalizeQuestionIconKey(rawIconKey: unknown): ServiceQuestionIconKey {
     : DEFAULT_QUESTION_ICON;
 }
 
+export type ServiceFormSubField = {
+  fieldKey?: string;
+  question: string;
+  fieldType: "text" | "number" | "date" | "dropdown";
+  dropdownOptions?: string[];
+  required: boolean;
+};
+
 export type ServiceFormField = {
   fieldKey?: string;
   question: string;
   iconKey?: string;
   fieldType: ServiceFormFieldType;
+  subFields?: ServiceFormSubField[];
+  dropdownOptions?: string[];
   required: boolean;
   repeatable?: boolean;
   minLength?: number | null;
@@ -133,6 +151,69 @@ function supportsRepeatable(fieldType: ServiceFormFieldType) {
   return fieldType !== "file";
 }
 
+function mapFieldTypeToSubFieldType(
+  fieldType: ServiceFormFieldType,
+): ServiceFormSubField["fieldType"] {
+  if (
+    fieldType === "text" ||
+    fieldType === "number" ||
+    fieldType === "date" ||
+    fieldType === "dropdown"
+  ) {
+    return fieldType;
+  }
+
+  return "text";
+}
+
+function normalizeDraftDropdownOptions(rawOptions: unknown) {
+  if (!Array.isArray(rawOptions)) {
+    return [] as string[];
+  }
+
+  return rawOptions.map((option) => String(option ?? "").trim());
+}
+
+function sanitizeDropdownOptions(rawOptions: unknown) {
+  return [...new Set(normalizeDraftDropdownOptions(rawOptions).filter(Boolean))];
+}
+
+function sanitizeSubFields(rawSubFields: unknown): ServiceFormSubField[] {
+  if (!Array.isArray(rawSubFields)) {
+    return [];
+  }
+
+  const nextSubFields: ServiceFormSubField[] = [];
+
+  for (const rawSubField of rawSubFields) {
+    if (!rawSubField || typeof rawSubField !== "object") {
+      continue;
+    }
+
+    const subField = rawSubField as Partial<ServiceFormSubField>;
+    const normalizedFieldType: ServiceFormSubField["fieldType"] =
+      subField.fieldType === "text" ||
+      subField.fieldType === "number" ||
+      subField.fieldType === "date" ||
+      subField.fieldType === "dropdown"
+        ? subField.fieldType
+        : "text";
+
+    nextSubFields.push({
+      fieldKey: typeof subField.fieldKey === "string" ? subField.fieldKey.trim() : "",
+      question: typeof subField.question === "string" ? subField.question.trim() : "",
+      fieldType: normalizedFieldType,
+      dropdownOptions:
+        normalizedFieldType === "dropdown"
+          ? normalizeDraftDropdownOptions(subField.dropdownOptions)
+          : [],
+      required: Boolean(subField.required),
+    });
+  }
+
+  return nextSubFields;
+}
+
 function normalizeLengthValue(raw: string) {
   if (!raw.trim()) {
     return null;
@@ -163,6 +244,7 @@ function createEmptyField(
     question,
     iconKey,
     fieldType: "text",
+    dropdownOptions: [],
     required: false,
     repeatable: false,
     minLength: null,
@@ -205,10 +287,21 @@ export default function ServiceFormBuilder({
     [activeServiceId, regularServices],
   );
 
-  const fields = (drafts[activeServiceId] ?? selectedService?.formFields ?? []).map((field) => ({
+  const fields: ServiceFormField[] = (drafts[activeServiceId] ?? selectedService?.formFields ?? []).map((field) => ({
     ...field,
     fieldKey: field.fieldKey?.trim() || "",
     iconKey: normalizeQuestionIconKey(field.iconKey),
+    subFields:
+      field.fieldType === "composite"
+        ? sanitizeSubFields(field.subFields).map((subField) => ({
+            ...subField,
+            dropdownOptions:
+              subField.fieldType === "dropdown"
+                ? normalizeDraftDropdownOptions(subField.dropdownOptions)
+                : [],
+          }))
+        : [],
+    dropdownOptions: normalizeDraftDropdownOptions(field.dropdownOptions),
     repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
     minLength: typeof field.minLength === "number" ? field.minLength : null,
     maxLength: typeof field.maxLength === "number" ? field.maxLength : null,
@@ -246,9 +339,74 @@ export default function ServiceFormBuilder({
 
     const sourceQuestion = fields[index]?.question?.trim() ?? "";
     const sourceIcon = normalizeQuestionIconKey(fields[index]?.iconKey);
+    const nextFields = [...fields];
+    nextFields.splice(index + 1, 0, createEmptyField(sourceQuestion, sourceIcon));
+
     setDrafts((prev) => ({
       ...prev,
-      [activeServiceId]: [...fields, createEmptyField(sourceQuestion, sourceIcon)],
+      [activeServiceId]: nextFields,
+    }));
+  }
+
+  function addSecondInputInQuestion(index: number) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) {
+          return item;
+        }
+
+        if (item.fieldType === "composite") {
+          return {
+            ...item,
+            subFields: [
+              ...(item.subFields || []),
+              {
+                fieldKey: createFieldKey(),
+                question: "",
+                fieldType: "text",
+                dropdownOptions: [],
+                required: false,
+              },
+            ],
+          };
+        }
+
+        const primarySubFieldType = mapFieldTypeToSubFieldType(item.fieldType);
+
+        return {
+          ...item,
+          fieldType: "composite",
+          subFields: [
+            {
+              fieldKey: createFieldKey(),
+              question: item.question,
+              fieldType: primarySubFieldType,
+              dropdownOptions:
+                primarySubFieldType === "dropdown"
+                  ? sanitizeDropdownOptions(item.dropdownOptions)
+                  : [],
+              required: Boolean(item.required),
+            },
+            {
+              fieldKey: createFieldKey(),
+              question: "",
+              fieldType: "text",
+              dropdownOptions: [],
+              required: false,
+            },
+          ],
+          dropdownOptions: [],
+          repeatable: false,
+          minLength: null,
+          maxLength: null,
+          forceUppercase: false,
+        };
+      }),
     }));
   }
 
@@ -290,6 +448,11 @@ export default function ServiceFormBuilder({
           ? {
               ...item,
               fieldType,
+              subFields: fieldType === "composite" ? item.subFields || [] : [],
+              dropdownOptions:
+                fieldType === "dropdown"
+                  ? normalizeDraftDropdownOptions(item.dropdownOptions)
+                  : [],
               repeatable: supportsRepeatable(fieldType)
                 ? Boolean(item.repeatable)
                 : false,
@@ -301,6 +464,135 @@ export default function ServiceFormBuilder({
             }
           : item,
       ),
+    }));
+  }
+
+  function updateFieldDropdownOption(index: number, optionIndex: number, optionValue: string) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) {
+          return item;
+        }
+
+        const nextOptions = [...normalizeDraftDropdownOptions(item.dropdownOptions)];
+        if (optionIndex < 0 || optionIndex >= nextOptions.length) {
+          return item;
+        }
+
+        nextOptions[optionIndex] = optionValue;
+        return {
+          ...item,
+          dropdownOptions: nextOptions,
+        };
+      }),
+    }));
+  }
+
+  function addFieldDropdownOption(index: number) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) {
+          return item;
+        }
+
+        return {
+          ...item,
+          dropdownOptions: [...normalizeDraftDropdownOptions(item.dropdownOptions), ""],
+        };
+      }),
+    }));
+  }
+
+  function removeFieldDropdownOption(index: number, optionIndex: number) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) {
+          return item;
+        }
+
+        const nextOptions = [...normalizeDraftDropdownOptions(item.dropdownOptions)];
+        if (optionIndex < 0 || optionIndex >= nextOptions.length) {
+          return item;
+        }
+
+        nextOptions.splice(optionIndex, 1);
+        return {
+          ...item,
+          dropdownOptions: nextOptions,
+        };
+      }),
+    }));
+  }
+
+  function addSubField(index: number) {
+    if (!activeServiceId) return;
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) return item;
+        return {
+          ...item,
+          subFields: [
+            ...(item.subFields || []),
+            {
+              fieldKey: createFieldKey(),
+              question: "",
+              fieldType: "text",
+              dropdownOptions: [],
+              required: false,
+            },
+          ],
+        };
+      }),
+    }));
+  }
+
+  function updateSubField(index: number, subIndex: number, updater: (sf: ServiceFormSubField) => ServiceFormSubField) {
+    if (!activeServiceId) return;
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) return item;
+        const nextSub = [...(item.subFields || [])];
+        if (subIndex < 0 || subIndex >= nextSub.length) return item;
+        nextSub[subIndex] = updater(nextSub[subIndex]);
+        return {
+          ...item,
+          subFields: nextSub,
+        };
+      }),
+    }));
+  }
+
+  function removeSubField(index: number, subIndex: number) {
+    if (!activeServiceId) return;
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) return item;
+        const nextSub = [...(item.subFields || [])];
+        if (subIndex < 0 || subIndex >= nextSub.length) return item;
+        nextSub.splice(subIndex, 1);
+        return {
+          ...item,
+          subFields: nextSub,
+        };
+      }),
     }));
   }
 
@@ -460,12 +752,29 @@ export default function ServiceFormBuilder({
         supportsLengthConstraints(item.fieldType) && typeof item.maxLength === "number"
           ? item.maxLength
           : null;
+      const dropdownOptions =
+        item.fieldType === "dropdown" ? sanitizeDropdownOptions(item.dropdownOptions) : [];
+      const subFields =
+        item.fieldType === "composite"
+          ? sanitizeSubFields(item.subFields).map((subField) => ({
+              fieldKey: subField.fieldKey?.trim() || createFieldKey(),
+              question: subField.question.trim(),
+              fieldType: subField.fieldType,
+              dropdownOptions:
+                subField.fieldType === "dropdown"
+                  ? sanitizeDropdownOptions(subField.dropdownOptions)
+                  : [],
+              required: Boolean(subField.required),
+            }))
+          : [];
 
       return {
         fieldKey: item.fieldKey?.trim() || createFieldKey(),
         question: item.question.trim(),
         iconKey: normalizeQuestionIconKey(item.iconKey),
         fieldType: item.fieldType,
+        subFields,
+        dropdownOptions,
         required: Boolean(item.required),
         repeatable: supportsRepeatable(item.fieldType) ? Boolean(item.repeatable) : false,
         minLength,
@@ -480,9 +789,44 @@ export default function ServiceFormBuilder({
       };
     });
 
-    const hasEmptyQuestion = cleaned.some((item) => !item.question);
+    const hasEmptyQuestion = cleaned.some(
+      (item) =>
+        !item.question ||
+        (item.fieldType === "composite" && item.subFields.some((subField) => !subField.question)),
+    );
     if (hasEmptyQuestion) {
-      setMessage("Each form field must include a question.");
+      setMessage("Each form field and composite sub-field must include a question.");
+      return;
+    }
+
+    const invalidDropdownField = cleaned.find(
+      (item) => item.fieldType === "dropdown" && item.dropdownOptions.length === 0,
+    );
+    if (invalidDropdownField) {
+      setMessage(`"${invalidDropdownField.question}" must include at least one dropdown option.`);
+      return;
+    }
+
+    const invalidCompositeField = cleaned.find(
+      (item) => item.fieldType === "composite" && item.subFields.length === 0,
+    );
+    if (invalidCompositeField) {
+      setMessage(`"${invalidCompositeField.question}" must include at least one sub-field.`);
+      return;
+    }
+
+    const invalidCompositeDropdownField = cleaned.find(
+      (item) =>
+        item.fieldType === "composite" &&
+        item.subFields.some(
+          (subField) =>
+            subField.fieldType === "dropdown" && subField.dropdownOptions.length === 0,
+        ),
+    );
+    if (invalidCompositeDropdownField) {
+      setMessage(
+        `"${invalidCompositeDropdownField.question}" has a dropdown sub-field without options.`,
+      );
       return;
     }
 
@@ -766,6 +1110,8 @@ export default function ServiceFormBuilder({
                         <option value="number">Number</option>
                         <option value="date">Date</option>
                         <option value="file">File Upload</option>
+                        <option value="dropdown">Dropdown</option>
+                        <option value="composite">Group/Composite</option>
                       </select>
                     </div>
 
@@ -796,16 +1142,176 @@ export default function ServiceFormBuilder({
                             Must answer
                           </label>
                       </div>
-                      
-                      <button
-                        type="button"
-                        onClick={() => addFieldForSameQuestion(index)}
-                        style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.6rem 0.8rem", background: "#F1F5F9", border: "1px solid #CBD5E1", borderRadius: "6px", color: "#475569", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}
-                      >
-                        <Copy size={16} />
-                        Duplicate
-                      </button>
+
+                      <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          onClick={() => addSecondInputInQuestion(index)}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.6rem 0.8rem", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: "6px", color: "#047857", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                        >
+                          <Plus size={16} />
+                          Add One More Input
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addFieldForSameQuestion(index)}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.6rem 0.8rem", background: "#F1F5F9", border: "1px solid #CBD5E1", borderRadius: "6px", color: "#475569", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}
+                        >
+                          <Copy size={16} />
+                          Duplicate
+                        </button>
+                      </div>
                     </div>
+
+                    {field.fieldType === "dropdown" && (
+                      <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: "0.5rem", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: "6px", padding: "1rem" }}>
+                        <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#334155", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                          <ChevronDown size={14} /> Dropdown Options
+                        </h4>
+                        {(field.dropdownOptions || []).map((opt, oIdx) => (
+                          <div key={oIdx} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                            <input
+                              style={{ flex: 1, padding: "0.5rem 0.8rem", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "0.9rem" }}
+                              value={opt}
+                              onChange={(e) => updateFieldDropdownOption(index, oIdx, e.target.value)}
+                              placeholder={`Option ${oIdx + 1}`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeFieldDropdownOption(index, oIdx)}
+                              style={{ padding: "0.4rem", color: "#DC2626", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                              aria-label="Remove option"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => addFieldDropdownOption(index)}
+                          style={{ alignSelf: "flex-start", marginTop: "0.5rem", fontSize: "0.85rem", color: "#2563EB", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
+                        >
+                          <Plus size={14} /> Add Option
+                        </button>
+                      </div>
+                    )}
+
+                    {field.fieldType === "composite" && (
+                      <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: "1rem", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: "6px", padding: "1rem" }}>
+                        <h4 style={{ margin: 0, fontSize: "0.95rem", color: "#166534", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <Layers size={16} /> Composite Sub-Fields
+                        </h4>
+                        <p style={{ margin: 0, fontSize: "0.85rem", color: "#15803D" }}>Group multiple inputs under this single question.</p>
+                        
+                        {(field.subFields || []).map((subField, sIdx) => (
+                          <div key={subField.fieldKey || sIdx} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.8rem", background: "#FFFFFF", border: "1px solid #DCFCE7", borderRadius: "6px" }}>
+                            <div style={{ display: "flex", gap: "0.8rem", alignItems: "flex-start" }}>
+                              <div style={{ flex: 2, display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                                <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151" }}>Sub-Field Question (Label)</label>
+                                <input
+                                  style={{ width: "100%", padding: "0.4rem 0.6rem", border: "1px solid #D1D5DB", borderRadius: "4px", fontSize: "0.85rem" }}
+                                  value={subField.question}
+                                  onChange={(e) => updateSubField(index, sIdx, sf => ({ ...sf, question: e.target.value }))}
+                                  placeholder="e.g. First Name"
+                                />
+                              </div>
+                              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                                <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151" }}>Type</label>
+                                <select
+                                  style={{ padding: "0.4rem 0.6rem", border: "1px solid #D1D5DB", borderRadius: "4px", fontSize: "0.85rem", background: "#fff" }}
+                                  value={subField.fieldType}
+                                  onChange={(e) => {
+                                    const nextFieldType = e.target.value as ServiceFormSubField["fieldType"];
+                                    updateSubField(index, sIdx, (sf) => ({
+                                      ...sf,
+                                      fieldType: nextFieldType,
+                                      dropdownOptions:
+                                        nextFieldType === "dropdown"
+                                          ? normalizeDraftDropdownOptions(sf.dropdownOptions)
+                                          : [],
+                                    }));
+                                  }}
+                                >
+                                  <option value="text">Short Text</option>
+                                  <option value="number">Number</option>
+                                  <option value="date">Date</option>
+                                  <option value="dropdown">Dropdown</option>
+                                </select>
+                              </div>
+                              
+                              <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                                <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151" }}>Required</label>
+                                <label style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "32px", cursor: "pointer" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={subField.required}
+                                    onChange={(e) => updateSubField(index, sIdx, sf => ({ ...sf, required: e.target.checked }))}
+                                    style={{ accentColor: "#16A34A", width: "1rem", height: "1rem" }}
+                                  />
+                                </label>
+                              </div>
+                              
+                              <button
+                                type="button"
+                                onClick={() => removeSubField(index, sIdx)}
+                                style={{ marginTop: "1.4rem", padding: "0.4rem", color: "#EF4444", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center" }}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+
+                            {/* Subfield dropdown options */}
+                            {subField.fieldType === "dropdown" && (
+                              <div style={{ marginTop: "0.5rem", paddingLeft: "1rem", borderLeft: "2px solid #E5E7EB", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                                <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#4B5563" }}>Dropdown Options</span>
+                                {(subField.dropdownOptions || []).map((opt, oIdx) => (
+                                  <div key={oIdx} style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                                    <input
+                                      style={{ flex: 1, padding: "0.3rem 0.5rem", border: "1px solid #D1D5DB", borderRadius: "4px", fontSize: "0.8rem" }}
+                                      value={opt}
+                                      onChange={(e) => updateSubField(index, sIdx, sf => {
+                                        const newOpts = [...(sf.dropdownOptions || [])];
+                                        newOpts[oIdx] = e.target.value;
+                                        return { ...sf, dropdownOptions: newOpts };
+                                      })}
+                                      placeholder={`Option ${oIdx + 1}`}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => updateSubField(index, sIdx, sf => {
+                                        const newOpts = [...(sf.dropdownOptions || [])];
+                                        newOpts.splice(oIdx, 1);
+                                        return { ...sf, dropdownOptions: newOpts };
+                                      })}
+                                      style={{ color: "#EF4444", background: "none", border: "none", cursor: "pointer" }}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                ))}
+                                <button
+                                  type="button"
+                                  onClick={() => updateSubField(index, sIdx, sf => ({ ...sf, dropdownOptions: [...(sf.dropdownOptions || []), ""] }))}
+                                  style={{ alignSelf: "flex-start", fontSize: "0.8rem", color: "#16A34A", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
+                                >
+                                  <Plus size={12} /> Add Option
+                                </button>
+                              </div>
+                            )}
+
+                          </div>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={() => addSubField(index)}
+                          style={{ alignSelf: "flex-start", padding: "0.5rem 0.8rem", background: "#DCFCE7", border: "1px solid #86EFAC", borderRadius: "6px", color: "#166534", fontSize: "0.85rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.3rem", cursor: "pointer" }}
+                        >
+                          <Plus size={14} /> Add Sub-Field
+                        </button>
+
+                      </div>
+                    )}
 
                     {/* Constraint Toggles Box */}
                     <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "-0.5rem" }}>

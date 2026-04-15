@@ -22,6 +22,8 @@ export type ServiceVerificationAttempt = {
   verificationMode: string;
   comment: string;
   verifierNote?: string;
+  extraPaymentDone?: boolean;
+  extraPaymentAmount?: number | null;
   attemptedAt: string;
   verifierId?: string | null;
   verifierName?: string;
