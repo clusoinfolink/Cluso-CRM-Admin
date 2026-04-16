@@ -397,6 +397,7 @@ function buildMonthlySummaryRows(
   gstRate: number,
   invoiceLineItems: InvoiceLineItem[] = [],
   packageRates: PackageRateSelection[] = [],
+  companyAdminName = "",
 ) {
   const rows: MonthlySummaryRow[] = [];
   const totals = new Map<string, { subtotal: number; gstAmount: number; total: number }>();
@@ -425,9 +426,12 @@ function buildMonthlySummaryRows(
     const candidateName = normalizeWhitespace(asString(request.candidateName)) || `Candidate ${srNo}`;
     const createdByRecord = asRecord(requestRecord.createdBy);
     const createdByDelegateRecord = asRecord(requestRecord.createdByDelegate);
+    const createdByName = normalizeWhitespace(asString(createdByRecord.name));
+    const delegateName = normalizeWhitespace(asString(createdByDelegateRecord.name));
     const userName =
-      normalizeWhitespace(asString(createdByDelegateRecord.name)) ||
-      normalizeWhitespace(asString(createdByRecord.name)) ||
+      createdByName ||
+      delegateName ||
+      companyAdminName ||
       "-";
     const serviceVerifications = Array.isArray(requestRecord.serviceVerifications)
       ? requestRecord.serviceVerifications
@@ -1564,20 +1568,67 @@ function normalizeInvoiceRecord(doc: Record<string, unknown>): InvoiceRecord {
   };
 }
 
-async function createUniqueInvoiceNumber() {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const invoiceNumber = `INV-${timestamp}-${randomSuffix}`;
+function formatInvoiceMonthToken(billingMonth: string) {
+  const [yearText, monthText] = billingMonth.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const monthTokens = [
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+  ];
 
-    const existing = await Invoice.findOne({ invoiceNumber }).select("_id").lean();
-    if (!existing) {
-      return invoiceNumber;
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+    return normalizeWhitespace(billingMonth).replace("-", "").toUpperCase();
+  }
+
+  return `${monthTokens[month - 1]}${year}`;
+}
+
+function buildSequenceInvoiceNumber(sequence: number, billingMonth: string) {
+  const normalizedSequence = Math.max(1, Math.trunc(sequence));
+  const sequenceText = String(normalizedSequence).padStart(3, "0");
+  return `${sequenceText}/${formatInvoiceMonthToken(billingMonth)}`;
+}
+
+async function createUniqueInvoiceNumber(billingMonth: string) {
+  const monthToken = formatInvoiceMonthToken(billingMonth);
+  const expectedSuffix = `/${monthToken}`;
+  const monthInvoices = await Invoice.find({ billingMonth })
+    .select("invoiceNumber")
+    .lean();
+
+  let highestExistingSequence = 0;
+
+  for (const invoice of monthInvoices) {
+    const invoiceRecord = asRecord(invoice);
+    const rawInvoiceNumber = normalizeWhitespace(asString(invoiceRecord.invoiceNumber));
+    if (!rawInvoiceNumber.endsWith(expectedSuffix)) {
+      continue;
+    }
+
+    const [sequenceText, suffix] = rawInvoiceNumber.split("/");
+    if (suffix !== monthToken) {
+      continue;
+    }
+
+    const sequenceNumber = Number.parseInt(sequenceText, 10);
+    if (Number.isFinite(sequenceNumber) && sequenceNumber > highestExistingSequence) {
+      highestExistingSequence = sequenceNumber;
     }
   }
 
-  const fallbackTimestamp = Date.now();
-  return `INV-${fallbackTimestamp}`;
+  const nextSequence = Math.max(highestExistingSequence, monthInvoices.length) + 1;
+  return buildSequenceInvoiceNumber(nextSequence, billingMonth);
 }
 
 function canAccessInvoices(auth: { role: string } | null) {
@@ -1666,6 +1717,7 @@ export async function GET(req: NextRequest) {
       gstRate,
       invoiceLineItems,
       packageRates,
+      normalizeWhitespace(asString(customer.name)),
     );
 
     return NextResponse.json({
@@ -1789,7 +1841,6 @@ export async function POST(req: NextRequest) {
   const gstRate = normalizeGstRate(parsed.data.gstRate, enterpriseGstDefaults.gstRate);
 
   const totalsByCurrency = computeTotalsByCurrency(lineItems);
-  const invoiceNumber = await createUniqueInvoiceNumber();
 
   const legacyMonthFilter = {
     $or: [
@@ -1804,6 +1855,8 @@ export async function POST(req: NextRequest) {
     customer: parsed.data.companyId,
     $or: [{ billingMonth }, legacyMonthFilter],
   });
+
+  const invoiceNumber = await createUniqueInvoiceNumber(billingMonth);
 
   const created = await Invoice.create({
     invoiceNumber,
