@@ -37,6 +37,62 @@ const SUPPORTED_QUESTION_ICON_KEYS = [
 type QuestionIconKey = (typeof SUPPORTED_QUESTION_ICON_KEYS)[number];
 
 const DEFAULT_QUESTION_ICON: QuestionIconKey = "diary";
+const SERVICE_COUNTRY_FIELD_KEY = "system_service_country";
+const SERVICE_COUNTRY_FIELD_QUESTION =
+  "Select verification country for this service";
+const SERVICE_COUNTRY_FIELD_OPTIONS = [
+  "Afghanistan",
+  "Armenia",
+  "Australia",
+  "Azerbaijan",
+  "Bangladesh",
+  "Bhutan",
+  "Brunei",
+  "Cambodia",
+  "China",
+  "Fiji",
+  "Georgia",
+  "Hong Kong",
+  "India",
+  "Indonesia",
+  "Japan",
+  "Kazakhstan",
+  "Kiribati",
+  "Kyrgyzstan",
+  "Laos",
+  "Macau",
+  "Malaysia",
+  "Maldives",
+  "Marshall Islands",
+  "Micronesia",
+  "Mongolia",
+  "Myanmar",
+  "Nauru",
+  "Nepal",
+  "New Zealand",
+  "Pakistan",
+  "Palau",
+  "Papua New Guinea",
+  "Philippines",
+  "Samoa",
+  "Singapore",
+  "Solomon Islands",
+  "South Korea",
+  "Sri Lanka",
+  "Taiwan",
+  "Tajikistan",
+  "Thailand",
+  "Timor-Leste",
+  "Tonga",
+  "Turkmenistan",
+  "Tuvalu",
+  "Uzbekistan",
+  "Vanuatu",
+  "Vietnam",
+  "United Arab Emirates",
+  "United States",
+  "United Kingdom",
+] as const;
 
 function normalizeQuestionIconKey(rawIconKey: unknown): QuestionIconKey {
   if (typeof rawIconKey !== "string") {
@@ -47,6 +103,10 @@ function normalizeQuestionIconKey(rawIconKey: unknown): QuestionIconKey {
   return SUPPORTED_QUESTION_ICON_KEYS.includes(normalized)
     ? normalized
     : DEFAULT_QUESTION_ICON;
+}
+
+function normalizePersonalDetailsSourceFieldKey(rawFieldKey: unknown) {
+  return String(rawFieldKey ?? "").trim().slice(0, 120);
 }
 
 const nullableLengthSchema = z.preprocess(
@@ -100,6 +160,12 @@ const formFieldSchema = z
     forceUppercase: z.boolean().optional().default(false),
     allowNotApplicable: z.boolean().optional().default(false),
     notApplicableText: z.string().trim().max(200).optional().default("Not Applicable"),
+    copyFromPersonalDetailsFieldKey: z
+      .string()
+      .trim()
+      .max(120)
+      .optional()
+      .default(""),
   })
   .superRefine((field, ctx) => {
     const supportsLengthConstraints =
@@ -158,9 +224,71 @@ const formFieldSchema = z
         });
       }
     }
+
+    if (
+      field.copyFromPersonalDetailsFieldKey.trim() &&
+      (field.fieldType === "file" || field.fieldType === "composite")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["copyFromPersonalDetailsFieldKey"],
+        message:
+          "Copy from Personal Details is available only for single-value fields.",
+      });
+    }
   });
 
 type ParsedFormField = z.infer<typeof formFieldSchema>;
+
+function buildServiceCountrySystemField(): ParsedFormField {
+  return {
+    fieldKey: SERVICE_COUNTRY_FIELD_KEY,
+    question: SERVICE_COUNTRY_FIELD_QUESTION,
+    iconKey: "global",
+    fieldType: "dropdown",
+    subFields: [],
+    dropdownOptions: [...SERVICE_COUNTRY_FIELD_OPTIONS],
+    required: true,
+    repeatable: false,
+    minLength: null,
+    maxLength: null,
+    forceUppercase: false,
+    allowNotApplicable: false,
+    notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
+  };
+}
+
+function ensureServiceCountrySystemField(
+  fields: ParsedFormField[],
+  includeSystemField: boolean,
+) {
+  const fieldsWithoutSystemEntry = fields.filter(
+    (field) => (field.fieldKey?.trim() ?? "") !== SERVICE_COUNTRY_FIELD_KEY,
+  );
+
+  if (!includeSystemField) {
+    return fieldsWithoutSystemEntry;
+  }
+
+  return [...fieldsWithoutSystemEntry, buildServiceCountrySystemField()];
+}
+
+function parseStoredFormFields(rawFields: unknown): ParsedFormField[] {
+  if (!Array.isArray(rawFields)) {
+    return [];
+  }
+
+  return rawFields
+    .map((rawField) => formFieldSchema.safeParse(rawField))
+    .filter(
+      (
+        parsedResult,
+      ): parsedResult is { success: true; data: ParsedFormField } =>
+        parsedResult.success,
+    )
+    .map((parsedResult) => parsedResult.data);
+}
 
 function normalizeFormField(field: ParsedFormField) {
   const supportsLengthConstraints =
@@ -208,6 +336,10 @@ function normalizeFormField(field: ParsedFormField) {
     notApplicableText: Boolean(field.allowNotApplicable)
       ? field.notApplicableText.trim() || "Not Applicable"
       : "",
+    copyFromPersonalDetailsFieldKey:
+      field.fieldType === "file" || field.fieldType === "composite"
+        ? ""
+        : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
   };
 }
 
@@ -231,6 +363,7 @@ function serializeFormField(field: {
   forceUppercase?: boolean;
   allowNotApplicable?: boolean;
   notApplicableText?: string;
+  copyFromPersonalDetailsFieldKey?: unknown;
 }) {
   const supportsLengthConstraints =
     field.fieldType === "text" ||
@@ -277,6 +410,10 @@ function serializeFormField(field: {
     notApplicableText: Boolean(field.allowNotApplicable)
       ? field.notApplicableText?.trim() || "Not Applicable"
       : "",
+    copyFromPersonalDetailsFieldKey:
+      field.fieldType === "file" || field.fieldType === "composite"
+        ? ""
+        : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
   };
 }
 
@@ -295,6 +432,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     forceUppercase: false,
     allowNotApplicable: false,
     notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
   },
   {
     fieldKey: "personal_date_of_birth",
@@ -310,6 +448,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     forceUppercase: false,
     allowNotApplicable: false,
     notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
   },
   {
     fieldKey: "personal_mobile_number",
@@ -325,6 +464,39 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     forceUppercase: false,
     allowNotApplicable: false,
     notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
+  },
+  {
+    fieldKey: "personal_email_address",
+    question: "Email address",
+    iconKey: "email",
+    fieldType: "text",
+    subFields: [],
+    dropdownOptions: [],
+    required: true,
+    repeatable: false,
+    minLength: 5,
+    maxLength: 160,
+    forceUppercase: false,
+    allowNotApplicable: false,
+    notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
+  },
+  {
+    fieldKey: "personal_nationality",
+    question: "Nationality",
+    iconKey: "global",
+    fieldType: "text",
+    subFields: [],
+    dropdownOptions: [],
+    required: true,
+    repeatable: false,
+    minLength: 2,
+    maxLength: 80,
+    forceUppercase: false,
+    allowNotApplicable: false,
+    notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
   },
   {
     fieldKey: "personal_residential_address",
@@ -340,6 +512,23 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     forceUppercase: false,
     allowNotApplicable: false,
     notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
+  },
+  {
+    fieldKey: "personal_gender",
+    question: "Gender",
+    iconKey: "person",
+    fieldType: "dropdown",
+    subFields: [],
+    dropdownOptions: ["Male", "Female", "Non-binary", "Prefer not to say"],
+    required: true,
+    repeatable: false,
+    minLength: null,
+    maxLength: null,
+    forceUppercase: false,
+    allowNotApplicable: false,
+    notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
   },
   {
     fieldKey: "personal_primary_id_number",
@@ -355,6 +544,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     forceUppercase: true,
     allowNotApplicable: false,
     notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
   },
 ];
 
@@ -363,6 +553,35 @@ function isHiddenService(service: {
   isDefaultPersonalDetails?: unknown;
 }) {
   return Boolean(service.hiddenFromCustomerPortal || service.isDefaultPersonalDetails);
+}
+
+function mergePersonalDetailsFormFields(
+  existingFormFields: unknown,
+  defaultFields: ParsedFormField[],
+) {
+  if (!Array.isArray(existingFormFields) || existingFormFields.length === 0) {
+    return defaultFields;
+  }
+
+  const existingFieldKeys = new Set(
+    existingFormFields
+      .filter(
+        (field): field is { fieldKey?: unknown } =>
+          Boolean(field) && typeof field === "object",
+      )
+      .map((field) => String(field.fieldKey ?? "").trim())
+      .filter(Boolean),
+  );
+
+  const missingDefaultFields = defaultFields.filter(
+    (field) => !existingFieldKeys.has(String(field.fieldKey ?? "").trim()),
+  );
+
+  if (missingDefaultFields.length === 0) {
+    return existingFormFields;
+  }
+
+  return [...existingFormFields, ...missingDefaultFields];
 }
 
 async function ensureDefaultPersonalDetailsService() {
@@ -377,8 +596,15 @@ async function ensureDefaultPersonalDetailsService() {
     .lean();
 
   if (existingDefault) {
+    const mergedFormFields = mergePersonalDetailsFormFields(
+      existingDefault.formFields,
+      normalizedDefaultFields,
+    );
     const shouldSeedDefaultFields =
       !Array.isArray(existingDefault.formFields) || existingDefault.formFields.length === 0;
+    const shouldBackfillDefaultFields =
+      Array.isArray(existingDefault.formFields) &&
+      mergedFormFields.length !== existingDefault.formFields.length;
 
     if (
       !isHiddenService(existingDefault) ||
@@ -386,7 +612,8 @@ async function ensureDefaultPersonalDetailsService() {
       Boolean(existingDefault.allowMultipleEntries) ||
       Number(existingDefault.defaultPrice ?? 0) !== 0 ||
       (existingDefault.includedServiceIds ?? []).length > 0 ||
-      shouldSeedDefaultFields
+      shouldSeedDefaultFields ||
+      shouldBackfillDefaultFields
     ) {
       await Service.findByIdAndUpdate(existingDefault._id, {
         hiddenFromCustomerPortal: true,
@@ -395,7 +622,9 @@ async function ensureDefaultPersonalDetailsService() {
         allowMultipleEntries: false,
         includedServiceIds: [],
         defaultPrice: 0,
-        ...(shouldSeedDefaultFields ? { formFields: normalizedDefaultFields } : {}),
+        ...(shouldSeedDefaultFields || shouldBackfillDefaultFields
+          ? { formFields: mergedFormFields }
+          : {}),
       });
     }
 
@@ -409,8 +638,15 @@ async function ensureDefaultPersonalDetailsService() {
     .lean();
 
   if (existingByName) {
+    const mergedFormFields = mergePersonalDetailsFormFields(
+      existingByName.formFields,
+      normalizedDefaultFields,
+    );
     const shouldSeedDefaultFields =
       !Array.isArray(existingByName.formFields) || existingByName.formFields.length === 0;
+    const shouldBackfillDefaultFields =
+      Array.isArray(existingByName.formFields) &&
+      mergedFormFields.length !== existingByName.formFields.length;
 
     await Service.findByIdAndUpdate(existingByName._id, {
       hiddenFromCustomerPortal: true,
@@ -419,7 +655,9 @@ async function ensureDefaultPersonalDetailsService() {
       allowMultipleEntries: false,
       includedServiceIds: [],
       defaultPrice: 0,
-      ...(shouldSeedDefaultFields ? { formFields: normalizedDefaultFields } : {}),
+      ...(shouldSeedDefaultFields || shouldBackfillDefaultFields
+        ? { formFields: mergedFormFields }
+        : {}),
     });
     return;
   }
@@ -472,34 +710,48 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     items: items.map((item) => ({
-      id: String(item._id),
-      name: item.name,
-      description: item.description ?? "",
-      defaultPrice: typeof item.defaultPrice === "number" ? item.defaultPrice : null,
-      defaultCurrency: item.defaultCurrency ?? "INR",
-      isPackage: Boolean(item.isPackage),
-      allowMultipleEntries: Boolean(item.allowMultipleEntries),
-        multipleEntriesLabel: item.multipleEntriesLabel ?? undefined,
-      hiddenFromCustomerPortal: Boolean(item.hiddenFromCustomerPortal),
-      isDefaultPersonalDetails: Boolean(item.isDefaultPersonalDetails),
-      includedServiceIds: (item.includedServiceIds ?? []).map((id) => String(id)),
-      formFields: (item.formFields ?? []).map((field) =>
-        serializeFormField({
-          fieldKey: field.fieldKey,
-          question: field.question,
-          iconKey: field.iconKey,
-          fieldType: field.fieldType,
-          subFields: field.subFields,
-          dropdownOptions: field.dropdownOptions,
-          required: field.required,
-          repeatable: field.repeatable,
-          minLength: field.minLength,
-          maxLength: field.maxLength,
-          forceUppercase: field.forceUppercase,
-          allowNotApplicable: field.allowNotApplicable,
-          notApplicableText: field.notApplicableText,
-        }),
-      ),
+      ...(function () {
+        const parsedStoredFields = parseStoredFormFields(item.formFields ?? []);
+        const includeSystemCountryField =
+          !Boolean(item.isPackage) && !isHiddenService(item);
+        const normalizedOutputFields = ensureServiceCountrySystemField(
+          parsedStoredFields,
+          includeSystemCountryField,
+        ).map((field) => normalizeFormField(field));
+
+        return {
+          id: String(item._id),
+          name: item.name,
+          description: item.description ?? "",
+          defaultPrice:
+            typeof item.defaultPrice === "number" ? item.defaultPrice : null,
+          defaultCurrency: item.defaultCurrency ?? "INR",
+          isPackage: Boolean(item.isPackage),
+          allowMultipleEntries: Boolean(item.allowMultipleEntries),
+          multipleEntriesLabel: item.multipleEntriesLabel ?? undefined,
+          hiddenFromCustomerPortal: Boolean(item.hiddenFromCustomerPortal),
+          isDefaultPersonalDetails: Boolean(item.isDefaultPersonalDetails),
+          includedServiceIds: (item.includedServiceIds ?? []).map((id) => String(id)),
+          formFields: normalizedOutputFields.map((field) =>
+            serializeFormField({
+              fieldKey: field.fieldKey,
+              question: field.question,
+              iconKey: field.iconKey,
+              fieldType: field.fieldType,
+              subFields: field.subFields,
+              dropdownOptions: field.dropdownOptions,
+              required: field.required,
+              repeatable: field.repeatable,
+              minLength: field.minLength,
+              maxLength: field.maxLength,
+              forceUppercase: field.forceUppercase,
+              allowNotApplicable: field.allowNotApplicable,
+              notApplicableText: field.notApplicableText,
+              copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
+            }),
+          ),
+        };
+      })(),
     })),
   });
 }
@@ -526,7 +778,10 @@ export async function POST(req: NextRequest) {
 
   const isPackage = Boolean(parsed.data.isPackage);
   const includedServiceIds = [...new Set(parsed.data.includedServiceIds.map((id) => id.trim()).filter(Boolean))];
-  const normalizedFormFields = parsed.data.formFields.map((field) => normalizeFormField(field));
+  const normalizedFormFields = ensureServiceCountrySystemField(
+    parsed.data.formFields,
+    !isPackage,
+  ).map((field) => normalizeFormField(field));
 
   if (isPackage && includedServiceIds.length < 2) {
     return NextResponse.json(
@@ -611,6 +866,7 @@ export async function POST(req: NextRequest) {
             forceUppercase: field.forceUppercase,
             allowNotApplicable: field.allowNotApplicable,
             notApplicableText: field.notApplicableText,
+            copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
           }),
         ),
       },
@@ -634,25 +890,39 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Invalid input." }, { status: 400 });
   }
 
-  const normalizedFormFields = parsed.data.formFields.map((field) => normalizeFormField(field));
+  await connectMongo();
+  await ensureDefaultPersonalDetailsService();
+
+  const existingService = await Service.findById(parsed.data.serviceId)
+    .select("isPackage hiddenFromCustomerPortal isDefaultPersonalDetails")
+    .lean();
+
+  if (!existingService) {
+    return NextResponse.json({ error: "Service not found." }, { status: 404 });
+  }
+
+  const includeSystemCountryField =
+    !Boolean(existingService.isPackage) && !isHiddenService(existingService);
+  const normalizedFormFields = ensureServiceCountrySystemField(
+    parsed.data.formFields,
+    includeSystemCountryField,
+  ).map((field) => normalizeFormField(field));
+
   const updatePayload: {
     formFields: ReturnType<typeof normalizeFormField>[];
     allowMultipleEntries?: boolean;
-      multipleEntriesLabel?: string | null;
+    multipleEntriesLabel?: string | null;
   } = {
     formFields: normalizedFormFields,
   };
 
   if (typeof parsed.data.allowMultipleEntries === "boolean") {
     updatePayload.allowMultipleEntries = parsed.data.allowMultipleEntries;
-    }
-
-    if ("multipleEntriesLabel" in parsed.data) {
-      updatePayload.multipleEntriesLabel = parsed.data.multipleEntriesLabel;
   }
 
-  await connectMongo();
-  await ensureDefaultPersonalDetailsService();
+  if ("multipleEntriesLabel" in parsed.data) {
+    updatePayload.multipleEntriesLabel = parsed.data.multipleEntriesLabel;
+  }
 
   const updated = await Service.findByIdAndUpdate(
     parsed.data.serviceId,
@@ -693,6 +963,7 @@ export async function PATCH(req: NextRequest) {
           forceUppercase: field.forceUppercase,
           allowNotApplicable: field.allowNotApplicable,
           notApplicableText: field.notApplicableText,
+          copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
         }),
       ),
     },

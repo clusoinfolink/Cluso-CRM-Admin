@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import {
   Building,
   ChevronDown,
@@ -21,12 +21,87 @@ import { getAlertTone } from "@/lib/alerts";
 import { SUPPORTED_CURRENCIES, SupportedCurrency } from "@/lib/currencies";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import {
+  CountrySpecificRate,
   CompanyItem,
   CompanyPartnerProfile,
   CompanyServiceSelection,
   ServiceItem,
 } from "@/lib/types";
 import { useRouter } from "next/navigation";
+
+const COUNTRY_RATE_OPTIONS = [
+  "Afghanistan",
+  "Armenia",
+  "Australia",
+  "Azerbaijan",
+  "Bangladesh",
+  "Bhutan",
+  "Brunei",
+  "Cambodia",
+  "China",
+  "Fiji",
+  "Georgia",
+  "Hong Kong",
+  "India",
+  "Indonesia",
+  "Japan",
+  "Kazakhstan",
+  "Kiribati",
+  "Kyrgyzstan",
+  "Laos",
+  "Macau",
+  "Malaysia",
+  "Maldives",
+  "Marshall Islands",
+  "Micronesia",
+  "Mongolia",
+  "Myanmar",
+  "Nauru",
+  "Nepal",
+  "New Zealand",
+  "Pakistan",
+  "Palau",
+  "Papua New Guinea",
+  "Philippines",
+  "Samoa",
+  "Singapore",
+  "Solomon Islands",
+  "South Korea",
+  "Sri Lanka",
+  "Taiwan",
+  "Tajikistan",
+  "Thailand",
+  "Timor-Leste",
+  "Tonga",
+  "Turkmenistan",
+  "Tuvalu",
+  "Uzbekistan",
+  "Vanuatu",
+  "Vietnam",
+  "United Arab Emirates",
+  "United States",
+  "United Kingdom",
+] as const;
+
+function normalizeCountryName(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function getNextAvailableCountryRateOption(currentRates: CountrySpecificRate[]) {
+  const usedCountries = new Set(
+    currentRates.map((rate) => normalizeCountryName(rate.country).toLowerCase()),
+  );
+
+  return (
+    COUNTRY_RATE_OPTIONS.find(
+      (country) => !usedCountries.has(country.toLowerCase()),
+    ) ?? null
+  );
+}
+
+function isAssignableCompanyService(service: ServiceItem) {
+  return !service.hiddenFromCustomerPortal && !service.isDefaultPersonalDetails;
+}
 
 export default function CompaniesPage() {
   const { me, loading, logout } = useAdminSession();
@@ -66,7 +141,15 @@ export default function CompaniesPage() {
 
     if (companyRes.ok) {
       const companyJson = (await companyRes.json()) as { items: CompanyItem[] };
-      setCompanies(companyJson.items);
+      setCompanies(
+        companyJson.items.map((company) => ({
+          ...company,
+          selectedServices: (company.selectedServices ?? []).map((service) => ({
+            ...service,
+            countryRates: service.countryRates ?? [],
+          })),
+        })),
+      );
     }
   }, []);
 
@@ -187,7 +270,222 @@ export default function CompaniesPage() {
     setProfileModalCompanyId("");
   }
 
+  function normalizeCountryRates(countryRates: CompanyServiceSelection["countryRates"] = []) {
+    if (!countryRates || countryRates.length === 0) {
+      return [];
+    }
+
+    const dedupedRates = new Map<string, CountrySpecificRate>();
+    for (const rate of countryRates) {
+      const country = normalizeCountryName(rate.country);
+      const numericPrice = Number(rate.price);
+      const currency = SUPPORTED_CURRENCIES.includes(rate.currency)
+        ? rate.currency
+        : "INR";
+
+      if (!country || !Number.isFinite(numericPrice) || numericPrice < 0) {
+        continue;
+      }
+
+      dedupedRates.set(country.toLowerCase(), {
+        country,
+        price: numericPrice,
+        currency,
+      });
+    }
+
+    return [...dedupedRates.values()];
+  }
+
+  function normalizeCompanyServiceSelection(service: CompanyServiceSelection): CompanyServiceSelection {
+    return {
+      ...service,
+      countryRates: normalizeCountryRates(service.countryRates),
+    };
+  }
+
+  function patchCountryRates(
+    setter: Dispatch<SetStateAction<CompanyServiceSelection[]>>,
+    serviceId: string,
+    updater: (
+      currentRates: CountrySpecificRate[],
+      currentService: CompanyServiceSelection,
+    ) => CountrySpecificRate[],
+  ) {
+    setter((prev) =>
+      prev.map((item) => {
+        if (item.serviceId !== serviceId) {
+          return item;
+        }
+
+        const normalizedCurrentRates = normalizeCountryRates(item.countryRates);
+        const nextRates = updater(normalizedCurrentRates, item);
+
+        return {
+          ...item,
+          countryRates: normalizeCountryRates(nextRates),
+        };
+      }),
+    );
+  }
+
+  function addCompanyServiceCountryRate(serviceId: string) {
+    patchCountryRates(
+      setSelectedCompanyServices,
+      serviceId,
+      (currentRates, currentService) => {
+        const nextCountry = getNextAvailableCountryRateOption(currentRates);
+        if (!nextCountry) {
+          return currentRates;
+        }
+
+        return [
+          ...currentRates,
+          {
+            country: nextCountry,
+            price: currentService.price,
+            currency: currentService.currency,
+          },
+        ];
+      },
+    );
+  }
+
+  function updateCompanyServiceCountryRateCountry(serviceId: string, rateIndex: number, country: string) {
+    patchCountryRates(setSelectedCompanyServices, serviceId, (currentRates) =>
+      currentRates.map((rate, index) =>
+        index === rateIndex
+          ? {
+              ...rate,
+              country: normalizeCountryName(country),
+            }
+          : rate,
+      ),
+    );
+  }
+
+  function updateCompanyServiceCountryRatePrice(serviceId: string, rateIndex: number, value: string) {
+    const parsed = Number(value);
+    patchCountryRates(setSelectedCompanyServices, serviceId, (currentRates) =>
+      currentRates.map((rate, index) =>
+        index === rateIndex
+          ? {
+              ...rate,
+              price: Number.isNaN(parsed) ? 0 : parsed,
+            }
+          : rate,
+      ),
+    );
+  }
+
+  function updateCompanyServiceCountryRateCurrency(
+    serviceId: string,
+    rateIndex: number,
+    currency: SupportedCurrency,
+  ) {
+    patchCountryRates(setSelectedCompanyServices, serviceId, (currentRates) =>
+      currentRates.map((rate, index) =>
+        index === rateIndex
+          ? {
+              ...rate,
+              currency,
+            }
+          : rate,
+      ),
+    );
+  }
+
+  function removeCompanyServiceCountryRate(serviceId: string, rateIndex: number) {
+    patchCountryRates(setSelectedCompanyServices, serviceId, (currentRates) =>
+      currentRates.filter((_, index) => index !== rateIndex),
+    );
+  }
+
+  function addManageCompanyServiceCountryRate(serviceId: string) {
+    patchCountryRates(
+      setManageCompanyServices,
+      serviceId,
+      (currentRates, currentService) => {
+        const nextCountry = getNextAvailableCountryRateOption(currentRates);
+        if (!nextCountry) {
+          return currentRates;
+        }
+
+        return [
+          ...currentRates,
+          {
+            country: nextCountry,
+            price: currentService.price,
+            currency: currentService.currency,
+          },
+        ];
+      },
+    );
+  }
+
+  function updateManageCompanyServiceCountryRateCountry(
+    serviceId: string,
+    rateIndex: number,
+    country: string,
+  ) {
+    patchCountryRates(setManageCompanyServices, serviceId, (currentRates) =>
+      currentRates.map((rate, index) =>
+        index === rateIndex
+          ? {
+              ...rate,
+              country: normalizeCountryName(country),
+            }
+          : rate,
+      ),
+    );
+  }
+
+  function updateManageCompanyServiceCountryRatePrice(
+    serviceId: string,
+    rateIndex: number,
+    value: string,
+  ) {
+    const parsed = Number(value);
+    patchCountryRates(setManageCompanyServices, serviceId, (currentRates) =>
+      currentRates.map((rate, index) =>
+        index === rateIndex
+          ? {
+              ...rate,
+              price: Number.isNaN(parsed) ? 0 : parsed,
+            }
+          : rate,
+      ),
+    );
+  }
+
+  function updateManageCompanyServiceCountryRateCurrency(
+    serviceId: string,
+    rateIndex: number,
+    currency: SupportedCurrency,
+  ) {
+    patchCountryRates(setManageCompanyServices, serviceId, (currentRates) =>
+      currentRates.map((rate, index) =>
+        index === rateIndex
+          ? {
+              ...rate,
+              currency,
+            }
+          : rate,
+      ),
+    );
+  }
+
+  function removeManageCompanyServiceCountryRate(serviceId: string, rateIndex: number) {
+    patchCountryRates(setManageCompanyServices, serviceId, (currentRates) =>
+      currentRates.filter((_, index) => index !== rateIndex),
+    );
+  }
+
   function toggleCompanyService(service: ServiceItem, checked: boolean) {
+    if (!isAssignableCompanyService(service)) {
+      return;
+    }
+
     if (checked) {
       setSelectedCompanyServices((prev) => {
         if (prev.some((item) => item.serviceId === service.id)) {
@@ -201,6 +499,7 @@ export default function CompaniesPage() {
             serviceName: service.name,
             price: service.defaultPrice ?? 0,
             currency: service.defaultCurrency,
+            countryRates: [],
           },
         ];
       });
@@ -231,6 +530,10 @@ export default function CompaniesPage() {
   }
 
   function toggleManageCompanyService(service: ServiceItem, checked: boolean) {
+    if (!isAssignableCompanyService(service)) {
+      return;
+    }
+
     if (checked) {
       setManageCompanyServices((prev) => {
         if (prev.some((item) => item.serviceId === service.id)) {
@@ -244,6 +547,7 @@ export default function CompaniesPage() {
             serviceName: service.name,
             price: service.defaultPrice ?? 0,
             currency: service.defaultCurrency,
+            countryRates: [],
           },
         ];
       });
@@ -278,7 +582,16 @@ export default function CompaniesPage() {
     setViewCompanyId(companyId);
     setSaveServicesNotice("");
     const found = companies.find((item) => item.id === companyId);
-    setManageCompanyServices(found?.selectedServices ?? []);
+    const assignableServiceIds = new Set(
+      services
+        .filter((service) => isAssignableCompanyService(service))
+        .map((service) => service.id),
+    );
+    setManageCompanyServices(
+      (found?.selectedServices ?? [])
+        .filter((service) => assignableServiceIds.has(service.serviceId))
+        .map(normalizeCompanyServiceSelection),
+    );
   }
 
   async function createCustomer(e: FormEvent<HTMLFormElement>) {
@@ -292,7 +605,10 @@ export default function CompaniesPage() {
         name: companyName,
         email: companyEmail,
         password: companyPassword,
-        selectedServices: selectedCompanyServices,
+        selectedServices: selectedCompanyServices.filter((serviceSelection) => {
+          const service = services.find((item) => item.id === serviceSelection.serviceId);
+          return Boolean(service && isAssignableCompanyService(service));
+        }),
       }),
     });
 
@@ -326,7 +642,10 @@ export default function CompaniesPage() {
       body: JSON.stringify({
         action: "update-services",
         customerId: manageCompanyId,
-        selectedServices: manageCompanyServices,
+        selectedServices: manageCompanyServices.filter((serviceSelection) => {
+          const service = services.find((item) => item.id === serviceSelection.serviceId);
+          return Boolean(service && isAssignableCompanyService(service));
+        }),
       }),
     });
 
@@ -390,8 +709,11 @@ export default function CompaniesPage() {
 
   const normalizedIssueServiceSearch = issueServiceSearch.trim().toLowerCase();
   const normalizedManageServiceSearch = manageServiceSearch.trim().toLowerCase();
+  const assignableServices = services.filter((service) =>
+    isAssignableCompanyService(service),
+  );
 
-  const filteredIssueServices = services.filter((service) => {
+  const filteredIssueServices = assignableServices.filter((service) => {
     const selected = selectedCompanyServices.some((item) => item.serviceId === service.id);
     if (selected) {
       return true;
@@ -405,7 +727,7 @@ export default function CompaniesPage() {
     return searchable.includes(normalizedIssueServiceSearch);
   });
 
-  const filteredManageServices = services.filter((service) => {
+  const filteredManageServices = assignableServices.filter((service) => {
     const selected = manageCompanyServices.some((item) => item.serviceId === service.id);
     if (selected) {
       return true;
@@ -467,9 +789,9 @@ export default function CompaniesPage() {
           <div style={{ gridColumn: "1 / -1" }}>
             <label className="label">Assign Services With Company-Specific Price</label>
             <p style={{ margin: "0.2rem 0 0.6rem", color: "#6C757D", fontSize: "0.9rem" }}>
-              Select service, then set both rate and currency for this company.
+              Select a service, set default rate, and optionally add country-specific pricing overrides.
             </p>
-            {services.length === 0 ? (
+            {assignableServices.length === 0 ? (
               <div style={{ color: "#6C757D" }}>Add services in Service Catalog before creating company accounts.</div>
             ) : (
               <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -500,6 +822,9 @@ export default function CompaniesPage() {
                   >
                     {filteredIssueServices.map((service) => {
                       const selected = selectedCompanyServices.find((item) => item.serviceId === service.id);
+                      const selectedCountryRates = selected?.countryRates ?? [];
+                      const canAddMoreCountryRates =
+                        selectedCountryRates.length < COUNTRY_RATE_OPTIONS.length;
                       return (
                         <div key={service.id} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
                           <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 600 }}>
@@ -514,18 +839,156 @@ export default function CompaniesPage() {
                           <div style={{ color: "#6C757D", marginTop: "0.25rem" }}>{service.description || "No description"}</div>
 
                           {selected ? (
-                            <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-                              <div>
-                                <label className="label">Price</label>
-                                <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateCompanyServicePrice(service.id, e.target.value)} required />
+                            <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.75rem" }}>
+                              <div style={{ display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+                                <div>
+                                  <label className="label">Default Price</label>
+                                  <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateCompanyServicePrice(service.id, e.target.value)} required />
+                                </div>
+                                <div>
+                                  <label className="label">Default Currency</label>
+                                  <select className="input" value={selected.currency} onChange={(e) => updateCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
+                                    {SUPPORTED_CURRENCIES.map((currency) => (
+                                      <option key={currency} value={currency}>{currency}</option>
+                                    ))}
+                                  </select>
+                                </div>
                               </div>
-                              <div>
-                                <label className="label">Currency</label>
-                                <select className="input" value={selected.currency} onChange={(e) => updateCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
-                                  {SUPPORTED_CURRENCIES.map((currency) => (
-                                    <option key={currency} value={currency}>{currency}</option>
-                                  ))}
-                                </select>
+
+                              <div style={{ border: "1px solid #DBE3F0", borderRadius: "0.6rem", padding: "0.65rem", background: "#FFFFFF" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+                                  <label className="label" style={{ marginBottom: 0 }}>Country-Specific Rates (Optional)</label>
+                                  <button
+                                    type="button"
+                                    onClick={() => addCompanyServiceCountryRate(service.id)}
+                                    disabled={!canAddMoreCountryRates}
+                                    style={{
+                                      border: canAddMoreCountryRates ? "1px solid #BFDBFE" : "1px solid #CBD5E1",
+                                      background: canAddMoreCountryRates ? "#EFF6FF" : "#F8FAFC",
+                                      color: canAddMoreCountryRates ? "#1D4ED8" : "#94A3B8",
+                                      borderRadius: "999px",
+                                      padding: "0.22rem 0.62rem",
+                                      fontSize: "0.78rem",
+                                      fontWeight: 700,
+                                      cursor: canAddMoreCountryRates ? "pointer" : "not-allowed",
+                                    }}
+                                  >
+                                    Add Country Rate
+                                  </button>
+                                </div>
+
+                                {!canAddMoreCountryRates ? (
+                                  <p style={{ margin: "0.4rem 0 0", color: "#64748B", fontSize: "0.8rem" }}>
+                                    All configured country options are already used for this service.
+                                  </p>
+                                ) : null}
+
+                                {selectedCountryRates.length === 0 ? (
+                                  <p style={{ margin: "0.45rem 0 0", color: "#64748B", fontSize: "0.84rem" }}>
+                                    No country override added. Default price will be used for all countries.
+                                  </p>
+                                ) : (
+                                  <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.55rem" }}>
+                                    {selectedCountryRates.map((countryRate, rateIndex) => {
+                                      const usedCountries = new Set(
+                                        selectedCountryRates
+                                          .filter((_, index) => index !== rateIndex)
+                                          .map((entry) => normalizeCountryName(entry.country).toLowerCase()),
+                                      );
+
+                                      return (
+                                        <div
+                                          key={`${service.id}-country-rate-${rateIndex}`}
+                                          style={{
+                                            display: "grid",
+                                            gap: "0.5rem",
+                                            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr)) auto",
+                                            alignItems: "end",
+                                          }}
+                                        >
+                                          <div>
+                                            <label className="label">Country</label>
+                                            <select
+                                              className="input"
+                                              value={countryRate.country}
+                                              onChange={(e) =>
+                                                updateCompanyServiceCountryRateCountry(
+                                                  service.id,
+                                                  rateIndex,
+                                                  e.target.value,
+                                                )
+                                              }
+                                            >
+                                              {COUNTRY_RATE_OPTIONS.map((country) => (
+                                                <option
+                                                  key={country}
+                                                  value={country}
+                                                  disabled={usedCountries.has(country.toLowerCase())}
+                                                >
+                                                  {country}
+                                                </option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                          <div>
+                                            <label className="label">Price</label>
+                                            <input
+                                              className="input"
+                                              type="number"
+                                              min={0}
+                                              step="0.01"
+                                              value={countryRate.price}
+                                              onChange={(e) =>
+                                                updateCompanyServiceCountryRatePrice(
+                                                  service.id,
+                                                  rateIndex,
+                                                  e.target.value,
+                                                )
+                                              }
+                                            />
+                                          </div>
+                                          <div>
+                                            <label className="label">Currency</label>
+                                            <select
+                                              className="input"
+                                              value={countryRate.currency}
+                                              onChange={(e) =>
+                                                updateCompanyServiceCountryRateCurrency(
+                                                  service.id,
+                                                  rateIndex,
+                                                  e.target.value as SupportedCurrency,
+                                                )
+                                              }
+                                            >
+                                              {SUPPORTED_CURRENCIES.map((currency) => (
+                                                <option key={currency} value={currency}>{currency}</option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => removeCompanyServiceCountryRate(service.id, rateIndex)}
+                                            style={{
+                                              border: "1px solid #FECACA",
+                                              background: "#FEF2F2",
+                                              color: "#B91C1C",
+                                              borderRadius: "0.45rem",
+                                              padding: "0.4rem 0.6rem",
+                                              fontSize: "0.78rem",
+                                              fontWeight: 700,
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              gap: "0.3rem",
+                                              cursor: "pointer",
+                                            }}
+                                          >
+                                            <X size={13} /> Remove
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             </div>
                           ) : null}
@@ -595,6 +1058,9 @@ export default function CompaniesPage() {
                 >
                   {filteredManageServices.map((service) => {
                     const selected = manageCompanyServices.find((item) => item.serviceId === service.id);
+                    const selectedCountryRates = selected?.countryRates ?? [];
+                    const canAddMoreCountryRates =
+                      selectedCountryRates.length < COUNTRY_RATE_OPTIONS.length;
                     const hasServiceForm = !service.isPackage && service.formFields.length > 0;
                     return (
                       <div key={`manage-${service.id}`} style={{ border: "1px solid #E0E0E0", borderRadius: "0.65rem", padding: "0.75rem", background: "#F8F9FA" }}>
@@ -642,18 +1108,156 @@ export default function CompaniesPage() {
                         ) : null}
 
                         {selected ? (
-                          <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-                            <div>
-                              <label className="label">Price</label>
-                              <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateManageCompanyServicePrice(service.id, e.target.value)} required />
+                          <div style={{ marginTop: "0.6rem", display: "grid", gap: "0.75rem" }}>
+                            <div style={{ display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+                              <div>
+                                <label className="label">Default Price</label>
+                                <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateManageCompanyServicePrice(service.id, e.target.value)} required />
+                              </div>
+                              <div>
+                                <label className="label">Default Currency</label>
+                                <select className="input" value={selected.currency} onChange={(e) => updateManageCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
+                                  {SUPPORTED_CURRENCIES.map((currency) => (
+                                    <option key={currency} value={currency}>{currency}</option>
+                                  ))}
+                                </select>
+                              </div>
                             </div>
-                            <div>
-                              <label className="label">Currency</label>
-                              <select className="input" value={selected.currency} onChange={(e) => updateManageCompanyServiceCurrency(service.id, e.target.value as SupportedCurrency)}>
-                                {SUPPORTED_CURRENCIES.map((currency) => (
-                                  <option key={currency} value={currency}>{currency}</option>
-                                ))}
-                              </select>
+
+                            <div style={{ border: "1px solid #DBE3F0", borderRadius: "0.6rem", padding: "0.65rem", background: "#FFFFFF" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+                                <label className="label" style={{ marginBottom: 0 }}>Country-Specific Rates (Optional)</label>
+                                <button
+                                  type="button"
+                                  onClick={() => addManageCompanyServiceCountryRate(service.id)}
+                                  disabled={!canAddMoreCountryRates}
+                                  style={{
+                                    border: canAddMoreCountryRates ? "1px solid #BFDBFE" : "1px solid #CBD5E1",
+                                    background: canAddMoreCountryRates ? "#EFF6FF" : "#F8FAFC",
+                                    color: canAddMoreCountryRates ? "#1D4ED8" : "#94A3B8",
+                                    borderRadius: "999px",
+                                    padding: "0.22rem 0.62rem",
+                                    fontSize: "0.78rem",
+                                    fontWeight: 700,
+                                    cursor: canAddMoreCountryRates ? "pointer" : "not-allowed",
+                                  }}
+                                >
+                                  Add Country Rate
+                                </button>
+                              </div>
+
+                              {!canAddMoreCountryRates ? (
+                                <p style={{ margin: "0.4rem 0 0", color: "#64748B", fontSize: "0.8rem" }}>
+                                  All configured country options are already used for this service.
+                                </p>
+                              ) : null}
+
+                              {selectedCountryRates.length === 0 ? (
+                                <p style={{ margin: "0.45rem 0 0", color: "#64748B", fontSize: "0.84rem" }}>
+                                  No country override added. Default price will be used for all countries.
+                                </p>
+                              ) : (
+                                <div style={{ marginTop: "0.55rem", display: "grid", gap: "0.55rem" }}>
+                                  {selectedCountryRates.map((countryRate, rateIndex) => {
+                                    const usedCountries = new Set(
+                                      selectedCountryRates
+                                        .filter((_, index) => index !== rateIndex)
+                                        .map((entry) => normalizeCountryName(entry.country).toLowerCase()),
+                                    );
+
+                                    return (
+                                      <div
+                                        key={`manage-${service.id}-country-rate-${rateIndex}`}
+                                        style={{
+                                          display: "grid",
+                                          gap: "0.5rem",
+                                          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr)) auto",
+                                          alignItems: "end",
+                                        }}
+                                      >
+                                        <div>
+                                          <label className="label">Country</label>
+                                          <select
+                                            className="input"
+                                            value={countryRate.country}
+                                            onChange={(e) =>
+                                              updateManageCompanyServiceCountryRateCountry(
+                                                service.id,
+                                                rateIndex,
+                                                e.target.value,
+                                              )
+                                            }
+                                          >
+                                            {COUNTRY_RATE_OPTIONS.map((country) => (
+                                              <option
+                                                key={country}
+                                                value={country}
+                                                disabled={usedCountries.has(country.toLowerCase())}
+                                              >
+                                                {country}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <label className="label">Price</label>
+                                          <input
+                                            className="input"
+                                            type="number"
+                                            min={0}
+                                            step="0.01"
+                                            value={countryRate.price}
+                                            onChange={(e) =>
+                                              updateManageCompanyServiceCountryRatePrice(
+                                                service.id,
+                                                rateIndex,
+                                                e.target.value,
+                                              )
+                                            }
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="label">Currency</label>
+                                          <select
+                                            className="input"
+                                            value={countryRate.currency}
+                                            onChange={(e) =>
+                                              updateManageCompanyServiceCountryRateCurrency(
+                                                service.id,
+                                                rateIndex,
+                                                e.target.value as SupportedCurrency,
+                                              )
+                                            }
+                                          >
+                                            {SUPPORTED_CURRENCIES.map((currency) => (
+                                              <option key={currency} value={currency}>{currency}</option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => removeManageCompanyServiceCountryRate(service.id, rateIndex)}
+                                          style={{
+                                            border: "1px solid #FECACA",
+                                            background: "#FEF2F2",
+                                            color: "#B91C1C",
+                                            borderRadius: "0.45rem",
+                                            padding: "0.4rem 0.6rem",
+                                            fontSize: "0.78rem",
+                                            fontWeight: 700,
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: "0.3rem",
+                                            cursor: "pointer",
+                                          }}
+                                        >
+                                          <X size={13} /> Remove
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ) : null}

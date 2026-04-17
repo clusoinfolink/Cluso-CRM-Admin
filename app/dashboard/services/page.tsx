@@ -51,9 +51,17 @@ function ServicesPageContent() {
   const [pendingFormService, setPendingFormService] = useState<{ id: string; name: string } | null>(null);
   const formBuilderRef = useRef<HTMLDivElement | null>(null);
 
-  const regularServices = useMemo(
-    () => services.filter((service) => !service.isPackage),
+  const assignableCatalogServices = useMemo(
+    () =>
+      services.filter(
+        (service) => !service.hiddenFromCustomerPortal && !service.isDefaultPersonalDetails,
+      ),
     [services],
+  );
+
+  const regularServices = useMemo(
+    () => assignableCatalogServices.filter((service) => !service.isPackage),
+    [assignableCatalogServices],
   );
 
   const serviceNameById = useMemo(
@@ -210,11 +218,11 @@ function ServicesPageContent() {
         Currently active services that can be assigned to companies.
       </p>
 
-      {services.length === 0 ? (
+      {assignableCatalogServices.length === 0 ? (
         <div style={{ textAlign: "center", padding: "4rem", color: "#94A3B8" }}>No services available in the catalog.</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "1rem" }}>
-          {services.map((service) => {
+          {assignableCatalogServices.map((service) => {
             const isExpanded = expandedServiceId === service.id;
             return (
               <div

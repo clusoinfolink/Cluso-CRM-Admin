@@ -62,6 +62,62 @@ type ServiceQuestionIconKey =
   | "security";
 
 const DEFAULT_QUESTION_ICON: ServiceQuestionIconKey = "diary";
+const SYSTEM_SERVICE_COUNTRY_FIELD_KEY = "system_service_country";
+const SYSTEM_SERVICE_COUNTRY_FIELD_QUESTION =
+  "Select verification country for this service";
+const SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS = [
+  "Afghanistan",
+  "Armenia",
+  "Australia",
+  "Azerbaijan",
+  "Bangladesh",
+  "Bhutan",
+  "Brunei",
+  "Cambodia",
+  "China",
+  "Fiji",
+  "Georgia",
+  "Hong Kong",
+  "India",
+  "Indonesia",
+  "Japan",
+  "Kazakhstan",
+  "Kiribati",
+  "Kyrgyzstan",
+  "Laos",
+  "Macau",
+  "Malaysia",
+  "Maldives",
+  "Marshall Islands",
+  "Micronesia",
+  "Mongolia",
+  "Myanmar",
+  "Nauru",
+  "Nepal",
+  "New Zealand",
+  "Pakistan",
+  "Palau",
+  "Papua New Guinea",
+  "Philippines",
+  "Samoa",
+  "Singapore",
+  "Solomon Islands",
+  "South Korea",
+  "Sri Lanka",
+  "Taiwan",
+  "Tajikistan",
+  "Thailand",
+  "Timor-Leste",
+  "Tonga",
+  "Turkmenistan",
+  "Tuvalu",
+  "Uzbekistan",
+  "Vanuatu",
+  "Vietnam",
+  "United Arab Emirates",
+  "United States",
+  "United Kingdom",
+];
 
 const QUESTION_ICON_OPTIONS: Array<{
   key: ServiceQuestionIconKey;
@@ -118,6 +174,7 @@ export type ServiceFormField = {
   forceUppercase?: boolean;
   allowNotApplicable?: boolean;
   notApplicableText?: string;
+  copyFromPersonalDetailsFieldKey?: string;
 };
 
 export type ServiceItemForForm = {
@@ -127,6 +184,8 @@ export type ServiceItemForForm = {
   defaultPrice: number | null;
   defaultCurrency: SupportedCurrency;
   isPackage: boolean;
+  hiddenFromCustomerPortal?: boolean;
+  isDefaultPersonalDetails?: boolean;
   allowMultipleEntries?: boolean;
   multipleEntriesLabel?: string;
   formFields: ServiceFormField[];
@@ -252,7 +311,12 @@ function createEmptyField(
     forceUppercase: false,
     allowNotApplicable: false,
     notApplicableText: "Not Applicable",
+    copyFromPersonalDetailsFieldKey: "",
   };
+}
+
+function isSystemServiceCountryField(field: ServiceFormField) {
+  return field.fieldKey?.trim() === SYSTEM_SERVICE_COUNTRY_FIELD_KEY;
 }
 
 export default function ServiceFormBuilder({
@@ -265,6 +329,7 @@ export default function ServiceFormBuilder({
   const [drafts, setDrafts] = useState<Record<string, ServiceFormField[]>>({});
   const [serviceEntryModeDrafts, setServiceEntryModeDrafts] = useState<Record<string, boolean>>({});
   const [serviceEntryLabelDrafts, setServiceEntryLabelDrafts] = useState<Record<string, string | undefined>>({});
+  const [expandedDropdownEditors, setExpandedDropdownEditors] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -272,6 +337,35 @@ export default function ServiceFormBuilder({
     () => services.filter((service) => !service.isPackage),
     [services],
   );
+
+  const personalDetailsFieldOptions = useMemo(() => {
+    const personalDetailsService = services.find(
+      (service) =>
+        Boolean(service.isDefaultPersonalDetails) ||
+        service.name.trim().toLowerCase() === "personal details",
+    );
+
+    if (!personalDetailsService) {
+      return [] as Array<{ value: string; label: string }>;
+    }
+
+    const options = new Map<string, string>();
+    for (const field of personalDetailsService.formFields ?? []) {
+      const fieldKey = field.fieldKey?.trim() || "";
+      const question = field.question?.trim() || "";
+      if (!fieldKey || !question) {
+        continue;
+      }
+
+      if (field.fieldType === "composite" || field.fieldType === "file") {
+        continue;
+      }
+
+      options.set(fieldKey, question);
+    }
+
+    return [...options.entries()].map(([value, label]) => ({ value, label }));
+  }, [services]);
 
   const selectedRegularService = regularServices.some((service) => service.id === selectedServiceId);
   const preferredRegularService =
@@ -311,6 +405,10 @@ export default function ServiceFormBuilder({
       typeof field.notApplicableText === "string"
         ? field.notApplicableText
         : "Not Applicable",
+    copyFromPersonalDetailsFieldKey:
+      field.fieldType === "file" || field.fieldType === "composite"
+        ? ""
+        : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
   }));
 
   const multipleEntriesLabel = activeServiceId
@@ -320,6 +418,13 @@ export default function ServiceFormBuilder({
   const allowMultipleEntries = activeServiceId
     ? serviceEntryModeDrafts[activeServiceId] ?? Boolean(selectedService?.allowMultipleEntries)
     : false;
+
+  function toggleDropdownEditor(editorKey: string) {
+    setExpandedDropdownEditors((prev) => ({
+      ...prev,
+      [editorKey]: !prev[editorKey],
+    }));
+  }
 
   function addField() {
     if (!activeServiceId) {
@@ -337,6 +442,10 @@ export default function ServiceFormBuilder({
       return;
     }
 
+    if (isSystemServiceCountryField(fields[index])) {
+      return;
+    }
+
     const sourceQuestion = fields[index]?.question?.trim() ?? "";
     const sourceIcon = normalizeQuestionIconKey(fields[index]?.iconKey);
     const nextFields = [...fields];
@@ -350,6 +459,10 @@ export default function ServiceFormBuilder({
 
   function addSecondInputInQuestion(index: number) {
     if (!activeServiceId) {
+      return;
+    }
+
+    if (isSystemServiceCountryField(fields[index])) {
       return;
     }
 
@@ -418,7 +531,11 @@ export default function ServiceFormBuilder({
     setDrafts((prev) => ({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
-        idx === index ? { ...item, question } : item,
+        idx === index
+          ? isSystemServiceCountryField(item)
+            ? item
+            : { ...item, question }
+          : item,
       ),
     }));
   }
@@ -431,7 +548,11 @@ export default function ServiceFormBuilder({
     setDrafts((prev) => ({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
-        idx === index ? { ...item, iconKey } : item,
+        idx === index
+          ? isSystemServiceCountryField(item)
+            ? item
+            : { ...item, iconKey }
+          : item,
       ),
     }));
   }
@@ -446,6 +567,7 @@ export default function ServiceFormBuilder({
       [activeServiceId]: fields.map((item, idx) =>
         idx === index
           ? {
+              ...(isSystemServiceCountryField(item) ? item : {
               ...item,
               fieldType,
               subFields: fieldType === "composite" ? item.subFields || [] : [],
@@ -461,6 +583,11 @@ export default function ServiceFormBuilder({
               forceUppercase: supportsUppercaseConstraint(fieldType)
                 ? Boolean(item.forceUppercase)
                 : false,
+              copyFromPersonalDetailsFieldKey:
+                fieldType === "file" || fieldType === "composite"
+                  ? ""
+                  : String(item.copyFromPersonalDetailsFieldKey ?? "").trim(),
+              }),
             }
           : item,
       ),
@@ -476,6 +603,10 @@ export default function ServiceFormBuilder({
       ...prev,
       [activeServiceId]: fields.map((item, idx) => {
         if (idx !== index) {
+          return item;
+        }
+
+        if (isSystemServiceCountryField(item)) {
           return item;
         }
 
@@ -505,6 +636,10 @@ export default function ServiceFormBuilder({
           return item;
         }
 
+        if (isSystemServiceCountryField(item)) {
+          return item;
+        }
+
         return {
           ...item,
           dropdownOptions: [...normalizeDraftDropdownOptions(item.dropdownOptions), ""],
@@ -522,6 +657,10 @@ export default function ServiceFormBuilder({
       ...prev,
       [activeServiceId]: fields.map((item, idx) => {
         if (idx !== index) {
+          return item;
+        }
+
+        if (isSystemServiceCountryField(item)) {
           return item;
         }
 
@@ -604,7 +743,11 @@ export default function ServiceFormBuilder({
     setDrafts((prev) => ({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
-        idx === index ? { ...item, required } : item,
+        idx === index
+          ? isSystemServiceCountryField(item)
+            ? item
+            : { ...item, required }
+          : item,
       ),
     }));
   }
@@ -689,6 +832,37 @@ export default function ServiceFormBuilder({
     }));
   }
 
+  function updateFieldCopyFromPersonalDetails(index: number, sourceFieldKey: string) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) {
+          return item;
+        }
+
+        if (
+          isSystemServiceCountryField(item) ||
+          item.fieldType === "file" ||
+          item.fieldType === "composite"
+        ) {
+          return {
+            ...item,
+            copyFromPersonalDetailsFieldKey: "",
+          };
+        }
+
+        return {
+          ...item,
+          copyFromPersonalDetailsFieldKey: sourceFieldKey.trim(),
+        };
+      }),
+    }));
+  }
+
   function updateFieldNotApplicableText(index: number, notApplicableText: string) {
     if (!activeServiceId) {
       return;
@@ -709,6 +883,10 @@ export default function ServiceFormBuilder({
 
   function removeField(index: number) {
     if (!activeServiceId) {
+      return;
+    }
+
+    if (isSystemServiceCountryField(fields[index])) {
       return;
     }
 
@@ -744,6 +922,30 @@ export default function ServiceFormBuilder({
     }
 
     const cleaned = fields.map((item) => {
+      if (isSystemServiceCountryField(item)) {
+        const dropdownOptions = sanitizeDropdownOptions(item.dropdownOptions);
+
+        return {
+          fieldKey: SYSTEM_SERVICE_COUNTRY_FIELD_KEY,
+          question: SYSTEM_SERVICE_COUNTRY_FIELD_QUESTION,
+          iconKey: "global",
+          fieldType: "dropdown" as const,
+          subFields: [],
+          dropdownOptions:
+            dropdownOptions.length > 0
+              ? dropdownOptions
+              : [...SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS],
+          required: true,
+          repeatable: false,
+          minLength: null,
+          maxLength: null,
+          forceUppercase: false,
+          allowNotApplicable: false,
+          notApplicableText: "",
+          copyFromPersonalDetailsFieldKey: "",
+        };
+      }
+
       const minLength =
         supportsLengthConstraints(item.fieldType) && typeof item.minLength === "number"
           ? item.minLength
@@ -786,6 +988,10 @@ export default function ServiceFormBuilder({
         notApplicableText: Boolean(item.allowNotApplicable)
           ? item.notApplicableText?.trim() ?? ""
           : "",
+        copyFromPersonalDetailsFieldKey:
+          item.fieldType === "file" || item.fieldType === "composite"
+            ? ""
+            : String(item.copyFromPersonalDetailsFieldKey ?? "").trim(),
       };
     });
 
@@ -848,6 +1054,22 @@ export default function ServiceFormBuilder({
 
     if (invalidNotApplicableField) {
       setMessage(`"${invalidNotApplicableField.question}" must include default text for Not Applicable.`);
+      return;
+    }
+
+    const personalDetailsFieldOptionKeys = new Set(
+      personalDetailsFieldOptions.map((option) => option.value),
+    );
+    const invalidPersonalDetailsCopyField = cleaned.find(
+      (item) =>
+        Boolean(item.copyFromPersonalDetailsFieldKey) &&
+        !personalDetailsFieldOptionKeys.has(item.copyFromPersonalDetailsFieldKey),
+    );
+
+    if (invalidPersonalDetailsCopyField) {
+      setMessage(
+        `"${invalidPersonalDetailsCopyField.question}" has an invalid Personal Details source mapping.`,
+      );
       return;
     }
 
@@ -922,7 +1144,13 @@ export default function ServiceFormBuilder({
                 <SearchableSelect
                   value={activeServiceId}
                   onChange={(val) => setSelectedServiceId(val)}
-                  options={regularServices.map((s) => ({ value: s.id, label: s.name }))}
+                  options={regularServices.map((s) => ({
+                    value: s.id,
+                    label:
+                      s.hiddenFromCustomerPortal || s.isDefaultPersonalDetails
+                        ? `${s.name} (System Form)`
+                        : s.name,
+                  }))}
                   placeholder="Select a service..."
                 />
               </div>
@@ -965,7 +1193,7 @@ export default function ServiceFormBuilder({
 
                 {allowMultipleEntries && (
                   <div style={{ paddingLeft: "1.7rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                    <label style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1E3A8A" }}>Custom Plural Label ("Whole-service entries" fallback)</label>
+                    <label style={{ fontSize: "0.85rem", fontWeight: 600, color: "#1E3A8A" }}>Custom Plural Label (Whole-service entries fallback)</label>
                     <input
                       className="input"
                       style={{ padding: "0.5rem 0.8rem", border: "1px solid #93C5FD", borderRadius: "6px", fontSize: "0.9rem", width: "100%", maxWidth: "400px" }}
@@ -985,26 +1213,69 @@ export default function ServiceFormBuilder({
                   </div>
                 )}
 
-                {fields.map((field, index) => (
+                {fields.map((field, index) => {
+                const isSystemCountryField = isSystemServiceCountryField(field);
+                const fieldEditorKey = `${activeServiceId}::${field.fieldKey?.trim() || `field-${index}`}`;
+                const dropdownEditorKey = `${fieldEditorKey}::dropdown`;
+                const isDropdownEditorOpen = Boolean(expandedDropdownEditors[dropdownEditorKey]);
+
+                return (
                 <div
                   key={field.fieldKey || `${activeServiceId}-${index}`}
                   style={{
-                    border: "1px solid #E2E8F0",
+                    border: isSystemCountryField ? "1px solid #BFDBFE" : "1px solid #E2E8F0",
                     borderRadius: "8px",
                     background: "#ffffff",
                     position: "relative",
                     overflow: "hidden"
                   }}
                 >
-                  <div style={{ padding: "0.4rem 1rem", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      Field #{index + 1}
-                    </span>
+                  <div
+                    style={{
+                      padding: "0.4rem 1rem",
+                      background: isSystemCountryField ? "#EFF6FF" : "#F8FAFC",
+                      borderBottom: "1px solid #E2E8F0",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}>
+                      <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        Field #{index + 1}
+                      </span>
+                      {isSystemCountryField ? (
+                        <span
+                          style={{
+                            fontSize: "0.72rem",
+                            fontWeight: 700,
+                            color: "#1D4ED8",
+                            background: "#DBEAFE",
+                            border: "1px solid #BFDBFE",
+                            borderRadius: "999px",
+                            padding: "0.15rem 0.55rem",
+                          }}
+                        >
+                          System Field
+                        </span>
+                      ) : null}
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeField(index)}
-                      style={{ background: "transparent", border: "none", color: "#EF4444", cursor: "pointer", display: "flex", alignItems: "center", padding: "0.2rem", borderRadius: "4px", transition: "background 0.2s" }}
-                      title="Remove Field"
+                      disabled={isSystemCountryField}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: isSystemCountryField ? "#94A3B8" : "#EF4444",
+                        cursor: isSystemCountryField ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "0.2rem",
+                        borderRadius: "4px",
+                        transition: "background 0.2s",
+                      }}
+                      title={isSystemCountryField ? "System field cannot be removed" : "Remove Field"}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -1018,11 +1289,17 @@ export default function ServiceFormBuilder({
                       </label>
                       <input
                         style={{ padding: "0.6rem 0.8rem", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "0.95rem", width: "100%" }}
-                        value={field.question}
+                        value={isSystemCountryField ? SYSTEM_SERVICE_COUNTRY_FIELD_QUESTION : field.question}
                         onChange={(e) => updateFieldQuestion(index, e.target.value)}
                         placeholder="Example: Corporate Name"
+                        disabled={isSystemCountryField}
                         required
                       />
+                      {isSystemCountryField ? (
+                        <p style={{ margin: 0, fontSize: "0.8rem", color: "#1D4ED8" }}>
+                          This question is mandatory and managed by the system to map country-based pricing.
+                        </p>
+                      ) : null}
                     </div>
 
                     <div
@@ -1064,6 +1341,7 @@ export default function ServiceFormBuilder({
                               key={`${field.fieldKey || `${activeServiceId}-${index}`}-${option.key}`}
                               type="button"
                               onClick={() => updateFieldIcon(index, option.key)}
+                              disabled={isSystemCountryField}
                               style={{
                                 display: "inline-flex",
                                 alignItems: "center",
@@ -1076,7 +1354,8 @@ export default function ServiceFormBuilder({
                                 color: isActive ? "#1D4ED8" : "#475569",
                                 fontSize: "0.8rem",
                                 fontWeight: isActive ? 700 : 600,
-                                cursor: "pointer",
+                                cursor: isSystemCountryField ? "not-allowed" : "pointer",
+                                opacity: isSystemCountryField ? 0.7 : 1,
                               }}
                               aria-label={`Select ${option.label} icon`}
                             >
@@ -1102,8 +1381,9 @@ export default function ServiceFormBuilder({
                       </label>
                       <select
                         style={{ padding: "0.6rem 0.8rem", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "0.95rem", width: "100%", backgroundColor: "#fff" }}
-                        value={field.fieldType}
+                        value={isSystemCountryField ? "dropdown" : field.fieldType}
                         onChange={(e) => updateFieldType(index, e.target.value as ServiceFormFieldType)}
+                        disabled={isSystemCountryField}
                       >
                         <option value="text">Short Text</option>
                         <option value="long_text">Long Text</option>
@@ -1135,8 +1415,9 @@ export default function ServiceFormBuilder({
                           >
                             <input
                               type="checkbox"
-                              checked={Boolean(field.required)}
+                              checked={isSystemCountryField ? true : Boolean(field.required)}
                               onChange={(e) => updateFieldRequired(index, e.target.checked)}
+                              disabled={isSystemCountryField}
                               style={{ accentColor: "#DC2626", width: "1rem", height: "1rem" }}
                             />
                             Must answer
@@ -1147,6 +1428,7 @@ export default function ServiceFormBuilder({
                         <button
                           type="button"
                           onClick={() => addSecondInputInQuestion(index)}
+                          disabled={isSystemCountryField}
                           style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.6rem 0.8rem", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: "6px", color: "#047857", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
                         >
                           <Plus size={16} />
@@ -1155,6 +1437,7 @@ export default function ServiceFormBuilder({
                         <button
                           type="button"
                           onClick={() => addFieldForSameQuestion(index)}
+                          disabled={isSystemCountryField}
                           style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.6rem 0.8rem", background: "#F1F5F9", border: "1px solid #CBD5E1", borderRadius: "6px", color: "#475569", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}
                         >
                           <Copy size={16} />
@@ -1163,36 +1446,153 @@ export default function ServiceFormBuilder({
                       </div>
                     </div>
 
+                    {!isSystemCountryField &&
+                    field.fieldType !== "file" &&
+                    field.fieldType !== "composite" ? (
+                      <div
+                        style={{
+                          gridColumn: "1 / -1",
+                          border: "1px solid #E2E8F0",
+                          borderRadius: "8px",
+                          background: "#F8FAFC",
+                          padding: "0.85rem 1rem",
+                          display: "grid",
+                          gap: "0.65rem",
+                        }}
+                      >
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                            color: "#334155",
+                            fontSize: "0.86rem",
+                            fontWeight: 600,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(field.copyFromPersonalDetailsFieldKey)}
+                            disabled={personalDetailsFieldOptions.length === 0}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              const fallbackSourceFieldKey =
+                                personalDetailsFieldOptions[0]?.value ?? "";
+                              updateFieldCopyFromPersonalDetails(
+                                index,
+                                checked ? fallbackSourceFieldKey : "",
+                              );
+                            }}
+                            style={{ width: "1rem", height: "1rem" }}
+                          />
+                          Allow candidate to copy this field from Personal Details
+                        </label>
+
+                        {Boolean(field.copyFromPersonalDetailsFieldKey) ? (
+                          personalDetailsFieldOptions.length > 0 ? (
+                            <div style={{ display: "grid", gap: "0.35rem" }}>
+                              <span
+                                style={{ fontSize: "0.8rem", color: "#64748B", fontWeight: 600 }}
+                              >
+                                Personal Details source field
+                              </span>
+                              <select
+                                value={field.copyFromPersonalDetailsFieldKey ?? ""}
+                                onChange={(e) =>
+                                  updateFieldCopyFromPersonalDetails(index, e.target.value)
+                                }
+                                style={{
+                                  maxWidth: "460px",
+                                  padding: "0.5rem 0.7rem",
+                                  border: "1px solid #CBD5E1",
+                                  borderRadius: "6px",
+                                  background: "#FFFFFF",
+                                  fontSize: "0.9rem",
+                                }}
+                              >
+                                {personalDetailsFieldOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : (
+                            <p style={{ margin: 0, color: "#B45309", fontSize: "0.82rem" }}>
+                              Personal Details fields are not available right now.
+                            </p>
+                          )
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     {field.fieldType === "dropdown" && (
                       <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: "0.5rem", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: "6px", padding: "1rem" }}>
-                        <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#334155", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                          <ChevronDown size={14} /> Dropdown Options
-                        </h4>
-                        {(field.dropdownOptions || []).map((opt, oIdx) => (
-                          <div key={oIdx} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                            <input
-                              style={{ flex: 1, padding: "0.5rem 0.8rem", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "0.9rem" }}
-                              value={opt}
-                              onChange={(e) => updateFieldDropdownOption(index, oIdx, e.target.value)}
-                              placeholder={`Option ${oIdx + 1}`}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeFieldDropdownOption(index, oIdx)}
-                              style={{ padding: "0.4rem", color: "#DC2626", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-                              aria-label="Remove option"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        ))}
                         <button
                           type="button"
-                          onClick={() => addFieldDropdownOption(index)}
-                          style={{ alignSelf: "flex-start", marginTop: "0.5rem", fontSize: "0.85rem", color: "#2563EB", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
+                          onClick={() => toggleDropdownEditor(dropdownEditorKey)}
+                          style={{
+                            margin: 0,
+                            padding: 0,
+                            border: "none",
+                            background: "none",
+                            color: "#334155",
+                            fontSize: "0.9rem",
+                            fontWeight: 600,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            cursor: "pointer",
+                            width: "100%",
+                          }}
+                          aria-expanded={isDropdownEditorOpen}
                         >
-                          <Plus size={14} /> Add Option
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                            <ChevronDown
+                              size={14}
+                              style={{
+                                transform: isDropdownEditorOpen ? "rotate(0deg)" : "rotate(-90deg)",
+                                transition: "transform 0.2s ease",
+                              }}
+                            />
+                            Dropdown Options
+                          </span>
+                          <span style={{ fontSize: "0.78rem", color: "#64748B", fontWeight: 600 }}>
+                            {(field.dropdownOptions || []).filter((option) => String(option).trim().length > 0).length} options
+                          </span>
                         </button>
+                        {isDropdownEditorOpen && (
+                          <>
+                            {(field.dropdownOptions || []).map((opt, oIdx) => (
+                              <div key={oIdx} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                                <input
+                                  style={{ flex: 1, padding: "0.5rem 0.8rem", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "0.9rem" }}
+                                  value={opt}
+                                  onChange={(e) => updateFieldDropdownOption(index, oIdx, e.target.value)}
+                                  placeholder={`Option ${oIdx + 1}`}
+                                  disabled={isSystemCountryField}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeFieldDropdownOption(index, oIdx)}
+                                  disabled={isSystemCountryField}
+                                  style={{ padding: "0.4rem", color: isSystemCountryField ? "#94A3B8" : "#DC2626", background: "none", border: "none", cursor: isSystemCountryField ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                                  aria-label="Remove option"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => addFieldDropdownOption(index)}
+                              disabled={isSystemCountryField}
+                              style={{ alignSelf: "flex-start", marginTop: "0.5rem", fontSize: "0.85rem", color: isSystemCountryField ? "#94A3B8" : "#2563EB", background: "none", border: "none", cursor: isSystemCountryField ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
+                            >
+                              <Plus size={14} /> Add Option
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
 
@@ -1205,6 +1605,14 @@ export default function ServiceFormBuilder({
                         
                         {(field.subFields || []).map((subField, sIdx) => (
                           <div key={subField.fieldKey || sIdx} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.8rem", background: "#FFFFFF", border: "1px solid #DCFCE7", borderRadius: "6px" }}>
+                            {(() => {
+                              const subFieldDropdownEditorKey = `${fieldEditorKey}::sub-${subField.fieldKey?.trim() || sIdx}::dropdown`;
+                              const isSubFieldDropdownEditorOpen = Boolean(
+                                expandedDropdownEditors[subFieldDropdownEditorKey],
+                              );
+
+                              return (
+                                <>
                             <div style={{ display: "flex", gap: "0.8rem", alignItems: "flex-start" }}>
                               <div style={{ flex: 2, display: "flex", flexDirection: "column", gap: "0.3rem" }}>
                                 <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#374151" }}>Sub-Field Question (Label)</label>
@@ -1263,42 +1671,81 @@ export default function ServiceFormBuilder({
                             {/* Subfield dropdown options */}
                             {subField.fieldType === "dropdown" && (
                               <div style={{ marginTop: "0.5rem", paddingLeft: "1rem", borderLeft: "2px solid #E5E7EB", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                                <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#4B5563" }}>Dropdown Options</span>
-                                {(subField.dropdownOptions || []).map((opt, oIdx) => (
-                                  <div key={oIdx} style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
-                                    <input
-                                      style={{ flex: 1, padding: "0.3rem 0.5rem", border: "1px solid #D1D5DB", borderRadius: "4px", fontSize: "0.8rem" }}
-                                      value={opt}
-                                      onChange={(e) => updateSubField(index, sIdx, sf => {
-                                        const newOpts = [...(sf.dropdownOptions || [])];
-                                        newOpts[oIdx] = e.target.value;
-                                        return { ...sf, dropdownOptions: newOpts };
-                                      })}
-                                      placeholder={`Option ${oIdx + 1}`}
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => updateSubField(index, sIdx, sf => {
-                                        const newOpts = [...(sf.dropdownOptions || [])];
-                                        newOpts.splice(oIdx, 1);
-                                        return { ...sf, dropdownOptions: newOpts };
-                                      })}
-                                      style={{ color: "#EF4444", background: "none", border: "none", cursor: "pointer" }}
-                                    >
-                                      <Trash2 size={14} />
-                                    </button>
-                                  </div>
-                                ))}
                                 <button
                                   type="button"
-                                  onClick={() => updateSubField(index, sIdx, sf => ({ ...sf, dropdownOptions: [...(sf.dropdownOptions || []), ""] }))}
-                                  style={{ alignSelf: "flex-start", fontSize: "0.8rem", color: "#16A34A", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
+                                  onClick={() => toggleDropdownEditor(subFieldDropdownEditorKey)}
+                                  style={{
+                                    margin: 0,
+                                    padding: 0,
+                                    border: "none",
+                                    background: "none",
+                                    color: "#4B5563",
+                                    fontSize: "0.8rem",
+                                    fontWeight: 600,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    cursor: "pointer",
+                                    width: "100%",
+                                  }}
+                                  aria-expanded={isSubFieldDropdownEditorOpen}
                                 >
-                                  <Plus size={12} /> Add Option
+                                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                                    <ChevronDown
+                                      size={13}
+                                      style={{
+                                        transform: isSubFieldDropdownEditorOpen ? "rotate(0deg)" : "rotate(-90deg)",
+                                        transition: "transform 0.2s ease",
+                                      }}
+                                    />
+                                    Dropdown Options
+                                  </span>
+                                  <span style={{ fontSize: "0.75rem", color: "#64748B", fontWeight: 600 }}>
+                                    {(subField.dropdownOptions || []).filter((option) => String(option).trim().length > 0).length} options
+                                  </span>
                                 </button>
+                                {isSubFieldDropdownEditorOpen && (
+                                  <>
+                                    {(subField.dropdownOptions || []).map((opt, oIdx) => (
+                                      <div key={oIdx} style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                                        <input
+                                          style={{ flex: 1, padding: "0.3rem 0.5rem", border: "1px solid #D1D5DB", borderRadius: "4px", fontSize: "0.8rem" }}
+                                          value={opt}
+                                          onChange={(e) => updateSubField(index, sIdx, sf => {
+                                            const newOpts = [...(sf.dropdownOptions || [])];
+                                            newOpts[oIdx] = e.target.value;
+                                            return { ...sf, dropdownOptions: newOpts };
+                                          })}
+                                          placeholder={`Option ${oIdx + 1}`}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => updateSubField(index, sIdx, sf => {
+                                            const newOpts = [...(sf.dropdownOptions || [])];
+                                            newOpts.splice(oIdx, 1);
+                                            return { ...sf, dropdownOptions: newOpts };
+                                          })}
+                                          style={{ color: "#EF4444", background: "none", border: "none", cursor: "pointer" }}
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </div>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      onClick={() => updateSubField(index, sIdx, sf => ({ ...sf, dropdownOptions: [...(sf.dropdownOptions || []), ""] }))}
+                                      style={{ alignSelf: "flex-start", fontSize: "0.8rem", color: "#16A34A", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
+                                    >
+                                      <Plus size={12} /> Add Option
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             )}
 
+                                </>
+                              );
+                            })()}
                           </div>
                         ))}
 
@@ -1314,6 +1761,7 @@ export default function ServiceFormBuilder({
                     )}
 
                     {/* Constraint Toggles Box */}
+                    {!isSystemCountryField ? (
                     <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "-0.5rem" }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.5rem" }}>
                         
@@ -1325,7 +1773,7 @@ export default function ServiceFormBuilder({
                               onChange={(e) => updateFieldAllowNotApplicable(index, e.target.checked)}
                               style={{ width: "1rem", height: "1rem" }}
                             />
-                            Allow "Not Applicable" mapping
+                            Allow Not Applicable mapping
                           </label>
                           <p style={{ margin: 0, fontSize: "0.8rem", color: "#64748B" }}>
                             Candidate form shows a checkbox with this exact text for this question.
@@ -1407,9 +1855,11 @@ export default function ServiceFormBuilder({
 
                       </div>
                     </div>
+                    ) : null}
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem", borderTop: "1px solid #E2E8F0", paddingTop: "1.5rem", marginTop: "0.5rem" }}>

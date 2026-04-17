@@ -10,14 +10,14 @@ import type { CompanyPartnerProfile } from "@/lib/types";
 
 import VerificationRequest from "@/lib/models/VerificationRequest";
 
-const schema = z.object({
-  name: z.string().min(2),
-  email: z.string().email(),
-  password: z.string().min(6),
-  selectedServices: z
+const companyServiceSelectionSchema = z.object({
+  serviceId: z.string().min(1),
+  price: z.coerce.number().min(0),
+  currency: z.enum(SUPPORTED_CURRENCIES),
+  countryRates: z
     .array(
       z.object({
-        serviceId: z.string().min(1),
+        country: z.string().trim().min(1),
         price: z.coerce.number().min(0),
         currency: z.enum(SUPPORTED_CURRENCIES),
       }),
@@ -26,19 +26,17 @@ const schema = z.object({
     .default([]),
 });
 
+const schema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  password: z.string().min(6),
+  selectedServices: z.array(companyServiceSelectionSchema).optional().default([]),
+});
+
 const updateServicesSchema = z.object({
   action: z.literal("update-services"),
   customerId: z.string().min(1),
-  selectedServices: z
-    .array(
-      z.object({
-        serviceId: z.string().min(1),
-        price: z.coerce.number().min(0),
-        currency: z.enum(SUPPORTED_CURRENCIES),
-      }),
-    )
-    .optional()
-    .default([]),
+  selectedServices: z.array(companyServiceSelectionSchema).optional().default([]),
 });
 
 const updateCompanyAccessSchema = z.object({
@@ -58,6 +56,62 @@ function asString(value: unknown, fallback = "") {
   }
 
   return value;
+}
+
+function isSupportedCurrency(value: unknown): value is (typeof SUPPORTED_CURRENCIES)[number] {
+  return (
+    typeof value === "string" &&
+    SUPPORTED_CURRENCIES.includes(value as (typeof SUPPORTED_CURRENCIES)[number])
+  );
+}
+
+function normalizeCountryName(value: unknown) {
+  return asString(value).trim().replace(/\s+/g, " ");
+}
+
+function normalizeCountryRates(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const deduped = new Map<
+    string,
+    {
+      country: string;
+      price: number;
+      currency: (typeof SUPPORTED_CURRENCIES)[number];
+    }
+  >();
+
+  for (const entry of value) {
+    const raw = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+    if (!raw) {
+      continue;
+    }
+
+    const country = normalizeCountryName(raw.country);
+    const price = Number(raw.price);
+    const currency = raw.currency;
+
+    if (!country || !Number.isFinite(price) || price < 0 || !isSupportedCurrency(currency)) {
+      continue;
+    }
+
+    deduped.set(country.toLowerCase(), {
+      country,
+      price,
+      currency,
+    });
+  }
+
+  return [...deduped.values()];
+}
+
+function isHiddenService(service: {
+  hiddenFromCustomerPortal?: unknown;
+  isDefaultPersonalDetails?: unknown;
+}) {
+  return Boolean(service.hiddenFromCustomerPortal || service.isDefaultPersonalDetails);
 }
 
 function normalizeGstRate(value: unknown, fallback = 18) {
@@ -313,6 +367,7 @@ export async function GET(req: NextRequest) {
           serviceName: service.serviceName,
           price: service.price,
           currency: service.currency,
+          countryRates: normalizeCountryRates(service.countryRates),
         })),
         partnerProfile: normalizePartnerProfile(item.partnerProfile),
         stats: {
@@ -361,6 +416,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (serviceDocs.some((service) => isHiddenService(service))) {
+    return NextResponse.json(
+      { error: "System forms cannot be assigned as company services." },
+      { status: 400 },
+    );
+  }
+
   const serviceMap = new Map(serviceDocs.map((item) => [String(item._id), item]));
   const selectedServices = parsed.data.selectedServices.map((item) => {
     const service = serviceMap.get(item.serviceId);
@@ -369,6 +431,7 @@ export async function POST(req: NextRequest) {
       serviceName: service?.name ?? "",
       price: item.price,
       currency: item.currency,
+      countryRates: normalizeCountryRates(item.countryRates),
     };
   });
 
@@ -466,6 +529,13 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
+  if (serviceDocs.some((service) => isHiddenService(service))) {
+    return NextResponse.json(
+      { error: "System forms cannot be assigned as company services." },
+      { status: 400 },
+    );
+  }
+
   const serviceMap = new Map(serviceDocs.map((item) => [String(item._id), item]));
   const selectedServices = parsed.data.selectedServices.map((item) => {
     const service = serviceMap.get(item.serviceId);
@@ -474,6 +544,7 @@ export async function PATCH(req: NextRequest) {
       serviceName: service?.name ?? "",
       price: item.price,
       currency: item.currency,
+      countryRates: normalizeCountryRates(item.countryRates),
     };
   });
 
