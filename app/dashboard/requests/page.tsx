@@ -83,11 +83,24 @@ type ReportPreviewAttempt = {
   managerName: string;
 };
 
+type ReportPreviewCandidateAnswer = {
+  question: string;
+  value: string;
+  fieldType: string;
+  fileName: string;
+  fileData: string;
+};
+
 type ReportPreviewService = {
+  serviceId: string;
+  serviceEntryIndex: number;
+  serviceEntryCount: number;
+  serviceInstanceKey: string;
   serviceName: string;
   status: string;
   verificationMode: string;
   comment: string;
+  candidateAnswers: ReportPreviewCandidateAnswer[];
   attempts: ReportPreviewAttempt[];
 };
 
@@ -231,6 +244,42 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
         return null;
       }
 
+      const serviceId = asString(serviceRecord.serviceId);
+      const serviceEntryIndex = normalizePositiveInteger(
+        serviceRecord.serviceEntryIndex,
+        1,
+      );
+      const serviceEntryCount = Math.max(
+        1,
+        normalizePositiveInteger(serviceRecord.serviceEntryCount, 1),
+        serviceEntryIndex,
+      );
+      const serviceInstanceKey =
+        asString(serviceRecord.serviceInstanceKey) ||
+        (serviceId ? buildServiceInstanceKey(serviceId, serviceEntryIndex) : "");
+
+      const candidateAnswersRaw = Array.isArray(serviceRecord.candidateAnswers)
+        ? serviceRecord.candidateAnswers
+        : [];
+      const candidateAnswers = candidateAnswersRaw
+        .map((answerEntry) => {
+          const answerRecord = asRecord(answerEntry);
+          if (!answerRecord) {
+            return null;
+          }
+
+          return {
+            question: asString(answerRecord.question),
+            value: asString(answerRecord.value),
+            fieldType: asString(answerRecord.fieldType, "text"),
+            fileName: asString(answerRecord.fileName),
+            fileData: asString(answerRecord.fileData),
+          } satisfies ReportPreviewCandidateAnswer;
+        })
+        .filter(
+          (answer): answer is ReportPreviewCandidateAnswer => answer !== null,
+        );
+
       const attemptsRaw = Array.isArray(serviceRecord.attempts) ? serviceRecord.attempts : [];
       const attempts = attemptsRaw
         .map((attemptEntry) => {
@@ -251,10 +300,15 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
         .filter((attempt): attempt is ReportPreviewAttempt => attempt !== null);
 
       return {
+        serviceId,
+        serviceEntryIndex,
+        serviceEntryCount,
+        serviceInstanceKey,
         serviceName: asString(serviceRecord.serviceName, "Unnamed Service"),
         status: asString(serviceRecord.status, "pending"),
         verificationMode: asString(serviceRecord.verificationMode),
         comment: asString(serviceRecord.comment),
+        candidateAnswers,
         attempts,
       } satisfies ReportPreviewService;
     })
@@ -281,30 +335,71 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
 
 function buildReportPreviewData(item: RequestItem, viewerName: string) {
   const stored = parseStoredReportData(item.reportData);
+  const candidateAnswersByServiceInstance = buildCandidateAnswersByServiceInstance(item);
 
   const fallbackServices: ReportPreviewService[] =
     item.serviceVerifications && item.serviceVerifications.length > 0
-      ? item.serviceVerifications.map((service) => ({
-          serviceName: service.serviceName,
-          status: service.status,
-          verificationMode: service.verificationMode,
-          comment: service.comment,
-          attempts: (service.attempts ?? []).map((attempt) => ({
-            attemptedAt: attempt.attemptedAt,
-            status: attempt.status,
-            verificationMode: attempt.verificationMode,
-            comment: attempt.comment,
-            verifierName: attempt.verifierName ?? "",
-            managerName: attempt.managerName ?? "",
-          })),
-        }))
-      : (item.selectedServices ?? []).map((service) => ({
-          serviceName: service.serviceName,
-          status: "pending",
-          verificationMode: "",
-          comment: "",
-          attempts: [],
-        }));
+      ? item.serviceVerifications.map((service) => {
+          const {
+            serviceEntryIndex,
+            serviceEntryCount,
+            serviceInstanceKey,
+            serviceDisplayName,
+          } = getServiceIdentity(service);
+
+          return {
+            serviceId: service.serviceId,
+            serviceEntryIndex,
+            serviceEntryCount,
+            serviceInstanceKey,
+            serviceName: serviceDisplayName,
+            status: service.status,
+            verificationMode: service.verificationMode,
+            comment: service.comment,
+            candidateAnswers:
+              candidateAnswersByServiceInstance.get(serviceInstanceKey) ?? [],
+            attempts: (service.attempts ?? []).map((attempt) => ({
+              attemptedAt: attempt.attemptedAt,
+              status: attempt.status,
+              verificationMode: attempt.verificationMode,
+              comment: attempt.comment,
+              verifierName: attempt.verifierName ?? "",
+              managerName: attempt.managerName ?? "",
+            })),
+          };
+        })
+      : (item.selectedServices ?? []).map((service) => {
+          const serviceId = service.serviceId;
+          const matchingResponses = (item.candidateFormResponses ?? []).find(
+            (response) => response.serviceId === serviceId,
+          );
+          const serviceEntryCount = matchingResponses
+            ? resolveServiceResponseEntryCount(matchingResponses)
+            : 1;
+          const serviceEntryIndex = 1;
+          const serviceInstanceKey = buildServiceInstanceKey(
+            serviceId,
+            serviceEntryIndex,
+          );
+
+          return {
+            serviceId,
+            serviceEntryIndex,
+            serviceEntryCount,
+            serviceInstanceKey,
+            serviceName: formatServiceInstanceName(
+              service.serviceName,
+              serviceEntryIndex,
+              serviceEntryCount,
+            ),
+            status: "pending",
+            verificationMode: "",
+            comment: "",
+            candidateAnswers:
+              candidateAnswersByServiceInstance.get(serviceInstanceKey) ?? [],
+            attempts: [],
+          };
+        });
 
   const services = stored?.services.length ? stored.services : fallbackServices;
   const latestAttempt = services
@@ -367,10 +462,21 @@ function toShareReportPayload(report: ReportPreviewData) {
     status: report.status,
     createdAt: report.createdAt,
     services: report.services.map((service) => ({
+      serviceId: service.serviceId,
+      serviceEntryIndex: service.serviceEntryIndex,
+      serviceEntryCount: service.serviceEntryCount,
+      serviceInstanceKey: service.serviceInstanceKey,
       serviceName: service.serviceName,
       status: service.status,
       verificationMode: service.verificationMode,
       comment: service.comment,
+      candidateAnswers: service.candidateAnswers.map((answer) => ({
+        question: answer.question,
+        value: answer.value,
+        fieldType: answer.fieldType,
+        fileName: answer.fileName,
+        fileData: answer.fileData,
+      })),
       attempts: service.attempts.map((attempt) => ({
         attemptedAt: attempt.attemptedAt,
         status: attempt.status,
@@ -416,11 +522,125 @@ function parseRepeatableAnswerValues(rawValue: string, repeatable?: boolean) {
     }
 
     return parsed
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length > 0);
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""));
   } catch {
     return [];
   }
+}
+
+type CandidateServiceResponse = NonNullable<RequestItem["candidateFormResponses"]>[number];
+type CandidateServiceAnswer = CandidateServiceResponse["answers"][number];
+
+function normalizePositiveInteger(value: unknown, fallback = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.floor(parsed);
+}
+
+function buildServiceInstanceKey(serviceId: string, serviceEntryIndex: number) {
+  return `${serviceId}::${normalizePositiveInteger(serviceEntryIndex)}`;
+}
+
+function formatServiceInstanceName(
+  serviceName: string,
+  serviceEntryIndex: number,
+  serviceEntryCount: number,
+) {
+  const trimmedName = serviceName.trim() || "Unnamed Service";
+  if (serviceEntryCount <= 1) {
+    return trimmedName;
+  }
+
+  const suffix = ` ${serviceEntryIndex}`;
+  if (trimmedName.endsWith(suffix)) {
+    return trimmedName;
+  }
+
+  return `${trimmedName}${suffix}`;
+}
+
+function getServiceIdentity(service: ServiceVerification) {
+  const serviceEntryIndex = normalizePositiveInteger(service.serviceEntryIndex, 1);
+  const serviceEntryCount = Math.max(
+    1,
+    normalizePositiveInteger(service.serviceEntryCount, 1),
+    serviceEntryIndex,
+  );
+  const serviceInstanceKey =
+    service.serviceInstanceKey ||
+    buildServiceInstanceKey(service.serviceId, serviceEntryIndex);
+  const serviceDisplayName = formatServiceInstanceName(
+    service.serviceName,
+    serviceEntryIndex,
+    serviceEntryCount,
+  );
+
+  return {
+    serviceEntryIndex,
+    serviceEntryCount,
+    serviceInstanceKey,
+    serviceDisplayName,
+  };
+}
+
+function resolveServiceResponseEntryCount(serviceResponse: CandidateServiceResponse) {
+  const declaredCount = normalizePositiveInteger(serviceResponse.serviceEntryCount, 1);
+  const maxRepeatableCount = serviceResponse.answers.reduce((maxCount, answer) => {
+    const repeatableValues = parseRepeatableAnswerValues(answer.value, answer.repeatable);
+    return Math.max(maxCount, repeatableValues.length || 1);
+  }, 1);
+
+  return Math.max(declaredCount, maxRepeatableCount, 1);
+}
+
+function getAnswerValueForEntry(answer: CandidateServiceAnswer, entryIndex: number) {
+  const repeatableValues = parseRepeatableAnswerValues(answer.value, answer.repeatable);
+  if (repeatableValues.length === 0) {
+    return answer.value;
+  }
+
+  return repeatableValues[entryIndex] ?? "";
+}
+
+function buildCandidateAnswersByServiceInstance(item: RequestItem) {
+  const answersByServiceInstance = new Map<string, ReportPreviewCandidateAnswer[]>();
+
+  for (const serviceResponse of item.candidateFormResponses ?? []) {
+    const serviceId = serviceResponse.serviceId;
+    if (!serviceId) {
+      continue;
+    }
+
+    const serviceEntryCount = resolveServiceResponseEntryCount(serviceResponse);
+    for (let entryIndex = 0; entryIndex < serviceEntryCount; entryIndex += 1) {
+      const serviceEntryNumber = entryIndex + 1;
+      const serviceInstanceKey = buildServiceInstanceKey(serviceId, serviceEntryNumber);
+      const answers = serviceResponse.answers.map((answer) => {
+        const fieldType = answer.fieldType;
+        const fileName = answer.fileName ?? "";
+        const fileData = answer.fileData ?? "";
+        const value =
+          fieldType === "file" && fileData
+            ? fileName || "Attachment"
+            : getAnswerValueForEntry(answer, entryIndex).trim() || "-";
+
+        return {
+          question: answer.question || "Field",
+          value,
+          fieldType,
+          fileName,
+          fileData,
+        } satisfies ReportPreviewCandidateAnswer;
+      });
+
+      answersByServiceInstance.set(serviceInstanceKey, answers);
+    }
+  }
+
+  return answersByServiceInstance;
 }
 
 function toAppealServiceLabel(appeal: RequestItem["reverificationAppeal"] | null | undefined) {
@@ -660,14 +880,37 @@ function RequestsPageContent() {
       return item.serviceVerifications;
     }
 
-    return (item.selectedServices ?? []).map((service) => ({
-      serviceId: service.serviceId,
-      serviceName: service.serviceName,
-      status: "pending",
-      verificationMode: "",
-      comment: "",
-      attempts: [],
-    }));
+    const selectedServices = item.selectedServices ?? [];
+    const totalCountByServiceId = new Map<string, number>();
+    for (const service of selectedServices) {
+      totalCountByServiceId.set(
+        service.serviceId,
+        (totalCountByServiceId.get(service.serviceId) ?? 0) + 1,
+      );
+    }
+
+    const entryIndexByServiceId = new Map<string, number>();
+    return selectedServices.map((service) => {
+      const serviceEntryIndex = (entryIndexByServiceId.get(service.serviceId) ?? 0) + 1;
+      entryIndexByServiceId.set(service.serviceId, serviceEntryIndex);
+      const serviceEntryCount = totalCountByServiceId.get(service.serviceId) ?? 1;
+
+      return {
+        serviceId: service.serviceId,
+        serviceName: formatServiceInstanceName(
+          service.serviceName,
+          serviceEntryIndex,
+          serviceEntryCount,
+        ),
+        serviceEntryIndex,
+        serviceEntryCount,
+        serviceInstanceKey: buildServiceInstanceKey(service.serviceId, serviceEntryIndex),
+        status: "pending",
+        verificationMode: "",
+        comment: "",
+        attempts: [],
+      };
+    });
   }
 
   function openVerificationModal(item: RequestItem) {
@@ -685,8 +928,9 @@ function RequestsPageContent() {
       > = {};
 
       for (const service of services) {
+        const { serviceInstanceKey } = getServiceIdentity(service);
         const latestAttempt = service.attempts?.[service.attempts.length - 1];
-        requestDraft[service.serviceId] = {
+        requestDraft[serviceInstanceKey] = {
           status: service.status === "unverified" ? "unverified" : "verified",
           verificationMode: service.verificationMode || "manual",
           comment: service.comment || "",
@@ -711,12 +955,12 @@ function RequestsPageContent() {
 
   function updateServiceDraft(
     requestId: string,
-    serviceId: string,
+    serviceInstanceKey: string,
     patch: Partial<ServiceAttemptDraft>,
   ) {
     setServiceDraftsByRequest((prev) => {
       const requestDraft = prev[requestId] ?? {};
-      const existing = requestDraft[serviceId] ?? {
+      const existing = requestDraft[serviceInstanceKey] ?? {
         status: "verified" as const,
         verificationMode: "manual",
         comment: "",
@@ -733,7 +977,7 @@ function RequestsPageContent() {
         ...prev,
         [requestId]: {
           ...requestDraft,
-          [serviceId]: {
+          [serviceInstanceKey]: {
             ...existing,
             ...patch,
           },
@@ -780,8 +1024,8 @@ function RequestsPageContent() {
     return { mode: normalizedInput, added: true };
   }
 
-  function saveCustomModeForService(requestId: string, serviceId: string) {
-    const serviceKey = `${requestId}:${serviceId}`;
+  function saveCustomModeForService(requestId: string, serviceInstanceKey: string) {
+    const serviceKey = `${requestId}:${serviceInstanceKey}`;
     const rawInput = customModeInputByService[serviceKey] ?? "";
     const resolved = resolveVerificationMode(rawInput);
 
@@ -790,7 +1034,7 @@ function RequestsPageContent() {
       return;
     }
 
-    updateServiceDraft(requestId, serviceId, { verificationMode: resolved.mode });
+    updateServiceDraft(requestId, serviceInstanceKey, { verificationMode: resolved.mode });
     setShowCustomModeInputByService((prev) => ({
       ...prev,
       [serviceKey]: false,
@@ -806,8 +1050,8 @@ function RequestsPageContent() {
     );
   }
 
-  function clearAttemptScreenshot(requestId: string, serviceId: string) {
-    updateServiceDraft(requestId, serviceId, {
+  function clearAttemptScreenshot(requestId: string, serviceInstanceKey: string) {
+    updateServiceDraft(requestId, serviceInstanceKey, {
       screenshotFileName: "",
       screenshotMimeType: "",
       screenshotFileSize: null,
@@ -817,14 +1061,14 @@ function RequestsPageContent() {
 
   async function selectAttemptScreenshot(
     requestId: string,
-    serviceId: string,
+    serviceInstanceKey: string,
     event: ChangeEvent<HTMLInputElement>,
   ) {
     const input = event.currentTarget;
     const selectedFile = input.files?.[0];
 
     if (!selectedFile) {
-      clearAttemptScreenshot(requestId, serviceId);
+      clearAttemptScreenshot(requestId, serviceInstanceKey);
       return;
     }
 
@@ -844,7 +1088,7 @@ function RequestsPageContent() {
     try {
       const rawScreenshotData = await readFileAsDataUrl(selectedFile);
       const screenshotData = normalizeDataUrlMimeType(rawScreenshotData, normalizedMimeType);
-      updateServiceDraft(requestId, serviceId, {
+      updateServiceDraft(requestId, serviceInstanceKey, {
         screenshotFileName: selectedFile.name,
         screenshotMimeType: normalizedMimeType,
         screenshotFileSize: selectedFile.size,
@@ -858,8 +1102,13 @@ function RequestsPageContent() {
     }
   }
 
-  async function logServiceAttempt(requestId: string, serviceId: string) {
-    const draft = serviceDraftsByRequest[requestId]?.[serviceId];
+  async function logServiceAttempt(
+    requestId: string,
+    serviceId: string,
+    serviceEntryIndex: number,
+    serviceInstanceKey: string,
+  ) {
+    const draft = serviceDraftsByRequest[requestId]?.[serviceInstanceKey];
     if (!draft) {
       setMessage("Open View Status first to prepare verification data.");
       return;
@@ -881,7 +1130,7 @@ function RequestsPageContent() {
     }
 
     setMessage("");
-    setVerifyingServiceKey(`${requestId}:${serviceId}`);
+    setVerifyingServiceKey(`${requestId}:${serviceInstanceKey}`);
 
     const res = await fetch("/api/requests", {
       method: "PATCH",
@@ -890,6 +1139,7 @@ function RequestsPageContent() {
         action: "verify-service",
         requestId,
         serviceId,
+        serviceEntryIndex,
         serviceStatus: draft.status,
         verificationMode: draft.verificationMode,
         comment: draft.comment,
@@ -912,8 +1162,8 @@ function RequestsPageContent() {
     }
 
     setMessage(data.message ?? "Service verification attempt logged.");
-    clearAttemptScreenshot(requestId, serviceId);
-    updateServiceDraft(requestId, serviceId, {
+    clearAttemptScreenshot(requestId, serviceInstanceKey);
+    updateServiceDraft(requestId, serviceInstanceKey, {
       extraPaymentDone: false,
       extraPaymentAmount: null,
     });
@@ -923,6 +1173,8 @@ function RequestsPageContent() {
   async function deleteServiceAttemptLog(
     requestId: string,
     serviceId: string,
+    serviceEntryIndex: number,
+    serviceInstanceKey: string,
     attemptIndex: number,
   ) {
     if (!canDeleteVerificationLogs) {
@@ -938,7 +1190,7 @@ function RequestsPageContent() {
     }
 
     setMessage("");
-    const attemptKey = `${requestId}:${serviceId}:${attemptIndex}`;
+  const attemptKey = `${requestId}:${serviceInstanceKey}:${attemptIndex}`;
     setDeletingAttemptKey(attemptKey);
 
     const res = await fetch("/api/requests", {
@@ -948,6 +1200,7 @@ function RequestsPageContent() {
         action: "delete-service-attempt-log",
         requestId,
         serviceId,
+        serviceEntryIndex,
         attemptIndex,
       }),
     });
@@ -1427,11 +1680,20 @@ function RequestsPageContent() {
       return <p style={{ margin: 0, color: "#667892" }}>Candidate has not submitted form responses yet.</p>;
     }
 
-    return (
-      <div style={{ display: "grid", gap: "1rem" }}>
-        {item.candidateFormResponses.map((serviceResponse) => (
+    const responseCards = item.candidateFormResponses.flatMap((serviceResponse) => {
+      const serviceEntryCount = resolveServiceResponseEntryCount(serviceResponse);
+
+      return Array.from({ length: serviceEntryCount }, (_, entryIndex) => {
+        const serviceEntryNumber = entryIndex + 1;
+        const serviceDisplayName = formatServiceInstanceName(
+          serviceResponse.serviceName,
+          serviceEntryNumber,
+          serviceEntryCount,
+        );
+
+        return (
           <div
-            key={`${item._id}-${serviceResponse.serviceId}`}
+            key={`${item._id}-${serviceResponse.serviceId}-${serviceEntryNumber}`}
             style={{
               border: "1px solid #E2E8F0",
               borderRadius: "12px",
@@ -1439,68 +1701,159 @@ function RequestsPageContent() {
               background: "#F8FAFC",
             }}
           >
-            <h4 style={{ margin: 0, color: "#1E293B", fontSize: "1.05rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <h4
+              style={{
+                margin: 0,
+                color: "#1E293B",
+                fontSize: "1.05rem",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+              }}
+            >
               <BadgeCheck size={18} color="#3B82F6" />
-              {serviceResponse.serviceName}
+              {serviceDisplayName}
             </h4>
             <div style={{ marginTop: "0.75rem" }}>
               {serviceResponse.answers.length === 0 ? (
                 <span style={{ color: "#64748B", fontSize: "0.9rem" }}>No answers available.</span>
               ) : (
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: "640px", borderCollapse: "collapse", background: "#FFFFFF", borderRadius: "8px", overflow: "hidden", border: "1px solid #E2E8F0" }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      minWidth: "640px",
+                      borderCollapse: "collapse",
+                      background: "#FFFFFF",
+                      borderRadius: "8px",
+                      overflow: "hidden",
+                      border: "1px solid #E2E8F0",
+                    }}
+                  >
                     <thead>
                       <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
-                        <th style={{ padding: "0.75rem 1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0", width: "40%" }}>Information Required</th>
-                        <th style={{ padding: "0.75rem 1rem", color: "#475569", fontWeight: 600, fontSize: "0.85rem", borderBottom: "1px solid #E2E8F0" }}>Provided Response</th>
+                        <th
+                          style={{
+                            padding: "0.75rem 1rem",
+                            color: "#475569",
+                            fontWeight: 600,
+                            fontSize: "0.85rem",
+                            borderBottom: "1px solid #E2E8F0",
+                            width: "40%",
+                          }}
+                        >
+                          Information Required
+                        </th>
+                        <th
+                          style={{
+                            padding: "0.75rem 1rem",
+                            color: "#475569",
+                            fontWeight: 600,
+                            fontSize: "0.85rem",
+                            borderBottom: "1px solid #E2E8F0",
+                          }}
+                        >
+                          Provided Response
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {serviceResponse.answers.map((answer, answerIndex) => {
-                        const repeatableValues = parseRepeatableAnswerValues(answer.value, answer.repeatable);
+                        const answerValue = getAnswerValueForEntry(answer, entryIndex);
+                        const showNotProvided = !answerValue;
 
                         return (
-                          <tr key={`${serviceResponse.serviceId}-${answerIndex}`}>
-                            <td style={{ padding: "0.75rem 1rem", color: "#334155", fontSize: "0.9rem", fontWeight: 500, borderBottom: answerIndex === serviceResponse.answers.length - 1 ? "none" : "1px solid #F1F5F9", verticalAlign: "top" }}>
+                          <tr key={`${serviceResponse.serviceId}-${serviceEntryNumber}-${answerIndex}`}>
+                            <td
+                              style={{
+                                padding: "0.75rem 1rem",
+                                color: "#334155",
+                                fontSize: "0.9rem",
+                                fontWeight: 500,
+                                borderBottom:
+                                  answerIndex === serviceResponse.answers.length - 1
+                                    ? "none"
+                                    : "1px solid #F1F5F9",
+                                verticalAlign: "top",
+                              }}
+                            >
                               {answer.question}
                             </td>
-                            <td style={{ padding: "0.75rem 1rem", color: "#1E293B", fontSize: "0.9rem", borderBottom: answerIndex === serviceResponse.answers.length - 1 ? "none" : "1px solid #F1F5F9" }}>
+                            <td
+                              style={{
+                                padding: "0.75rem 1rem",
+                                color: "#1E293B",
+                                fontSize: "0.9rem",
+                                borderBottom:
+                                  answerIndex === serviceResponse.answers.length - 1
+                                    ? "none"
+                                    : "1px solid #F1F5F9",
+                              }}
+                            >
                               {answer.fieldType === "file" && answer.fileData ? (
-                                <span style={{ display: "inline-flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap", background: "#EFF6FF", padding: "0.25rem 0.75rem", borderRadius: "8px", border: "1px solid #BFDBFE" }}>
-                                  <span style={{ fontWeight: 600, color: "#1D4ED8", fontSize: "0.85rem" }}>
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    gap: "0.75rem",
+                                    alignItems: "center",
+                                    flexWrap: "wrap",
+                                    background: "#EFF6FF",
+                                    padding: "0.25rem 0.75rem",
+                                    borderRadius: "8px",
+                                    border: "1px solid #BFDBFE",
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      fontWeight: 600,
+                                      color: "#1D4ED8",
+                                      fontSize: "0.85rem",
+                                    }}
+                                  >
                                     {answer.fileName || "Attachment"}
                                   </span>
-                                  <div style={{ width: "1px", height: "14px", background: "#93C5FD" }} />
+                                  <div
+                                    style={{
+                                      width: "1px",
+                                      height: "14px",
+                                      background: "#93C5FD",
+                                    }}
+                                  />
                                   <a
                                     href={answer.fileData}
                                     target="_blank"
                                     rel="noreferrer"
-                                    style={{ color: "#2563EB", textDecoration: "none", fontSize: "0.85rem", fontWeight: 500 }}
-                                    onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
-                                    onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
+                                    style={{
+                                      color: "#2563EB",
+                                      textDecoration: "none",
+                                      fontSize: "0.85rem",
+                                      fontWeight: 500,
+                                    }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+                                    onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
                                   >
                                     View File
                                   </a>
                                   <a
                                     href={answer.fileData}
-                                    download={answer.fileName || `attachment-${answerIndex}`}
-                                    style={{ color: "#2563EB", textDecoration: "none", fontSize: "0.85rem", fontWeight: 500 }}
-                                    onMouseEnter={(e) => e.currentTarget.style.textDecoration = 'underline'}
-                                    onMouseLeave={(e) => e.currentTarget.style.textDecoration = 'none'}
+                                    download={answer.fileName || `attachment-${serviceEntryNumber}-${answerIndex}`}
+                                    style={{
+                                      color: "#2563EB",
+                                      textDecoration: "none",
+                                      fontSize: "0.85rem",
+                                      fontWeight: 500,
+                                    }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+                                    onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
                                   >
                                     Download
                                   </a>
                                 </span>
-                              ) : repeatableValues.length > 0 ? (
-                                <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "grid", gap: "0.25rem" }}>
-                                  {repeatableValues.map((entry, entryIndex) => (
-                                    <li key={`${serviceResponse.serviceId}-${answerIndex}-entry-${entryIndex}`} style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                      {entry}
-                                    </li>
-                                  ))}
-                                </ul>
+                              ) : showNotProvided ? (
+                                <span style={{ color: "#94A3B8", fontStyle: "italic" }}>Not provided</span>
                               ) : (
-                                answer.value || <span style={{ color: "#94A3B8", fontStyle: "italic" }}>Not provided</span>
+                                answerValue
                               )}
                             </td>
                           </tr>
@@ -1512,7 +1865,13 @@ function RequestsPageContent() {
               )}
             </div>
           </div>
-        ))}
+        );
+      });
+    });
+
+    return (
+      <div style={{ display: "grid", gap: "1rem" }}>
+        {responseCards}
       </div>
     );
   }
@@ -1555,7 +1914,12 @@ function RequestsPageContent() {
             </thead>
             <tbody>
               {services.map((service) => {
-                const draft = requestDraft[service.serviceId] ?? {
+                const {
+                  serviceEntryIndex,
+                  serviceInstanceKey,
+                  serviceDisplayName,
+                } = getServiceIdentity(service);
+                const draft = requestDraft[serviceInstanceKey] ?? {
                   status: service.status === "unverified" ? "unverified" : "verified",
                   verificationMode: service.verificationMode || "manual",
                   comment: service.comment || "",
@@ -1567,7 +1931,7 @@ function RequestsPageContent() {
                   screenshotFileSize: null,
                   screenshotData: "",
                 };
-                const serviceKey = `${item._id}:${service.serviceId}`;
+                const serviceKey = `${item._id}:${serviceInstanceKey}`;
                 const showCustomModeInput = Boolean(showCustomModeInputByService[serviceKey]);
                 const customModeInput = customModeInputByService[serviceKey] ?? "";
                 const hasDraftModeOption = verificationModeOptions.some(
@@ -1598,8 +1962,10 @@ function RequestsPageContent() {
                   (item.status === "approved" || item.status === "verified");
 
                 return (
-                  <tr key={`${item._id}-${service.serviceId}`} style={{ borderTop: "1px solid #F1F5F9" }}>
-                    <td style={{ padding: "0.65rem", fontWeight: 600, color: "#1E293B" }}>{service.serviceName}</td>
+                  <tr key={`${item._id}-${serviceInstanceKey}`} style={{ borderTop: "1px solid #F1F5F9" }}>
+                    <td style={{ padding: "0.65rem", fontWeight: 600, color: "#1E293B" }}>
+                      {serviceDisplayName}
+                    </td>
                     <td style={{ padding: "0.65rem" }}>
                       <span className={`status-pill status-pill-${service.status === "unverified" ? "rejected" : service.status === "verified" ? "verified" : "pending"}`} style={{ textTransform: "capitalize" }}>
                         {service.status}
@@ -1624,7 +1990,7 @@ function RequestsPageContent() {
                             ...prev,
                             [serviceKey]: false,
                           }));
-                          updateServiceDraft(item._id, service.serviceId, {
+                          updateServiceDraft(item._id, serviceInstanceKey, {
                             verificationMode: selectedMode,
                           });
                         }}
@@ -1653,7 +2019,7 @@ function RequestsPageContent() {
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
                                 e.preventDefault();
-                                saveCustomModeForService(item._id, service.serviceId);
+                                saveCustomModeForService(item._id, serviceInstanceKey);
                               }
                             }}
                           />
@@ -1661,7 +2027,7 @@ function RequestsPageContent() {
                             type="button"
                             className="btn btn-primary"
                             style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
-                            onClick={() => saveCustomModeForService(item._id, service.serviceId)}
+                            onClick={() => saveCustomModeForService(item._id, serviceInstanceKey)}
                           >
                             Save
                           </button>
@@ -1691,7 +2057,7 @@ function RequestsPageContent() {
                         style={{ minWidth: "130px", padding: "0.35rem 0.45rem" }}
                         value={draft.status}
                         onChange={(e) =>
-                          updateServiceDraft(item._id, service.serviceId, {
+                          updateServiceDraft(item._id, serviceInstanceKey, {
                             status: e.target.value as "verified" | "unverified",
                           })
                         }
@@ -1707,7 +2073,7 @@ function RequestsPageContent() {
                         value={draft.comment}
                         placeholder="Add attempt comment"
                         onChange={(e) =>
-                          updateServiceDraft(item._id, service.serviceId, {
+                          updateServiceDraft(item._id, serviceInstanceKey, {
                             comment: e.target.value,
                           })
                         }
@@ -1721,7 +2087,7 @@ function RequestsPageContent() {
                         value={draft.verifierNote}
                         placeholder="Internal note for verification method (not shown in report)"
                         onChange={(e) =>
-                          updateServiceDraft(item._id, service.serviceId, {
+                          updateServiceDraft(item._id, serviceInstanceKey, {
                             verifierNote: e.target.value,
                           })
                         }
@@ -1742,7 +2108,7 @@ function RequestsPageContent() {
                           }}
                           onClick={() => {
                             const nextValue = !draft.extraPaymentDone;
-                            updateServiceDraft(item._id, service.serviceId, {
+                            updateServiceDraft(item._id, serviceInstanceKey, {
                               extraPaymentDone: nextValue,
                               extraPaymentAmount: nextValue ? draft.extraPaymentAmount : null,
                             });
@@ -1770,7 +2136,7 @@ function RequestsPageContent() {
                             onChange={(event) => {
                               const rawValue = event.target.value.trim();
                               const parsedAmount = Number(rawValue);
-                              updateServiceDraft(item._id, service.serviceId, {
+                              updateServiceDraft(item._id, serviceInstanceKey, {
                                 extraPaymentAmount:
                                   rawValue && Number.isFinite(parsedAmount) && parsedAmount > 0
                                     ? Math.round(parsedAmount * 100) / 100
@@ -1789,7 +2155,7 @@ function RequestsPageContent() {
                           className="input"
                           style={{ padding: "0.35rem 0.45rem" }}
                           onChange={(event) =>
-                            void selectAttemptScreenshot(item._id, service.serviceId, event)
+                            void selectAttemptScreenshot(item._id, serviceInstanceKey, event)
                           }
                         />
                         {draft.screenshotData ? (
@@ -1804,7 +2170,7 @@ function RequestsPageContent() {
                               type="button"
                               className="btn btn-secondary"
                               style={{ padding: "0.2rem 0.45rem", fontSize: "0.72rem" }}
-                              onClick={() => clearAttemptScreenshot(item._id, service.serviceId)}
+                              onClick={() => clearAttemptScreenshot(item._id, serviceInstanceKey)}
                             >
                               Remove
                             </button>
@@ -1833,7 +2199,14 @@ function RequestsPageContent() {
                               typeof draft.extraPaymentAmount !== "number" ||
                               draft.extraPaymentAmount <= 0))
                         }
-                        onClick={() => logServiceAttempt(item._id, service.serviceId)}
+                        onClick={() =>
+                          logServiceAttempt(
+                            item._id,
+                            service.serviceId,
+                            serviceEntryIndex,
+                            serviceInstanceKey,
+                          )
+                        }
                       >
                         {verifyingServiceKey === serviceKey
                           ? "Saving..."
@@ -1854,6 +2227,11 @@ function RequestsPageContent() {
 
         <div style={{ display: "grid", gap: "0.85rem", marginTop: "0.9rem" }}>
           {services.map((service) => {
+            const {
+              serviceEntryIndex,
+              serviceInstanceKey,
+              serviceDisplayName,
+            } = getServiceIdentity(service);
             const selectedServiceForCurrency =
               (item.selectedServices ?? []).find(
                 (entry) =>
@@ -1864,9 +2242,9 @@ function RequestsPageContent() {
               selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
 
             return (
-            <div key={`${item._id}-${service.serviceId}-attempts`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#FFFFFF", padding: "0.75rem" }}>
+            <div key={`${item._id}-${serviceInstanceKey}-attempts`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#FFFFFF", padding: "0.75rem" }}>
               <div style={{ fontWeight: 600, color: "#334155", marginBottom: "0.45rem" }}>
-                Attempts: {service.serviceName}
+                Attempts: {serviceDisplayName}
               </div>
               {service.attempts.length === 0 ? (
                 <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
@@ -1898,10 +2276,10 @@ function RequestsPageContent() {
                         .reverse()
                         .map((attempt, attemptIndex) => {
                           const originalAttemptIndex = service.attempts.length - 1 - attemptIndex;
-                          const attemptKey = `${item._id}:${service.serviceId}:${originalAttemptIndex}`;
+                          const attemptKey = `${item._id}:${serviceInstanceKey}:${originalAttemptIndex}`;
 
                           return (
-                          <tr key={`${item._id}-${service.serviceId}-attempt-${originalAttemptIndex}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                          <tr key={`${item._id}-${serviceInstanceKey}-attempt-${originalAttemptIndex}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
                             <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
                               {new Date(attempt.attemptedAt).toLocaleString()}
                             </td>
@@ -1977,6 +2355,8 @@ function RequestsPageContent() {
                                     deleteServiceAttemptLog(
                                       item._id,
                                       service.serviceId,
+                                      serviceEntryIndex,
+                                      serviceInstanceKey,
                                       originalAttemptIndex,
                                     )
                                   }
@@ -2165,6 +2545,69 @@ function RequestsPageContent() {
                         <p style={{ margin: "0.15rem 0 0", fontSize: "1.08rem" }}>
                           <strong>Comment:</strong> {service.comment}
                         </p>
+                      ) : null}
+
+                      {service.candidateAnswers.length > 0 ? (
+                        <div style={{ overflowX: "auto", marginTop: "0.45rem" }}>
+                          <table
+                            style={{
+                              width: "100%",
+                              minWidth: "690px",
+                              borderCollapse: "collapse",
+                              fontSize: "0.94rem",
+                              border: "1px solid #CBD5E1",
+                            }}
+                          >
+                            <thead>
+                              <tr style={{ background: "#F8FAFC", textAlign: "left" }}>
+                                <th style={{ padding: "0.3rem 0.35rem", width: "42%" }}>
+                                  Candidate Answers
+                                </th>
+                                <th style={{ padding: "0.3rem 0.35rem" }}>Response</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {service.candidateAnswers.map((answer, answerIndex) => (
+                                <tr
+                                  key={`${requestId}-preview-service-${serviceIndex}-answer-${answerIndex}`}
+                                  style={{ borderTop: "1px solid #E2E8F0", verticalAlign: "top" }}
+                                >
+                                  <td style={{ padding: "0.35rem" }}>
+                                    {answer.question || "Field"}
+                                  </td>
+                                  <td style={{ padding: "0.35rem", lineHeight: 1.35 }}>
+                                    {answer.fieldType === "file" && answer.fileData ? (
+                                      <span style={{ display: "inline-flex", gap: "0.55rem", flexWrap: "wrap" }}>
+                                        <span>{answer.fileName || "Attachment"}</span>
+                                        <a
+                                          href={answer.fileData}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          style={{ color: "#2563EB", textDecoration: "none" }}
+                                          onMouseEnter={(event) => (event.currentTarget.style.textDecoration = "underline")}
+                                          onMouseLeave={(event) => (event.currentTarget.style.textDecoration = "none")}
+                                        >
+                                          View
+                                        </a>
+                                        <a
+                                          href={answer.fileData}
+                                          download={answer.fileName || `candidate-answer-${answerIndex + 1}`}
+                                          style={{ color: "#2563EB", textDecoration: "none" }}
+                                          onMouseEnter={(event) => (event.currentTarget.style.textDecoration = "underline")}
+                                          onMouseLeave={(event) => (event.currentTarget.style.textDecoration = "none")}
+                                        >
+                                          Download
+                                        </a>
+                                      </span>
+                                    ) : (
+                                      answer.value || "-"
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       ) : null}
 
                       <div style={{ overflowX: "auto", marginTop: "0.42rem" }}>

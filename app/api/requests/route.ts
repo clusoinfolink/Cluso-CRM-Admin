@@ -10,6 +10,7 @@ const verifyServicePatchSchema = z.object({
   action: z.literal("verify-service"),
   requestId: z.string().min(1),
   serviceId: z.string().min(1),
+  serviceEntryIndex: z.number().int().min(1).optional().default(1),
   serviceStatus: z.enum(["verified", "unverified"]),
   verificationMode: z.string().trim().max(120).optional().default("manual"),
   comment: z.string().trim().max(500).optional().default(""),
@@ -38,6 +39,7 @@ const deleteServiceAttemptLogPatchSchema = z.object({
   action: z.literal("delete-service-attempt-log"),
   requestId: z.string().min(1),
   serviceId: z.string().min(1),
+  serviceEntryIndex: z.number().int().min(1).optional().default(1),
   attemptIndex: z.number().int().nonnegative(),
 });
 
@@ -58,6 +60,9 @@ type SelectedServiceLike = {
 type ServiceVerificationLike = {
   serviceId: unknown;
   serviceName: string;
+  serviceEntryIndex?: unknown;
+  serviceEntryCount?: unknown;
+  serviceInstanceKey?: unknown;
   status?: "pending" | "verified" | "unverified";
   verificationMode?: string;
   comment?: string;
@@ -80,9 +85,18 @@ type ServiceVerificationLike = {
   }>;
 };
 
+type CandidateFormResponseLike = {
+  serviceId: unknown;
+  serviceName: string;
+  serviceEntryCount?: unknown;
+};
+
 type NormalizedServiceVerification = {
   serviceId: string;
   serviceName: string;
+  serviceEntryIndex: number;
+  serviceEntryCount: number;
+  serviceInstanceKey: string;
   status: "pending" | "verified" | "unverified";
   verificationMode: string;
   comment: string;
@@ -121,10 +135,21 @@ type ReportPayloadForShare = {
   status: string;
   createdAt: string;
   services: Array<{
+    serviceId: string;
+    serviceEntryIndex: number;
+    serviceEntryCount: number;
+    serviceInstanceKey: string;
     serviceName: string;
     status: string;
     verificationMode: string;
     comment: string;
+    candidateAnswers: Array<{
+      question: string;
+      value: string;
+      fieldType: string;
+      fileName: string;
+      fileData: string;
+    }>;
     attempts: Array<{
       attemptedAt: string;
       status: string;
@@ -170,6 +195,69 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
+}
+
+function normalizeServiceEntryIndex(value: unknown) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 1;
+  }
+
+  return Math.floor(raw);
+}
+
+function normalizeServiceEntryCount(value: unknown) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 1;
+  }
+
+  return Math.floor(raw);
+}
+
+function buildServiceInstanceKey(serviceId: string, serviceEntryIndex: number) {
+  return `${serviceId}::${normalizeServiceEntryIndex(serviceEntryIndex)}`;
+}
+
+function parseServiceInstanceKey(rawValue: unknown, serviceId: string) {
+  if (typeof rawValue !== "string") {
+    return null;
+  }
+
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const prefix = `${serviceId}::`;
+  if (!trimmed.startsWith(prefix)) {
+    return null;
+  }
+
+  const indexPart = Number(trimmed.slice(prefix.length));
+  if (!Number.isFinite(indexPart) || indexPart <= 0) {
+    return null;
+  }
+
+  return Math.floor(indexPart);
+}
+
+function toServiceDisplayName(
+  serviceName: string,
+  serviceEntryIndex: number,
+  serviceEntryCount: number,
+) {
+  const trimmedName = serviceName.trim() || "Unnamed Service";
+  if (serviceEntryCount <= 1) {
+    return trimmedName;
+  }
+
+  const suffix = ` ${serviceEntryIndex}`;
+  if (trimmedName.endsWith(suffix)) {
+    return trimmedName;
+  }
+
+  return `${trimmedName}${suffix}`;
 }
 
 function extractFilenameFromContentDisposition(contentDisposition: string | null) {
@@ -272,6 +360,47 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
         return null;
       }
 
+      const serviceId = asString(service.serviceId);
+      const serviceEntryIndex = normalizeServiceEntryIndex(service.serviceEntryIndex);
+      const serviceEntryCount = Math.max(
+        1,
+        normalizeServiceEntryCount(service.serviceEntryCount),
+        serviceEntryIndex,
+      );
+      const serviceInstanceKey =
+        asString(service.serviceInstanceKey) ||
+        (serviceId ? buildServiceInstanceKey(serviceId, serviceEntryIndex) : "");
+
+      const candidateAnswersRaw = Array.isArray(service.candidateAnswers)
+        ? service.candidateAnswers
+        : [];
+      const candidateAnswers = candidateAnswersRaw
+        .map((answerValue) => {
+          const answer = asRecord(answerValue);
+          if (!answer) {
+            return null;
+          }
+
+          return {
+            question: asString(answer.question),
+            value: asString(answer.value),
+            fieldType: asString(answer.fieldType, "text"),
+            fileName: asString(answer.fileName),
+            fileData: asString(answer.fileData),
+          };
+        })
+        .filter(
+          (
+            answer,
+          ): answer is {
+            question: string;
+            value: string;
+            fieldType: string;
+            fileName: string;
+            fileData: string;
+          } => Boolean(answer),
+        );
+
       const attemptsRaw = Array.isArray(service.attempts) ? service.attempts : [];
       const attempts = attemptsRaw
         .map((attemptValue) => {
@@ -303,10 +432,15 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
         );
 
       return {
+        serviceId,
+        serviceEntryIndex,
+        serviceEntryCount,
+        serviceInstanceKey,
         serviceName: asString(service.serviceName),
         status: asString(service.status),
         verificationMode: asString(service.verificationMode),
         comment: asString(service.comment),
+        candidateAnswers,
         attempts,
       };
     })
@@ -314,10 +448,21 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
       (
         service,
       ): service is {
+        serviceId: string;
+        serviceEntryIndex: number;
+        serviceEntryCount: number;
+        serviceInstanceKey: string;
         serviceName: string;
         status: string;
         verificationMode: string;
         comment: string;
+        candidateAnswers: Array<{
+          question: string;
+          value: string;
+          fieldType: string;
+          fileName: string;
+          fileData: string;
+        }>;
         attempts: Array<{
           attemptedAt: string;
           status: string;
@@ -523,49 +668,116 @@ function buildAttemptScreenshotAttachments(
   return attachments;
 }
 
-function buildDefaultServiceVerifications(
-  selectedServices: SelectedServiceLike[] = [],
-): NormalizedServiceVerification[] {
-  return selectedServices.map((service) => ({
-    serviceId: String(service.serviceId),
-    serviceName: service.serviceName,
-    status: "pending" as const,
-    verificationMode: "",
-    comment: "",
-    attempts: [] as Array<{
-      status: "verified" | "unverified";
-      verificationMode: string;
-      comment: string;
-      verifierNote: string;
-      extraPaymentDone: boolean;
-      extraPaymentAmount: number | null;
-      screenshotFileName: string;
-      screenshotMimeType: string;
-      screenshotFileSize: number | null;
-      screenshotData: string;
-      attemptedAt: Date;
-      verifierId: string | null;
-      verifierName: string;
-      managerId: string | null;
-      managerName: string;
-    }>,
-  }));
-}
+type ExistingNormalizedServiceVerification = Omit<
+  NormalizedServiceVerification,
+  "serviceName" | "serviceEntryCount"
+> & {
+  baseServiceName: string;
+};
 
 function normalizeServiceVerifications(
   selectedServices: SelectedServiceLike[] = [],
   existingVerifications: ServiceVerificationLike[] = [],
+  candidateFormResponses: CandidateFormResponseLike[] = [],
 ) {
-  const defaults = buildDefaultServiceVerifications(selectedServices);
-  const serviceMap = new Map<string, NormalizedServiceVerification>(
-    defaults.map((entry) => [entry.serviceId, entry]),
+  const serviceNameById = new Map<string, string>();
+  const selectedCountByServiceId = new Map<string, number>();
+  const responseCountByServiceId = new Map<string, number>();
+  const existingCountByServiceId = new Map<string, number>();
+  const existingMaxIndexByServiceId = new Map<string, number>();
+  const existingByInstanceKey = new Map<string, ExistingNormalizedServiceVerification>();
+  const existingEncounterOrder: string[] = [];
+  const seenExistingServiceIds = new Set<string>();
+  const fallbackEntryCounterByServiceId = new Map<string, number>();
+  const existingServiceIds = new Set(
+    existingVerifications
+      .map((verification) => String(verification.serviceId))
+      .filter((serviceId) => Boolean(serviceId)),
   );
+
+  for (const service of selectedServices) {
+    const serviceId = String(service.serviceId);
+    if (!serviceId) {
+      continue;
+    }
+
+    const serviceName = (service.serviceName ?? "").trim() || "Unnamed Service";
+    if (!serviceNameById.has(serviceId)) {
+      serviceNameById.set(serviceId, serviceName);
+    }
+
+    selectedCountByServiceId.set(
+      serviceId,
+      (selectedCountByServiceId.get(serviceId) ?? 0) + 1,
+    );
+  }
+
+  for (const serviceResponse of candidateFormResponses) {
+    const serviceId = String(serviceResponse.serviceId);
+    if (!serviceId) {
+      continue;
+    }
+
+    const shouldScopeByKnownServices =
+      selectedCountByServiceId.size > 0 || existingServiceIds.size > 0;
+    if (
+      shouldScopeByKnownServices &&
+      !selectedCountByServiceId.has(serviceId) &&
+      !existingServiceIds.has(serviceId)
+    ) {
+      continue;
+    }
+
+    const serviceName = (serviceResponse.serviceName ?? "").trim() || "Unnamed Service";
+    if (!serviceNameById.has(serviceId)) {
+      serviceNameById.set(serviceId, serviceName);
+    }
+
+    const serviceEntryCount = normalizeServiceEntryCount(
+      serviceResponse.serviceEntryCount,
+    );
+    responseCountByServiceId.set(
+      serviceId,
+      Math.max(responseCountByServiceId.get(serviceId) ?? 1, serviceEntryCount),
+    );
+  }
 
   for (const verification of existingVerifications) {
     const serviceId = String(verification.serviceId);
-    const normalized: NormalizedServiceVerification = {
+    if (!serviceId) {
+      continue;
+    }
+
+    const fallbackServiceName = serviceNameById.get(serviceId) ?? "Unnamed Service";
+    const baseServiceName =
+      (verification.serviceName ?? "").trim() || fallbackServiceName;
+    if (!serviceNameById.has(serviceId)) {
+      serviceNameById.set(serviceId, baseServiceName);
+    }
+
+    const explicitEntryIndex =
+      typeof verification.serviceEntryIndex === "number" &&
+      Number.isFinite(verification.serviceEntryIndex) &&
+      verification.serviceEntryIndex > 0
+        ? normalizeServiceEntryIndex(verification.serviceEntryIndex)
+        : null;
+    const parsedEntryIndexFromKey = parseServiceInstanceKey(
+      verification.serviceInstanceKey,
       serviceId,
-      serviceName: verification.serviceName,
+    );
+    const fallbackEntryIndex =
+      (fallbackEntryCounterByServiceId.get(serviceId) ?? 0) + 1;
+    fallbackEntryCounterByServiceId.set(serviceId, fallbackEntryIndex);
+
+    const serviceEntryIndex =
+      parsedEntryIndexFromKey ?? explicitEntryIndex ?? fallbackEntryIndex;
+    const serviceInstanceKey = buildServiceInstanceKey(serviceId, serviceEntryIndex);
+
+    const normalized: ExistingNormalizedServiceVerification = {
+      serviceId,
+      baseServiceName,
+      serviceEntryIndex,
+      serviceInstanceKey,
       status: verification.status ?? "pending",
       verificationMode: verification.verificationMode ?? "",
       comment: verification.comment ?? "",
@@ -593,10 +805,130 @@ function normalizeServiceVerifications(
       })),
     };
 
-    serviceMap.set(serviceId, normalized);
+    const existingForInstance = existingByInstanceKey.get(serviceInstanceKey);
+    if (existingForInstance) {
+      existingForInstance.status = normalized.status;
+      existingForInstance.verificationMode = normalized.verificationMode;
+      existingForInstance.comment = normalized.comment;
+      existingForInstance.attempts.push(...normalized.attempts);
+    } else {
+      existingByInstanceKey.set(serviceInstanceKey, normalized);
+    }
+
+    existingCountByServiceId.set(
+      serviceId,
+      (existingCountByServiceId.get(serviceId) ?? 0) + 1,
+    );
+    existingMaxIndexByServiceId.set(
+      serviceId,
+      Math.max(existingMaxIndexByServiceId.get(serviceId) ?? 0, serviceEntryIndex),
+    );
+
+    if (!seenExistingServiceIds.has(serviceId)) {
+      seenExistingServiceIds.add(serviceId);
+      existingEncounterOrder.push(serviceId);
+    }
   }
 
-  return [...serviceMap.values()];
+  const orderedServiceIds: string[] = [];
+  const seenServiceIds = new Set<string>();
+
+  for (const service of selectedServices) {
+    const serviceId = String(service.serviceId);
+    if (!serviceId || seenServiceIds.has(serviceId)) {
+      continue;
+    }
+
+    seenServiceIds.add(serviceId);
+    orderedServiceIds.push(serviceId);
+  }
+
+  for (const serviceResponse of candidateFormResponses) {
+    const serviceId = String(serviceResponse.serviceId);
+    if (!serviceId || seenServiceIds.has(serviceId)) {
+      continue;
+    }
+
+    seenServiceIds.add(serviceId);
+    orderedServiceIds.push(serviceId);
+  }
+
+  for (const serviceId of existingEncounterOrder) {
+    if (seenServiceIds.has(serviceId)) {
+      continue;
+    }
+
+    seenServiceIds.add(serviceId);
+    orderedServiceIds.push(serviceId);
+  }
+
+  for (const serviceId of serviceNameById.keys()) {
+    if (seenServiceIds.has(serviceId)) {
+      continue;
+    }
+
+    seenServiceIds.add(serviceId);
+    orderedServiceIds.push(serviceId);
+  }
+
+  const normalizedServices: NormalizedServiceVerification[] = [];
+
+  for (const serviceId of orderedServiceIds) {
+    const baseServiceName = serviceNameById.get(serviceId) ?? "Unnamed Service";
+    const serviceEntryCount = Math.max(
+      1,
+      selectedCountByServiceId.get(serviceId) ?? 0,
+      responseCountByServiceId.get(serviceId) ?? 0,
+      existingCountByServiceId.get(serviceId) ?? 0,
+      existingMaxIndexByServiceId.get(serviceId) ?? 0,
+    );
+
+    for (
+      let serviceEntryIndex = 1;
+      serviceEntryIndex <= serviceEntryCount;
+      serviceEntryIndex += 1
+    ) {
+      const serviceInstanceKey = buildServiceInstanceKey(serviceId, serviceEntryIndex);
+      const existingForInstance = existingByInstanceKey.get(serviceInstanceKey);
+
+      if (existingForInstance) {
+        normalizedServices.push({
+          serviceId,
+          serviceName: toServiceDisplayName(
+            existingForInstance.baseServiceName,
+            serviceEntryIndex,
+            serviceEntryCount,
+          ),
+          serviceEntryIndex,
+          serviceEntryCount,
+          serviceInstanceKey,
+          status: existingForInstance.status,
+          verificationMode: existingForInstance.verificationMode,
+          comment: existingForInstance.comment,
+          attempts: existingForInstance.attempts,
+        });
+        continue;
+      }
+
+      normalizedServices.push({
+        serviceId,
+        serviceName: toServiceDisplayName(
+          baseServiceName,
+          serviceEntryIndex,
+          serviceEntryCount,
+        ),
+        serviceEntryIndex,
+        serviceEntryCount,
+        serviceInstanceKey,
+        status: "pending",
+        verificationMode: "",
+        comment: "",
+        attempts: [],
+      });
+    }
+  }
+
+  return normalizedServices;
 }
 
 export async function GET(req: NextRequest) {
@@ -730,9 +1062,31 @@ export async function GET(req: NextRequest) {
       price: service.price,
       currency: service.currency,
     }));
+    const candidateFormResponses = (item.candidateFormResponses ?? []).map((serviceResponse) => ({
+      serviceId: String(serviceResponse.serviceId),
+      serviceName: serviceResponse.serviceName,
+      serviceEntryCount:
+        typeof serviceResponse.serviceEntryCount === "number" &&
+        Number.isFinite(serviceResponse.serviceEntryCount) &&
+        serviceResponse.serviceEntryCount > 0
+          ? Math.floor(serviceResponse.serviceEntryCount)
+          : 1,
+      answers: (serviceResponse.answers ?? []).map((answer) => ({
+        question: answer.question,
+        fieldType: answer.fieldType,
+        required: Boolean(answer.required),
+        repeatable: Boolean(answer.repeatable),
+        value: answer.value,
+        fileName: answer.fileName ?? "",
+        fileMimeType: answer.fileMimeType ?? "",
+        fileSize: answer.fileSize ?? null,
+        fileData: answer.fileData ?? "",
+      })),
+    }));
     const serviceVerifications = normalizeServiceVerifications(
       selectedServices,
       (item.serviceVerifications ?? []) as ServiceVerificationLike[],
+      candidateFormResponses as CandidateFormResponseLike[],
     );
 
     return {
@@ -753,27 +1107,7 @@ export async function GET(req: NextRequest) {
       reportData: item.reportData ?? null,
       reverificationAppeal: item.reverificationAppeal ?? null,
       invoiceSnapshot: item.invoiceSnapshot ?? null,
-      candidateFormResponses: (item.candidateFormResponses ?? []).map((serviceResponse) => ({
-        serviceId: String(serviceResponse.serviceId),
-        serviceName: serviceResponse.serviceName,
-        serviceEntryCount:
-          typeof serviceResponse.serviceEntryCount === "number" &&
-          Number.isFinite(serviceResponse.serviceEntryCount) &&
-          serviceResponse.serviceEntryCount > 0
-            ? Math.floor(serviceResponse.serviceEntryCount)
-            : 1,
-        answers: (serviceResponse.answers ?? []).map((answer) => ({
-          question: answer.question,
-          fieldType: answer.fieldType,
-          required: Boolean(answer.required),
-          repeatable: Boolean(answer.repeatable),
-          value: answer.value,
-          fileName: answer.fileName ?? "",
-          fileMimeType: answer.fileMimeType ?? "",
-          fileSize: answer.fileSize ?? null,
-          fileData: answer.fileData ?? "",
-        })),
-      })),
+      candidateFormResponses,
       createdAt: item.createdAt,
       createdByName: creator?.name ?? "Unknown",
       customerName: customer?.name ?? "Unknown",
@@ -880,7 +1214,7 @@ export async function PATCH(req: NextRequest) {
     const deletePayload = parsed.data;
     const requestDoc = await VerificationRequest.findById(deletePayload.requestId)
       .select(
-        "candidateFormStatus status selectedServices serviceVerifications reportData reportMetadata invoiceSnapshot",
+        "candidateFormStatus status selectedServices serviceVerifications candidateFormResponses reportData reportMetadata invoiceSnapshot",
       )
       .lean();
 
@@ -908,10 +1242,17 @@ export async function PATCH(req: NextRequest) {
     const normalizedServiceVerifications = normalizeServiceVerifications(
       (requestDoc.selectedServices ?? []) as SelectedServiceLike[],
       (requestDoc.serviceVerifications ?? []) as ServiceVerificationLike[],
+      (requestDoc.candidateFormResponses ?? []) as CandidateFormResponseLike[],
+    );
+
+    const targetServiceEntryIndex = normalizeServiceEntryIndex(
+      deletePayload.serviceEntryIndex,
     );
 
     const targetIndex = normalizedServiceVerifications.findIndex(
-      (service) => service.serviceId === deletePayload.serviceId,
+      (service) =>
+        service.serviceId === deletePayload.serviceId &&
+        service.serviceEntryIndex === targetServiceEntryIndex,
     );
     if (targetIndex === -1) {
       return NextResponse.json(
@@ -1219,7 +1560,7 @@ export async function PATCH(req: NextRequest) {
 
   const requestDoc = await VerificationRequest.findById(verifyPayload.requestId)
     .select(
-      "candidateFormStatus status selectedServices serviceVerifications reportData reportMetadata invoiceSnapshot",
+      "candidateFormStatus status selectedServices serviceVerifications candidateFormResponses reportData reportMetadata invoiceSnapshot",
     )
     .lean();
 
@@ -1247,10 +1588,17 @@ export async function PATCH(req: NextRequest) {
   const normalizedServiceVerifications = normalizeServiceVerifications(
     (requestDoc.selectedServices ?? []) as SelectedServiceLike[],
     (requestDoc.serviceVerifications ?? []) as ServiceVerificationLike[],
+    (requestDoc.candidateFormResponses ?? []) as CandidateFormResponseLike[],
+  );
+
+  const targetServiceEntryIndex = normalizeServiceEntryIndex(
+    verifyPayload.serviceEntryIndex,
   );
 
   const targetIndex = normalizedServiceVerifications.findIndex(
-    (service) => service.serviceId === verifyPayload.serviceId,
+    (service) =>
+      service.serviceId === verifyPayload.serviceId &&
+      service.serviceEntryIndex === targetServiceEntryIndex,
   );
   if (targetIndex === -1) {
     return NextResponse.json(

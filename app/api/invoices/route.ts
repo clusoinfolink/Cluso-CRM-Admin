@@ -200,8 +200,8 @@ type ServiceUsageSummary = {
   serviceId: string;
   serviceName: string;
   usageCount: number;
-  fallbackPrice: number;
-  fallbackCurrency: InvoiceLineItem["currency"];
+  price: number;
+  currency: InvoiceLineItem["currency"];
 };
 
 type MonthlySummaryRow = {
@@ -465,11 +465,14 @@ function buildMonthlySummaryRows(
     }
 
     const requestStatus = normalizeWhitespace(asString(request.status)) || "pending";
-    const rawSelectedServices = normalizeServiceSelections(requestRecord.selectedServices);
-    const collapsedBillingServices = collapsePackageBillingServices(
-      rawSelectedServices,
-      packageRates,
-    );
+    const { selectedServices: rawSelectedServices, usesInvoiceSnapshot } =
+      getRequestBillingServiceSelections(requestRecord);
+    const collapsedBillingServices = usesInvoiceSnapshot
+      ? {
+          billingServices: rawSelectedServices,
+          selectedPackageServiceIds: new Set<string>(),
+        }
+      : collapsePackageBillingServices(rawSelectedServices, packageRates);
     const selectedServices = collapsedBillingServices.billingServices;
     const selectedPackageServiceIds =
       collapsedBillingServices.selectedPackageServiceIds;
@@ -1162,21 +1165,9 @@ function resolveServiceUsageCount(
 }
 
 function buildMonthlyInvoiceLineItems(
-  latestRates: InvoiceLineItem[],
   monthlyRequests: Array<Record<string, unknown>>,
   packageRates: PackageRateSelection[] = [],
 ): InvoiceLineItem[] {
-  const ratesById = new Map<string, InvoiceLineItem>();
-  const ratesByName = new Map<string, InvoiceLineItem>();
-
-  for (const rate of latestRates) {
-    ratesById.set(rate.serviceId, rate);
-    const byNameKey = rate.serviceName.toLowerCase();
-    if (!ratesByName.has(byNameKey)) {
-      ratesByName.set(byNameKey, rate);
-    }
-  }
-
   const usageByService = new Map<string, ServiceUsageSummary>();
   const extraChargesByService = new Map<
     string,
@@ -1190,11 +1181,14 @@ function buildMonthlyInvoiceLineItems(
 
   for (const request of monthlyRequests) {
     const requestRecord = asRecord(request);
-    const rawSelectedServices = normalizeServiceSelections(requestRecord.selectedServices);
-    const collapsedBillingServices = collapsePackageBillingServices(
-      rawSelectedServices,
-      packageRates,
-    );
+    const { selectedServices: rawSelectedServices, usesInvoiceSnapshot } =
+      getRequestBillingServiceSelections(requestRecord);
+    const collapsedBillingServices = usesInvoiceSnapshot
+      ? {
+          billingServices: rawSelectedServices,
+          selectedPackageServiceIds: new Set<string>(),
+        }
+      : collapsePackageBillingServices(rawSelectedServices, packageRates);
     const selectedServices = collapsedBillingServices.billingServices;
     const selectedPackageServiceIds =
       collapsedBillingServices.selectedPackageServiceIds;
@@ -1220,9 +1214,17 @@ function buildMonthlyInvoiceLineItems(
     }
 
     for (const service of selectedServices) {
-      const key = service.serviceId || service.serviceName.toLowerCase();
-      const existing = usageByService.get(key);
       const normalizedServiceId = normalizeWhitespace(service.serviceId);
+      const normalizedServiceName = normalizeWhitespace(service.serviceName);
+      const normalizedServiceNameKey = normalizedServiceName.toLowerCase();
+      const currencyRaw = normalizeWhitespace((service.currency || "INR") as string).toUpperCase();
+      const currency = SUPPORTED_CURRENCY_SET.has(currencyRaw)
+        ? (currencyRaw as InvoiceLineItem["currency"])
+        : "INR";
+      const price = roundMoney(service.price);
+      const keyBase = normalizedServiceId || normalizedServiceNameKey || "service";
+      const key = `${keyBase}::${currency}::${price}`;
+      const existing = usageByService.get(key);
       const usageCount =
         normalizedServiceId && selectedPackageServiceIds.has(normalizedServiceId)
           ? 1
@@ -1235,10 +1237,10 @@ function buildMonthlyInvoiceLineItems(
 
       usageByService.set(key, {
         serviceId: service.serviceId,
-        serviceName: service.serviceName,
+        serviceName: normalizedServiceName || "Service Not Available",
         usageCount,
-        fallbackPrice: service.price,
-        fallbackCurrency: service.currency,
+        price,
+        currency,
       });
     }
 
@@ -1313,13 +1315,9 @@ function buildMonthlyInvoiceLineItems(
 
   const usageLineItems = [...usageByService.values()]
     .map((usage) => {
-      const latestById = ratesById.get(usage.serviceId);
-      const latestByName = ratesByName.get(usage.serviceName.toLowerCase());
-      const latest = latestById ?? latestByName;
-
-      const price = roundMoney(latest ? latest.price : usage.fallbackPrice);
-      const currency = latest ? latest.currency : usage.fallbackCurrency;
-      const serviceName = latest ? latest.serviceName : usage.serviceName;
+      const price = roundMoney(usage.price);
+      const currency = usage.currency;
+      const serviceName = usage.serviceName;
       const lineTotal = roundMoney(price * usage.usageCount);
 
       return {
@@ -1335,17 +1333,10 @@ function buildMonthlyInvoiceLineItems(
 
   const extraChargeLineItems = [...extraChargesByService.values()]
     .map((extraCharge) => {
-      const latestById = extraCharge.serviceId
-        ? ratesById.get(extraCharge.serviceId)
-        : undefined;
-      const latestByName = ratesByName.get(extraCharge.serviceName.toLowerCase());
-      const latest = latestById ?? latestByName;
-
       const resolvedServiceName =
-        normalizeWhitespace(latest?.serviceName ?? extraCharge.serviceName) ||
-        "Service Not Available";
+        normalizeWhitespace(extraCharge.serviceName) || "Service Not Available";
       const currencyRaw = normalizeWhitespace(
-        (latest?.currency ?? extraCharge.fallbackCurrency ?? "INR") as string,
+        (extraCharge.fallbackCurrency ?? "INR") as string,
       ).toUpperCase();
       const currency = SUPPORTED_CURRENCY_SET.has(currencyRaw)
         ? (currencyRaw as InvoiceLineItem["currency"])
@@ -1673,7 +1664,7 @@ export async function GET(req: NextRequest) {
         buildBillableRequestFilter(companyId, monthStart, monthEnd),
       )
         .sort({ createdAt: 1 })
-        .select("candidateName status createdBy createdByDelegate selectedServices serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.verifierName serviceVerifications.attempts.managerName serviceVerifications.attempts.attemptedAt serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount createdAt reportMetadata.customerSharedAt reportMetadata.generatedAt")
+        .select("candidateName status createdBy createdByDelegate selectedServices invoiceSnapshot serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.verifierName serviceVerifications.attempts.managerName serviceVerifications.attempts.attemptedAt serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount createdAt reportMetadata.customerSharedAt reportMetadata.generatedAt")
         .populate({ path: "createdBy", select: "name" })
         .populate({ path: "createdByDelegate", select: "name" })
         .lean(),
@@ -1704,12 +1695,9 @@ export async function GET(req: NextRequest) {
     const gstRate = monthInvoice
       ? normalizeGstRate(monthInvoice.gstRate, 18)
       : enterpriseGstDefaults.gstRate;
-    const companyCurrentRates = normalizeInvoiceLineItems(
-      asRecord(customer).selectedServices,
-    );
     const invoiceLineItems = monthInvoice
       ? normalizeInvoiceLineItems((monthInvoice as Record<string, unknown>).lineItems)
-      : companyCurrentRates;
+      : [];
 
     const { rows, totalsByCurrency } = buildMonthlySummaryRows(
       requests as unknown as Array<Record<string, unknown>>,
@@ -1791,25 +1779,13 @@ export async function POST(req: NextRequest) {
     normalizeBillingMonth(parsed.data.billingMonth) || getCurrentBillingMonth();
   const { monthStart, monthEnd } = getBillingMonthRange(billingMonth);
 
-  const latestRates = normalizeInvoiceLineItems(customer.selectedServices ?? []);
-  if (latestRates.length === 0) {
-    return NextResponse.json(
-      {
-        error:
-          "No active company service rates are available. Assign services and latest rates before generating invoices.",
-      },
-      { status: 400 },
-    );
-  }
-
   const monthlyRequests = await VerificationRequest.find(
     buildBillableRequestFilter(parsed.data.companyId, monthStart, monthEnd),
   )
-    .select("selectedServices serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount")
+    .select("selectedServices invoiceSnapshot serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount")
     .lean();
 
   const lineItems = buildMonthlyInvoiceLineItems(
-    latestRates,
     monthlyRequests as unknown as Array<Record<string, unknown>>,
     packageRates,
   );
@@ -2191,4 +2167,21 @@ export async function PATCH(req: NextRequest) {
       invoiceDoc.toObject() as unknown as Record<string, unknown>,
     ),
   });
+}
+
+function getRequestBillingServiceSelections(request: Record<string, unknown>) {
+  const snapshot = asRecord(request.invoiceSnapshot);
+  const snapshotServices = normalizeServiceSelections(snapshot.items);
+
+  if (snapshotServices.length > 0) {
+    return {
+      selectedServices: snapshotServices,
+      usesInvoiceSnapshot: true,
+    };
+  }
+
+  return {
+    selectedServices: normalizeServiceSelections(request.selectedServices),
+    usesInvoiceSnapshot: false,
+  };
 }

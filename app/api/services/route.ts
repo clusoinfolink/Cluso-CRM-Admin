@@ -16,6 +16,9 @@ const formFieldTypeSchema = z.enum([
   "composite",
 ]);
 
+const PREVIEW_FIELD_WIDTHS = ["full", "half", "third"] as const;
+type PreviewFieldWidth = (typeof PREVIEW_FIELD_WIDTHS)[number];
+
 const SUPPORTED_QUESTION_ICON_KEYS = [
   "none",
   "diary",
@@ -109,6 +112,25 @@ function normalizePersonalDetailsSourceFieldKey(rawFieldKey: unknown) {
   return String(rawFieldKey ?? "").trim().slice(0, 120);
 }
 
+function normalizePreviewWidth(
+  rawPreviewWidth: unknown,
+  fieldType: unknown,
+): PreviewFieldWidth {
+  if (
+    rawPreviewWidth === "full" ||
+    rawPreviewWidth === "half" ||
+    rawPreviewWidth === "third"
+  ) {
+    return rawPreviewWidth;
+  }
+
+  if (fieldType === "file" || fieldType === "long_text") {
+    return "full";
+  }
+
+  return "half";
+}
+
 const nullableLengthSchema = z.preprocess(
   (value) => {
     if (value === "" || value === null || value === undefined) {
@@ -166,6 +188,7 @@ const formFieldSchema = z
       .max(120)
       .optional()
       .default(""),
+    previewWidth: z.enum(PREVIEW_FIELD_WIDTHS).optional(),
   })
   .superRefine((field, ctx) => {
     const supportsLengthConstraints =
@@ -256,6 +279,7 @@ function buildServiceCountrySystemField(): ParsedFormField {
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    previewWidth: "half",
   };
 }
 
@@ -263,15 +287,59 @@ function ensureServiceCountrySystemField(
   fields: ParsedFormField[],
   includeSystemField: boolean,
 ) {
-  const fieldsWithoutSystemEntry = fields.filter(
-    (field) => (field.fieldKey?.trim() ?? "") !== SERVICE_COUNTRY_FIELD_KEY,
-  );
+  const nextFields: ParsedFormField[] = [];
+  let hasSystemField = false;
 
-  if (!includeSystemField) {
-    return fieldsWithoutSystemEntry;
+  for (const field of fields) {
+    const isSystemField =
+      (field.fieldKey?.trim() ?? "") === SERVICE_COUNTRY_FIELD_KEY;
+
+    if (!isSystemField) {
+      nextFields.push(field);
+      continue;
+    }
+
+    if (!includeSystemField || hasSystemField) {
+      continue;
+    }
+
+    const dropdownOptions = [
+      ...new Set(
+        (field.dropdownOptions ?? [])
+          .map((option) => option.trim())
+          .filter(Boolean),
+      ),
+    ];
+
+    nextFields.push({
+      fieldKey: SERVICE_COUNTRY_FIELD_KEY,
+      question: SERVICE_COUNTRY_FIELD_QUESTION,
+      iconKey: "global",
+      fieldType: "dropdown",
+      subFields: [],
+      dropdownOptions:
+        dropdownOptions.length > 0
+          ? dropdownOptions
+          : [...SERVICE_COUNTRY_FIELD_OPTIONS],
+      required: true,
+      repeatable: false,
+      minLength: null,
+      maxLength: null,
+      forceUppercase: false,
+      allowNotApplicable: false,
+      notApplicableText: "",
+      copyFromPersonalDetailsFieldKey: "",
+      previewWidth: normalizePreviewWidth(field.previewWidth, "dropdown"),
+    });
+
+    hasSystemField = true;
   }
 
-  return [...fieldsWithoutSystemEntry, buildServiceCountrySystemField()];
+  if (includeSystemField && !hasSystemField) {
+    nextFields.push(buildServiceCountrySystemField());
+  }
+
+  return nextFields;
 }
 
 function parseStoredFormFields(rawFields: unknown): ParsedFormField[] {
@@ -311,6 +379,7 @@ function normalizeFormField(field: ParsedFormField) {
       : [],
     required: Boolean(sf.required)
   })) : [];
+  const previewWidth = normalizePreviewWidth(field.previewWidth, field.fieldType);
 
   return {
     fieldKey: field.fieldKey?.trim() || createFieldKey(),
@@ -340,6 +409,7 @@ function normalizeFormField(field: ParsedFormField) {
       field.fieldType === "file" || field.fieldType === "composite"
         ? ""
         : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
+    previewWidth,
   };
 }
 
@@ -364,6 +434,7 @@ function serializeFormField(field: {
   allowNotApplicable?: boolean;
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: unknown;
+  previewWidth?: unknown;
 }) {
   const supportsLengthConstraints =
     field.fieldType === "text" ||
@@ -387,6 +458,7 @@ function serializeFormField(field: {
         required: Boolean(sf.required)
     }))
     : [];
+  const previewWidth = normalizePreviewWidth(field.previewWidth, field.fieldType);
 
   return {
     fieldKey: field.fieldKey?.trim() || createFieldKey(),
@@ -414,7 +486,223 @@ function serializeFormField(field: {
       field.fieldType === "file" || field.fieldType === "composite"
         ? ""
         : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
+    previewWidth,
   };
+}
+
+type CandidateLayoutSnapshotFieldType =
+  | "text"
+  | "long_text"
+  | "number"
+  | "file"
+  | "date"
+  | "dropdown";
+
+type CandidateLayoutSnapshotField = {
+  fieldKey: string;
+  question: string;
+  iconKey: QuestionIconKey;
+  fieldType: CandidateLayoutSnapshotFieldType;
+  dropdownOptions: string[];
+  required: boolean;
+  repeatable: boolean;
+  minLength: number | null;
+  maxLength: number | null;
+  forceUppercase: boolean;
+  allowNotApplicable: boolean;
+  notApplicableText: string;
+  copyFromPersonalDetailsFieldKey: string;
+  previewWidth: PreviewFieldWidth;
+};
+
+function normalizeCandidateLayoutFieldType(
+  rawFieldType: unknown,
+): CandidateLayoutSnapshotFieldType {
+  if (
+    rawFieldType === "text" ||
+    rawFieldType === "long_text" ||
+    rawFieldType === "number" ||
+    rawFieldType === "file" ||
+    rawFieldType === "date" ||
+    rawFieldType === "dropdown"
+  ) {
+    return rawFieldType;
+  }
+
+  return "text";
+}
+
+function supportsCandidateLayoutLengthConstraints(
+  fieldType: CandidateLayoutSnapshotFieldType,
+) {
+  return fieldType === "text" || fieldType === "long_text" || fieldType === "number";
+}
+
+function supportsCandidateLayoutUppercaseConstraint(
+  fieldType: CandidateLayoutSnapshotFieldType,
+) {
+  return fieldType === "text" || fieldType === "long_text";
+}
+
+function buildCandidateLayoutSystemCountryField(): CandidateLayoutSnapshotField {
+  return {
+    fieldKey: SERVICE_COUNTRY_FIELD_KEY,
+    question: SERVICE_COUNTRY_FIELD_QUESTION,
+    iconKey: "global",
+    fieldType: "dropdown",
+    dropdownOptions: [...SERVICE_COUNTRY_FIELD_OPTIONS],
+    required: true,
+    repeatable: false,
+    minLength: null,
+    maxLength: null,
+    forceUppercase: false,
+    allowNotApplicable: false,
+    notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
+    previewWidth: "half",
+  };
+}
+
+function ensureCandidateLayoutSnapshotSystemField(
+  fields: CandidateLayoutSnapshotField[],
+  includeSystemField: boolean,
+) {
+  const nextFields: CandidateLayoutSnapshotField[] = [];
+  let hasSystemField = false;
+
+  for (const field of fields) {
+    const isSystemField =
+      (field.fieldKey?.trim() ?? "") === SERVICE_COUNTRY_FIELD_KEY;
+
+    if (!isSystemField) {
+      nextFields.push(field);
+      continue;
+    }
+
+    if (!includeSystemField || hasSystemField) {
+      continue;
+    }
+
+    nextFields.push({
+      ...field,
+      fieldKey: SERVICE_COUNTRY_FIELD_KEY,
+      question: SERVICE_COUNTRY_FIELD_QUESTION,
+      iconKey: "global",
+      fieldType: "dropdown",
+      required: true,
+      repeatable: false,
+      minLength: null,
+      maxLength: null,
+      forceUppercase: false,
+      allowNotApplicable: false,
+      notApplicableText: "",
+      copyFromPersonalDetailsFieldKey: "",
+      previewWidth: normalizePreviewWidth(field.previewWidth, "dropdown"),
+      dropdownOptions:
+        field.dropdownOptions.length > 0
+          ? field.dropdownOptions
+          : [...SERVICE_COUNTRY_FIELD_OPTIONS],
+    });
+
+    hasSystemField = true;
+  }
+
+  if (includeSystemField && !hasSystemField) {
+    nextFields.push(buildCandidateLayoutSystemCountryField());
+  }
+
+  return nextFields;
+}
+
+function buildCandidateLayoutSnapshotFromFormFields(
+  fields: Array<ReturnType<typeof normalizeFormField>>,
+  includeSystemField: boolean,
+) {
+  const snapshotFields: CandidateLayoutSnapshotField[] = [];
+
+  for (const field of fields) {
+    const baseQuestion = field.question.trim();
+    const baseFieldKey = field.fieldKey?.trim() || createFieldKey();
+    const iconKey = normalizeQuestionIconKey(field.iconKey);
+
+    if (field.fieldType === "composite") {
+      for (const [subIndex, subField] of field.subFields.entries()) {
+        const subQuestion = String(subField.question ?? "").trim();
+        if (!subQuestion) {
+          continue;
+        }
+
+        const subFieldType = normalizeCandidateLayoutFieldType(subField.fieldType);
+        const subFieldKey =
+          subField.fieldKey?.trim() || `${baseFieldKey}__sub_${subIndex + 1}`;
+        const previewWidth = normalizePreviewWidth(field.previewWidth, subFieldType);
+
+        snapshotFields.push({
+          fieldKey: subFieldKey,
+          question: baseQuestion ? `${baseQuestion} - ${subQuestion}` : subQuestion,
+          iconKey,
+          fieldType: subFieldType,
+          dropdownOptions:
+            subFieldType === "dropdown"
+              ? [...new Set((subField.dropdownOptions ?? []).map((option) => option.trim()).filter(Boolean))]
+              : [],
+          required: Boolean(field.required) || Boolean(subField.required),
+          repeatable: false,
+          minLength: supportsCandidateLayoutLengthConstraints(subFieldType)
+            ? field.minLength
+            : null,
+          maxLength: supportsCandidateLayoutLengthConstraints(subFieldType)
+            ? field.maxLength
+            : null,
+          forceUppercase:
+            supportsCandidateLayoutUppercaseConstraint(subFieldType) &&
+            Boolean(field.forceUppercase),
+          allowNotApplicable: Boolean(field.allowNotApplicable),
+          notApplicableText: field.notApplicableText || "",
+          copyFromPersonalDetailsFieldKey: "",
+          previewWidth,
+        });
+      }
+
+      continue;
+    }
+
+    const fieldType = normalizeCandidateLayoutFieldType(field.fieldType);
+    const previewWidth = normalizePreviewWidth(field.previewWidth, fieldType);
+
+    snapshotFields.push({
+      fieldKey: baseFieldKey,
+      question: baseQuestion,
+      iconKey,
+      fieldType,
+      dropdownOptions:
+        fieldType === "dropdown"
+          ? [...new Set((field.dropdownOptions ?? []).map((option) => option.trim()).filter(Boolean))]
+          : [],
+      required: Boolean(field.required),
+      repeatable: fieldType === "file" ? false : Boolean(field.repeatable),
+      minLength: supportsCandidateLayoutLengthConstraints(fieldType)
+        ? field.minLength
+        : null,
+      maxLength: supportsCandidateLayoutLengthConstraints(fieldType)
+        ? field.maxLength
+        : null,
+      forceUppercase:
+        supportsCandidateLayoutUppercaseConstraint(fieldType) &&
+        Boolean(field.forceUppercase),
+      allowNotApplicable: Boolean(field.allowNotApplicable),
+      notApplicableText: field.notApplicableText || "",
+      copyFromPersonalDetailsFieldKey:
+        fieldType === "file"
+          ? ""
+          : normalizePersonalDetailsSourceFieldKey(
+              field.copyFromPersonalDetailsFieldKey,
+            ),
+      previewWidth,
+    });
+  }
+
+  return ensureCandidateLayoutSnapshotSystemField(snapshotFields, includeSystemField);
 }
 
 const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
@@ -692,6 +980,7 @@ const updateServiceFormSchema = z.object({
   serviceId: z.string().min(1),
   allowMultipleEntries: z.boolean().optional(),
   multipleEntriesLabel: z.string().optional().nullable(),
+  saveCandidateLayoutSnapshot: z.boolean().optional().default(true),
   formFields: z.array(formFieldSchema),
 });
 
@@ -748,6 +1037,7 @@ export async function GET(req: NextRequest) {
               allowNotApplicable: field.allowNotApplicable,
               notApplicableText: field.notApplicableText,
               copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
+              previewWidth: field.previewWidth,
             }),
           ),
         };
@@ -757,101 +1047,225 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await getAdminAuthFromRequest(req);
-  if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  try {
+    const auth = await getAdminAuthFromRequest(req);
+    if (!auth || (auth.role !== "admin" && auth.role !== "superadmin")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  const body = await req.json();
-  const parsed = createServiceSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid input." }, { status: 400 });
-  }
+    const body = await req.json();
+    const parsed = createServiceSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid input." }, { status: 400 });
+    }
 
-  await connectMongo();
-  await ensureDefaultPersonalDetailsService();
+    await connectMongo();
+    await ensureDefaultPersonalDetailsService();
 
-  const normalizedName = parsed.data.name.trim();
-  if (!normalizedName) {
-    return NextResponse.json({ error: "Service name is required." }, { status: 400 });
-  }
+    const normalizedName = parsed.data.name.trim();
+    if (!normalizedName) {
+      return NextResponse.json({ error: "Service name is required." }, { status: 400 });
+    }
 
-  const isPackage = Boolean(parsed.data.isPackage);
-  const includedServiceIds = [...new Set(parsed.data.includedServiceIds.map((id) => id.trim()).filter(Boolean))];
-  const normalizedFormFields = ensureServiceCountrySystemField(
-    parsed.data.formFields,
-    !isPackage,
-  ).map((field) => normalizeFormField(field));
+    const isPackage = Boolean(parsed.data.isPackage);
+    const includedServiceIds = [...new Set(parsed.data.includedServiceIds.map((id) => id.trim()).filter(Boolean))];
+    const normalizedFormFields = ensureServiceCountrySystemField(
+      parsed.data.formFields,
+      !isPackage,
+    ).map((field) => normalizeFormField(field));
 
-  if (isPackage && includedServiceIds.length < 2) {
+    if (isPackage && includedServiceIds.length < 2) {
+      return NextResponse.json(
+        { error: "Package deal must include at least two services." },
+        { status: 400 },
+      );
+    }
+
+    const existing = await Service.findOne({ name: normalizedName })
+      .collation({ locale: "en", strength: 2 })
+      .lean();
+    if (existing) {
+      return NextResponse.json({ error: "Service already exists." }, { status: 409 });
+    }
+
+    if (isPackage && includedServiceIds.length > 0) {
+      const includedServices = await Service.find({ _id: { $in: includedServiceIds } })
+        .select("_id isPackage hiddenFromCustomerPortal isDefaultPersonalDetails")
+        .lean();
+
+      if (includedServices.length !== includedServiceIds.length) {
+        return NextResponse.json(
+          { error: "One or more package services are invalid." },
+          { status: 400 },
+        );
+      }
+
+      if (
+        includedServices.some(
+          (service) => Boolean(service.isPackage) || isHiddenService(service),
+        )
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Package deals can only include regular services that are visible on the customer portal.",
+          },
+          { status: 400 },
+        );
+      }
+    }
+
+    const service = await Service.create({
+      name: normalizedName,
+      description: parsed.data.description?.trim() ?? "",
+      defaultPrice: parsed.data.defaultPrice,
+      defaultCurrency: parsed.data.defaultCurrency,
+      isPackage,
+      allowMultipleEntries: parsed.data.allowMultipleEntries,
+        multipleEntriesLabel: parsed.data.multipleEntriesLabel ?? undefined,
+      includedServiceIds: isPackage ? includedServiceIds : [],
+      formFields: normalizedFormFields,
+      candidateLayoutSnapshot: buildCandidateLayoutSnapshotFromFormFields(
+        normalizedFormFields,
+        !isPackage,
+      ),
+    });
+
     return NextResponse.json(
-      { error: "Package deal must include at least two services." },
-      { status: 400 },
+      {
+        message: "Service added.",
+        item: {
+          id: String(service._id),
+          name: service.name,
+          description: service.description ?? "",
+          defaultPrice: typeof service.defaultPrice === "number" ? service.defaultPrice : null,
+          defaultCurrency: service.defaultCurrency ?? "INR",
+          isPackage: Boolean(service.isPackage),
+          allowMultipleEntries: Boolean(service.allowMultipleEntries),
+            multipleEntriesLabel: service.multipleEntriesLabel ?? undefined,
+          hiddenFromCustomerPortal: Boolean(service.hiddenFromCustomerPortal),
+          isDefaultPersonalDetails: Boolean(service.isDefaultPersonalDetails),
+          includedServiceIds: (service.includedServiceIds ?? []).map((id) => String(id)),
+          formFields: (service.formFields ?? []).map((field) =>
+            serializeFormField({
+              fieldKey: field.fieldKey,
+              question: field.question,
+              iconKey: field.iconKey,
+              fieldType: field.fieldType,
+              subFields: field.subFields,
+              dropdownOptions: field.dropdownOptions,
+              required: field.required,
+              repeatable: field.repeatable,
+              minLength: field.minLength,
+              maxLength: field.maxLength,
+              forceUppercase: field.forceUppercase,
+              allowNotApplicable: field.allowNotApplicable,
+              notApplicableText: field.notApplicableText,
+              copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
+              previewWidth: field.previewWidth,
+            }),
+          ),
+        },
+      },
+      { status: 201 },
+    );
+  } catch (error) {
+    console.error("POST /api/services failed", error);
+    return NextResponse.json(
+      { error: "Could not create service." },
+      { status: 500 },
     );
   }
+}
 
-  const existing = await Service.findOne({ name: normalizedName })
-    .collation({ locale: "en", strength: 2 })
-    .lean();
-  if (existing) {
-    return NextResponse.json({ error: "Service already exists." }, { status: 409 });
-  }
+export async function PATCH(req: NextRequest) {
+  try {
+    const auth = await getAdminAuthFromRequest(req);
+    if (
+      !auth ||
+      (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
+    ) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  if (isPackage && includedServiceIds.length > 0) {
-    const includedServices = await Service.find({ _id: { $in: includedServiceIds } })
-      .select("_id isPackage hiddenFromCustomerPortal isDefaultPersonalDetails")
+    const body = await req.json();
+    const parsed = updateServiceFormSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid input." }, { status: 400 });
+    }
+
+    await connectMongo();
+    await ensureDefaultPersonalDetailsService();
+
+    const existingService = await Service.findById(parsed.data.serviceId)
+      .select("isPackage hiddenFromCustomerPortal isDefaultPersonalDetails")
       .lean();
 
-    if (includedServices.length !== includedServiceIds.length) {
-      return NextResponse.json(
-        { error: "One or more package services are invalid." },
-        { status: 400 },
-      );
+    if (!existingService) {
+      return NextResponse.json({ error: "Service not found." }, { status: 404 });
     }
 
-    if (
-      includedServices.some(
-        (service) => Boolean(service.isPackage) || isHiddenService(service),
-      )
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "Package deals can only include regular services that are visible on the customer portal.",
-        },
-        { status: 400 },
-      );
+    const includeSystemCountryField =
+      !Boolean(existingService.isPackage) && !isHiddenService(existingService);
+    const normalizedFormFields = ensureServiceCountrySystemField(
+      parsed.data.formFields,
+      includeSystemCountryField,
+    ).map((field) => normalizeFormField(field));
+    const shouldSaveCandidateLayoutSnapshot =
+      parsed.data.saveCandidateLayoutSnapshot ?? true;
+
+    const updatePayload: {
+      formFields: ReturnType<typeof normalizeFormField>[];
+      candidateLayoutSnapshot?: CandidateLayoutSnapshotField[];
+      allowMultipleEntries?: boolean;
+      multipleEntriesLabel?: string | null;
+    } = {
+      formFields: normalizedFormFields,
+    };
+
+    if (shouldSaveCandidateLayoutSnapshot) {
+      updatePayload.candidateLayoutSnapshot =
+        buildCandidateLayoutSnapshotFromFormFields(
+          normalizedFormFields,
+          includeSystemCountryField,
+        );
+    } else {
+      updatePayload.candidateLayoutSnapshot = [];
     }
-  }
 
-  const service = await Service.create({
-    name: normalizedName,
-    description: parsed.data.description?.trim() ?? "",
-    defaultPrice: parsed.data.defaultPrice,
-    defaultCurrency: parsed.data.defaultCurrency,
-    isPackage,
-    allowMultipleEntries: parsed.data.allowMultipleEntries,
-      multipleEntriesLabel: parsed.data.multipleEntriesLabel ?? undefined,
-    includedServiceIds: isPackage ? includedServiceIds : [],
-    formFields: normalizedFormFields,
-  });
+    if (typeof parsed.data.allowMultipleEntries === "boolean") {
+      updatePayload.allowMultipleEntries = parsed.data.allowMultipleEntries;
+    }
 
-  return NextResponse.json(
-    {
-      message: "Service added.",
+    if ("multipleEntriesLabel" in parsed.data) {
+      updatePayload.multipleEntriesLabel = parsed.data.multipleEntriesLabel;
+    }
+
+    const updated = await Service.findByIdAndUpdate(
+      parsed.data.serviceId,
+      updatePayload,
+      { new: true },
+    ).lean();
+
+    if (!updated) {
+      return NextResponse.json({ error: "Service not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      message: "Service form updated.",
       item: {
-        id: String(service._id),
-        name: service.name,
-        description: service.description ?? "",
-        defaultPrice: typeof service.defaultPrice === "number" ? service.defaultPrice : null,
-        defaultCurrency: service.defaultCurrency ?? "INR",
-        isPackage: Boolean(service.isPackage),
-        allowMultipleEntries: Boolean(service.allowMultipleEntries),
-          multipleEntriesLabel: service.multipleEntriesLabel ?? undefined,
-        hiddenFromCustomerPortal: Boolean(service.hiddenFromCustomerPortal),
-        isDefaultPersonalDetails: Boolean(service.isDefaultPersonalDetails),
-        includedServiceIds: (service.includedServiceIds ?? []).map((id) => String(id)),
-        formFields: (service.formFields ?? []).map((field) =>
+        id: String(updated._id),
+        name: updated.name,
+        description: updated.description ?? "",
+        defaultPrice: typeof updated.defaultPrice === "number" ? updated.defaultPrice : null,
+        defaultCurrency: updated.defaultCurrency ?? "INR",
+        isPackage: Boolean(updated.isPackage),
+        allowMultipleEntries: Boolean(updated.allowMultipleEntries),
+          multipleEntriesLabel: updated.multipleEntriesLabel ?? undefined,
+        hiddenFromCustomerPortal: Boolean(updated.hiddenFromCustomerPortal),
+        isDefaultPersonalDetails: Boolean(updated.isDefaultPersonalDetails),
+        includedServiceIds: (updated.includedServiceIds ?? []).map((id) => String(id)),
+        formFields: (updated.formFields ?? []).map((field) =>
           serializeFormField({
             fieldKey: field.fieldKey,
             question: field.question,
@@ -867,107 +1281,18 @@ export async function POST(req: NextRequest) {
             allowNotApplicable: field.allowNotApplicable,
             notApplicableText: field.notApplicableText,
             copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
+            previewWidth: field.previewWidth,
           }),
         ),
       },
-    },
-    { status: 201 },
-  );
-}
-
-export async function PATCH(req: NextRequest) {
-  const auth = await getAdminAuthFromRequest(req);
-  if (
-    !auth ||
-    (auth.role !== "admin" && auth.role !== "superadmin" && auth.role !== "verifier")
-  ) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    });
+  } catch (error) {
+    console.error("PATCH /api/services failed", error);
+    return NextResponse.json(
+      { error: "Could not save service form." },
+      { status: 500 },
+    );
   }
-
-  const body = await req.json();
-  const parsed = updateServiceFormSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid input." }, { status: 400 });
-  }
-
-  await connectMongo();
-  await ensureDefaultPersonalDetailsService();
-
-  const existingService = await Service.findById(parsed.data.serviceId)
-    .select("isPackage hiddenFromCustomerPortal isDefaultPersonalDetails")
-    .lean();
-
-  if (!existingService) {
-    return NextResponse.json({ error: "Service not found." }, { status: 404 });
-  }
-
-  const includeSystemCountryField =
-    !Boolean(existingService.isPackage) && !isHiddenService(existingService);
-  const normalizedFormFields = ensureServiceCountrySystemField(
-    parsed.data.formFields,
-    includeSystemCountryField,
-  ).map((field) => normalizeFormField(field));
-
-  const updatePayload: {
-    formFields: ReturnType<typeof normalizeFormField>[];
-    allowMultipleEntries?: boolean;
-    multipleEntriesLabel?: string | null;
-  } = {
-    formFields: normalizedFormFields,
-  };
-
-  if (typeof parsed.data.allowMultipleEntries === "boolean") {
-    updatePayload.allowMultipleEntries = parsed.data.allowMultipleEntries;
-  }
-
-  if ("multipleEntriesLabel" in parsed.data) {
-    updatePayload.multipleEntriesLabel = parsed.data.multipleEntriesLabel;
-  }
-
-  const updated = await Service.findByIdAndUpdate(
-    parsed.data.serviceId,
-    updatePayload,
-    { new: true },
-  ).lean();
-
-  if (!updated) {
-    return NextResponse.json({ error: "Service not found." }, { status: 404 });
-  }
-
-  return NextResponse.json({
-    message: "Service form updated.",
-    item: {
-      id: String(updated._id),
-      name: updated.name,
-      description: updated.description ?? "",
-      defaultPrice: typeof updated.defaultPrice === "number" ? updated.defaultPrice : null,
-      defaultCurrency: updated.defaultCurrency ?? "INR",
-      isPackage: Boolean(updated.isPackage),
-      allowMultipleEntries: Boolean(updated.allowMultipleEntries),
-        multipleEntriesLabel: updated.multipleEntriesLabel ?? undefined,
-      hiddenFromCustomerPortal: Boolean(updated.hiddenFromCustomerPortal),
-      isDefaultPersonalDetails: Boolean(updated.isDefaultPersonalDetails),
-      includedServiceIds: (updated.includedServiceIds ?? []).map((id) => String(id)),
-      formFields: (updated.formFields ?? []).map((field) =>
-        serializeFormField({
-          fieldKey: field.fieldKey,
-          question: field.question,
-          iconKey: field.iconKey,
-          fieldType: field.fieldType,
-          subFields: field.subFields,
-          dropdownOptions: field.dropdownOptions,
-          required: field.required,
-          repeatable: field.repeatable,
-          minLength: field.minLength,
-          maxLength: field.maxLength,
-          forceUppercase: field.forceUppercase,
-          allowNotApplicable: field.allowNotApplicable,
-          notApplicableText: field.notApplicableText,
-          copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
-        }),
-      ),
-    },
-  });
 }
 
 export async function DELETE(req: NextRequest) {

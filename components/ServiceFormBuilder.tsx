@@ -18,6 +18,11 @@ import {
   Layers,
   Copy,
   Info,
+  Eye,
+  EyeOff,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
   House,
   NotebookPen,
   PenLine,
@@ -152,6 +157,19 @@ function normalizeQuestionIconKey(rawIconKey: unknown): ServiceQuestionIconKey {
     : DEFAULT_QUESTION_ICON;
 }
 
+async function parseJsonResponseSafely<T>(res: Response): Promise<T | null> {
+  const rawText = await res.text();
+  if (!rawText.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawText) as T;
+  } catch {
+    return null;
+  }
+}
+
 export type ServiceFormSubField = {
   fieldKey?: string;
   question: string;
@@ -175,6 +193,7 @@ export type ServiceFormField = {
   allowNotApplicable?: boolean;
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: string;
+  previewWidth?: "full" | "half" | "third";
 };
 
 export type ServiceItemForForm = {
@@ -260,7 +279,7 @@ function sanitizeSubFields(rawSubFields: unknown): ServiceFormSubField[] {
 
     nextSubFields.push({
       fieldKey: typeof subField.fieldKey === "string" ? subField.fieldKey.trim() : "",
-      question: typeof subField.question === "string" ? subField.question.trim() : "",
+      question: typeof subField.question === "string" ? subField.question : "",
       fieldType: normalizedFieldType,
       dropdownOptions:
         normalizedFieldType === "dropdown"
@@ -319,6 +338,256 @@ function isSystemServiceCountryField(field: ServiceFormField) {
   return field.fieldKey?.trim() === SYSTEM_SERVICE_COUNTRY_FIELD_KEY;
 }
 
+type CandidatePreviewField = {
+  fieldKey: string;
+  question: string;
+  iconKey: ServiceQuestionIconKey;
+  fieldType: Exclude<ServiceFormFieldType, "composite">;
+  sourceFieldIndex: number;
+  sourceFieldIdentity: string;
+  sourceFieldType: ServiceFormFieldType;
+  sourcePreviewWidth: PreviewFieldWidth;
+  isPrimaryForSource: boolean;
+  dropdownOptions: string[];
+  required: boolean;
+  repeatable: boolean;
+  minLength: number | null;
+  maxLength: number | null;
+  forceUppercase: boolean;
+  allowNotApplicable: boolean;
+  notApplicableText: string;
+  copyFromPersonalDetailsFieldKey: string;
+};
+
+type PreviewFieldWidth = "full" | "half" | "third";
+
+function normalizePreviewWidth(
+  rawPreviewWidth: unknown,
+  fieldType: ServiceFormFieldType | CandidatePreviewField["fieldType"],
+): PreviewFieldWidth {
+  if (
+    rawPreviewWidth === "full" ||
+    rawPreviewWidth === "half" ||
+    rawPreviewWidth === "third"
+  ) {
+    return rawPreviewWidth;
+  }
+
+  if (fieldType === "file" || fieldType === "long_text") {
+    return "full";
+  }
+
+  return "half";
+}
+
+function resolvePreviewSourceIdentity(field: ServiceFormField, index: number) {
+  const key = field.fieldKey?.trim();
+  if (key) {
+    return key;
+  }
+
+  const question = field.question?.trim();
+  if (question) {
+    return `q_${question.toLowerCase().replace(/\s+/g, "_")}_${index + 1}`;
+  }
+
+  return `idx_${index + 1}`;
+}
+
+function getDefaultPreviewFieldWidth(field: CandidatePreviewField): PreviewFieldWidth {
+  return normalizePreviewWidth(undefined, field.fieldType);
+}
+
+function getPreviewGridColumnSpan(width: PreviewFieldWidth) {
+  if (width === "third") {
+    return 4;
+  }
+
+  if (width === "half") {
+    return 6;
+  }
+
+  return 12;
+}
+
+function getPreviewFieldType(rawType: unknown): CandidatePreviewField["fieldType"] {
+  if (
+    rawType === "text" ||
+    rawType === "long_text" ||
+    rawType === "number" ||
+    rawType === "file" ||
+    rawType === "date" ||
+    rawType === "dropdown"
+  ) {
+    return rawType;
+  }
+
+  return "text";
+}
+
+function expandFieldsForCandidatePreview(rawFields: ServiceFormField[]) {
+  const expandedFields: CandidatePreviewField[] = [];
+
+  rawFields.forEach((field, index) => {
+    const baseQuestion = field.question?.trim() || "";
+    const baseFieldKey = field.fieldKey?.trim() || `field_${index + 1}`;
+    const sourceFieldIdentity = resolvePreviewSourceIdentity(field, index);
+    const iconKey = normalizeQuestionIconKey(field.iconKey);
+    const required = Boolean(field.required);
+    const minLength =
+      typeof field.minLength === "number" && Number.isFinite(field.minLength)
+        ? field.minLength
+        : null;
+    const maxLength =
+      typeof field.maxLength === "number" && Number.isFinite(field.maxLength)
+        ? field.maxLength
+        : null;
+    const forceUppercase = Boolean(field.forceUppercase);
+    const allowNotApplicable = Boolean(field.allowNotApplicable);
+    const notApplicableText = field.notApplicableText?.trim() || "Not Applicable";
+    const sourcePreviewWidth = normalizePreviewWidth(field.previewWidth, field.fieldType);
+    let hasPrimaryRowForSource = false;
+
+    if (field.fieldType === "composite" && Array.isArray(field.subFields) && field.subFields.length > 0) {
+      field.subFields.forEach((rawSubField, subIndex) => {
+        if (!rawSubField || typeof rawSubField !== "object") {
+          return;
+        }
+
+        const subQuestion = rawSubField.question?.trim() || "";
+        if (!subQuestion) {
+          return;
+        }
+
+        const subFieldType = getPreviewFieldType(rawSubField.fieldType);
+        const subFieldKey = rawSubField.fieldKey?.trim() || `${baseFieldKey}__sub_${subIndex + 1}`;
+
+        expandedFields.push({
+          fieldKey: subFieldKey,
+          question: baseQuestion ? `${baseQuestion} - ${subQuestion}` : subQuestion,
+          iconKey,
+          fieldType: subFieldType,
+          sourceFieldIndex: index,
+          sourceFieldIdentity,
+          sourceFieldType: field.fieldType,
+          sourcePreviewWidth,
+          isPrimaryForSource: !hasPrimaryRowForSource,
+          dropdownOptions:
+            subFieldType === "dropdown"
+              ? sanitizeDropdownOptions(rawSubField.dropdownOptions)
+              : [],
+          required: required || Boolean(rawSubField.required),
+          repeatable: false,
+          minLength: supportsLengthConstraints(subFieldType) ? minLength : null,
+          maxLength: supportsLengthConstraints(subFieldType) ? maxLength : null,
+          forceUppercase:
+            supportsUppercaseConstraint(subFieldType) && forceUppercase,
+          allowNotApplicable,
+          notApplicableText,
+          copyFromPersonalDetailsFieldKey: "",
+        });
+
+        hasPrimaryRowForSource = true;
+      });
+
+      return;
+    }
+
+    const fieldType = getPreviewFieldType(field.fieldType);
+
+    expandedFields.push({
+      fieldKey: baseFieldKey,
+      question: baseQuestion,
+      iconKey,
+      fieldType,
+      sourceFieldIndex: index,
+      sourceFieldIdentity,
+      sourceFieldType: field.fieldType,
+      sourcePreviewWidth,
+      isPrimaryForSource: true,
+      dropdownOptions:
+        fieldType === "dropdown" ? sanitizeDropdownOptions(field.dropdownOptions) : [],
+      required,
+      repeatable: fieldType === "file" ? false : Boolean(field.repeatable),
+      minLength: supportsLengthConstraints(fieldType) ? minLength : null,
+      maxLength: supportsLengthConstraints(fieldType) ? maxLength : null,
+      forceUppercase:
+        supportsUppercaseConstraint(fieldType) && forceUppercase,
+      allowNotApplicable,
+      notApplicableText,
+      copyFromPersonalDetailsFieldKey:
+        fieldType === "file"
+          ? ""
+          : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
+    });
+  });
+
+  return expandedFields;
+}
+
+function getPreviewConstraintHint(field: CandidatePreviewField) {
+  if (!supportsLengthConstraints(field.fieldType)) {
+    return "";
+  }
+
+  const hints: string[] = [];
+  const lengthUnit = field.fieldType === "number" ? "digits" : "chars";
+
+  if (typeof field.minLength === "number") {
+    hints.push(`Min ${field.minLength} ${lengthUnit}`);
+  }
+
+  if (typeof field.maxLength === "number") {
+    hints.push(`Max ${field.maxLength} ${lengthUnit}`);
+  }
+
+  if (supportsUppercaseConstraint(field.fieldType) && field.forceUppercase) {
+    hints.push("ALL CAPS");
+  }
+
+  return hints.join(" | ");
+}
+
+function renderPreviewQuestionIcon(iconKey: ServiceQuestionIconKey) {
+  if (iconKey === "none") {
+    return null;
+  }
+
+  const matched = QUESTION_ICON_OPTIONS.find((option) => option.key === iconKey);
+  const Icon = matched?.Icon ?? NotebookPen;
+
+  return <Icon size={13} />;
+}
+
+function renderPreviewQuestionPrompt(field: CandidatePreviewField) {
+  const iconElement = renderPreviewQuestionIcon(field.iconKey);
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap" }}>
+      {iconElement ? (
+        <span
+          style={{
+            width: "1.3rem",
+            height: "1.3rem",
+            borderRadius: "999px",
+            border: "1px solid #D5DEEE",
+            background: "#EEF2FF",
+            color: "#334155",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          {iconElement}
+        </span>
+      ) : null}
+      <span>{field.question || "Untitled question"}</span>
+      {field.required ? <span style={{ color: "#DC2626" }}>*</span> : null}
+    </span>
+  );
+}
+
 export default function ServiceFormBuilder({
   services,
   canManage,
@@ -330,6 +599,11 @@ export default function ServiceFormBuilder({
   const [serviceEntryModeDrafts, setServiceEntryModeDrafts] = useState<Record<string, boolean>>({});
   const [serviceEntryLabelDrafts, setServiceEntryLabelDrafts] = useState<Record<string, string | undefined>>({});
   const [expandedDropdownEditors, setExpandedDropdownEditors] = useState<Record<string, boolean>>({});
+  const [showCandidatePreview, setShowCandidatePreview] = useState(false);
+  const [previewFieldWidths, setPreviewFieldWidths] = useState<Record<string, PreviewFieldWidth>>({});
+  const [draggedPreviewSourceIndex, setDraggedPreviewSourceIndex] = useState<number | null>(null);
+  const [dropPreviewSourceIndex, setDropPreviewSourceIndex] = useState<number | null>(null);
+  const [saveCandidateLayoutSnapshot, setSaveCandidateLayoutSnapshot] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -409,6 +683,7 @@ export default function ServiceFormBuilder({
       field.fieldType === "file" || field.fieldType === "composite"
         ? ""
         : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
+    previewWidth: normalizePreviewWidth(field.previewWidth, field.fieldType),
   }));
 
   const multipleEntriesLabel = activeServiceId
@@ -418,6 +693,93 @@ export default function ServiceFormBuilder({
   const allowMultipleEntries = activeServiceId
     ? serviceEntryModeDrafts[activeServiceId] ?? Boolean(selectedService?.allowMultipleEntries)
     : false;
+
+  const candidatePreviewFields = useMemo(
+    () =>
+      expandFieldsForCandidatePreview(fields).filter(
+        (field) => field.question.trim().length > 0,
+      ),
+    [fields],
+  );
+
+  const candidatePreviewEntryLabel =
+    multipleEntriesLabel?.trim() || "Whole-service entries";
+  const candidatePreviewEntryCount = allowMultipleEntries ? 2 : 1;
+
+  function buildPreviewLayoutKey(field: CandidatePreviewField) {
+    return `${activeServiceId || "service"}::${field.sourceFieldIdentity}`;
+  }
+
+  function getPreviewFieldWidth(field: CandidatePreviewField) {
+    return (
+      previewFieldWidths[buildPreviewLayoutKey(field)] ??
+      field.sourcePreviewWidth ??
+      getDefaultPreviewFieldWidth(field)
+    );
+  }
+
+  function resolveDraftPreviewWidth(field: ServiceFormField, index: number) {
+    const sourceFieldIdentity = resolvePreviewSourceIdentity(field, index);
+    const previewOverride = previewFieldWidths[`${activeServiceId || "service"}::${sourceFieldIdentity}`];
+    return normalizePreviewWidth(previewOverride ?? field.previewWidth, field.fieldType);
+  }
+
+  function setPreviewFieldWidth(field: CandidatePreviewField, width: PreviewFieldWidth) {
+    setPreviewFieldWidths((prev) => ({
+      ...prev,
+      [buildPreviewLayoutKey(field)]: width,
+    }));
+
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, index) =>
+        index === field.sourceFieldIndex
+          ? {
+              ...item,
+              previewWidth: width,
+            }
+          : item,
+      ),
+    }));
+  }
+
+  function moveField(fromIndex: number, toIndex: number) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    if (
+      fromIndex === toIndex ||
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= fields.length ||
+      toIndex >= fields.length
+    ) {
+      return;
+    }
+
+    const nextFields = [...fields];
+    const [movedField] = nextFields.splice(fromIndex, 1);
+    if (!movedField) {
+      return;
+    }
+
+    nextFields.splice(toIndex, 0, movedField);
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: nextFields,
+    }));
+  }
+
+  function clearPreviewDragState() {
+    setDraggedPreviewSourceIndex(null);
+    setDropPreviewSourceIndex(null);
+  }
 
   function toggleDropdownEditor(editorKey: string) {
     setExpandedDropdownEditors((prev) => ({
@@ -752,24 +1114,6 @@ export default function ServiceFormBuilder({
     }));
   }
 
-  function updateFieldRepeatable(index: number, repeatable: boolean) {
-    if (!activeServiceId) {
-      return;
-    }
-
-    setDrafts((prev) => ({
-      ...prev,
-      [activeServiceId]: fields.map((item, idx) =>
-        idx === index
-          ? {
-              ...item,
-              repeatable: supportsRepeatable(item.fieldType) ? repeatable : false,
-            }
-          : item,
-      ),
-    }));
-  }
-
   function updateFieldMinLength(index: number, minLength: string) {
     if (!activeServiceId) {
       return;
@@ -921,7 +1265,9 @@ export default function ServiceFormBuilder({
       return;
     }
 
-    const cleaned = fields.map((item) => {
+    const cleaned = fields.map((item, index) => {
+      const previewWidth = resolveDraftPreviewWidth(item, index);
+
       if (isSystemServiceCountryField(item)) {
         const dropdownOptions = sanitizeDropdownOptions(item.dropdownOptions);
 
@@ -943,6 +1289,7 @@ export default function ServiceFormBuilder({
           allowNotApplicable: false,
           notApplicableText: "",
           copyFromPersonalDetailsFieldKey: "",
+          previewWidth,
         };
       }
 
@@ -992,6 +1339,7 @@ export default function ServiceFormBuilder({
           item.fieldType === "file" || item.fieldType === "composite"
             ? ""
             : String(item.copyFromPersonalDetailsFieldKey ?? "").trim(),
+        previewWidth,
       };
     });
 
@@ -1079,32 +1427,43 @@ export default function ServiceFormBuilder({
         ? multipleEntriesLabel.trim()
         : undefined;
 
-    const res = await fetch("/api/services", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        serviceId: activeServiceId,
-        allowMultipleEntries,
-        multipleEntriesLabel: normalizedMultipleEntriesLabel,
-        formFields: cleaned,
-      }),
-    });
+    try {
+      const res = await fetch("/api/services", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceId: activeServiceId,
+          allowMultipleEntries,
+          multipleEntriesLabel: normalizedMultipleEntriesLabel,
+          saveCandidateLayoutSnapshot,
+          formFields: cleaned,
+        }),
+      });
 
-    const data = (await res.json()) as { message?: string; error?: string };
-    setSaving(false);
+      const data =
+        (await parseJsonResponseSafely<{ message?: string; error?: string }>(res)) ?? {};
 
-    if (!res.ok) {
-      setMessage(data.error ?? "Could not save service form.");
-      return;
+      if (!res.ok) {
+        const fallbackError =
+          res.status === 401
+            ? "Session expired. Please sign in again."
+            : `Could not save service form (HTTP ${res.status}).`;
+        setMessage(data.error ?? fallbackError);
+        return;
+      }
+
+      setDrafts((prev) => ({ ...prev, [activeServiceId]: cleaned }));
+      setServiceEntryModeDrafts((prev) => ({
+        ...prev,
+        [activeServiceId]: allowMultipleEntries,
+      }));
+      setMessage(data.message ?? "Service form updated.");
+      await onSaved();
+    } catch {
+      setMessage("Could not save service form due to a network/server issue.");
+    } finally {
+      setSaving(false);
     }
-
-    setDrafts((prev) => ({ ...prev, [activeServiceId]: cleaned }));
-    setServiceEntryModeDrafts((prev) => ({
-      ...prev,
-      [activeServiceId]: allowMultipleEntries,
-    }));
-    setMessage(data.message ?? "Service form updated.");
-    await onSaved();
   }
 
   if (!canManage) {
@@ -1203,6 +1562,50 @@ export default function ServiceFormBuilder({
                     />
                   </div>
                 )}
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                  border: "1px solid #E2E8F0",
+                  borderRadius: "10px",
+                  background: "#FFFFFF",
+                  padding: "0.8rem 1rem",
+                }}
+              >
+                <div style={{ display: "grid", gap: "0.2rem" }}>
+                  <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "#1E293B" }}>
+                    Candidate-facing preview
+                  </span>
+                  <span style={{ fontSize: "0.82rem", color: "#64748B" }}>
+                    Toggle a live read-only preview that mirrors candidate form layout.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCandidatePreview((prev) => !prev)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.45rem",
+                    border: "1px solid #CBD5E1",
+                    borderRadius: "999px",
+                    padding: "0.52rem 0.9rem",
+                    background: showCandidatePreview ? "#EFF6FF" : "#F8FAFC",
+                    color: showCandidatePreview ? "#1D4ED8" : "#334155",
+                    fontWeight: 700,
+                    fontSize: "0.84rem",
+                    cursor: "pointer",
+                  }}
+                  aria-pressed={showCandidatePreview}
+                >
+                  {showCandidatePreview ? <EyeOff size={15} /> : <Eye size={15} />}
+                  {showCandidatePreview ? "Hide Preview" : "View Preview"}
+                </button>
               </div>
 
               <div style={{ display: "grid", gap: "1rem" }}>
@@ -1862,7 +2265,554 @@ export default function ServiceFormBuilder({
               })}
             </div>
 
+            {showCandidatePreview ? (
+              <div
+                style={{
+                  border: "1px solid #C7D2FE",
+                  borderRadius: "14px",
+                  background: "#F8FAFC",
+                  padding: "1.1rem",
+                  display: "grid",
+                  gap: "0.95rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "0.7rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: "0.2rem" }}>
+                    <h3 style={{ margin: 0, color: "#1E293B", fontSize: "1rem", fontWeight: 700 }}>
+                      Candidate Preview Mode
+                    </h3>
+                    <p style={{ margin: 0, color: "#64748B", fontSize: "0.83rem" }}>
+                      Drag questions to reorder and change width to line fields up in concise rows.
+                    </p>
+                  </div>
+                  <span
+                    style={{
+                      padding: "0.32rem 0.6rem",
+                      borderRadius: "999px",
+                      background: "#ECFDF5",
+                      border: "1px solid #A7F3D0",
+                      color: "#047857",
+                      fontWeight: 700,
+                      fontSize: "0.75rem",
+                    }}
+                  >
+                    Interactive Layout
+                  </span>
+                </div>
+
+                {candidatePreviewFields.length === 0 ? (
+                  <div
+                    style={{
+                      border: "1px dashed #BFDBFE",
+                      borderRadius: "12px",
+                      background: "#FFFFFF",
+                      padding: "1rem",
+                      color: "#475569",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Add at least one question to see the candidate preview.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      border: "1px solid #E2E8F0",
+                      borderRadius: "14px",
+                      background: "#FFFFFF",
+                      boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)",
+                      padding: "1.1rem",
+                      display: "grid",
+                      gap: "0.95rem",
+                    }}
+                  >
+                    <strong style={{ color: "#0F172A", fontSize: "0.96rem" }}>
+                      {selectedService?.name || "Selected Service"}
+                    </strong>
+
+                    {allowMultipleEntries ? (
+                      <div
+                        style={{
+                          border: "1px solid #E2E8F0",
+                          borderRadius: "12px",
+                          background: "#F8FAFC",
+                          padding: "0.85rem",
+                          display: "grid",
+                          gap: "0.65rem",
+                        }}
+                      >
+                        <span style={{ color: "#334155", fontSize: "0.9rem", fontWeight: 700 }}>
+                          {candidatePreviewEntryLabel}: {candidatePreviewEntryCount}
+                        </span>
+                        <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
+                          <span
+                            style={{
+                              padding: "0.38rem 0.68rem",
+                              borderRadius: "999px",
+                              background: "#E0F2FE",
+                              border: "1px solid #BAE6FD",
+                              color: "#0C4A6E",
+                              fontSize: "0.78rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            {candidatePreviewEntryLabel}
+                          </span>
+                          <button
+                            type="button"
+                            disabled
+                            style={{
+                              padding: "0.45rem 0.78rem",
+                              borderRadius: "8px",
+                              background: "#EFF6FF",
+                              color: "#2563EB",
+                              border: "1px solid #BFDBFE",
+                              fontWeight: 600,
+                              fontSize: "0.8rem",
+                              opacity: 0.7,
+                              cursor: "not-allowed",
+                            }}
+                          >
+                            + Add another {candidatePreviewEntryLabel.toLowerCase()}
+                          </button>
+                          <button
+                            type="button"
+                            disabled
+                            style={{
+                              padding: "0.45rem 0.78rem",
+                              borderRadius: "8px",
+                              background: "#FEF2F2",
+                              color: "#DC2626",
+                              border: "1px solid #FECACA",
+                              fontWeight: 600,
+                              fontSize: "0.8rem",
+                              opacity: 0.7,
+                              cursor: "not-allowed",
+                            }}
+                          >
+                            Remove last entry
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {Array.from({ length: candidatePreviewEntryCount }).map((_, serviceEntryIndex) => (
+                      <div
+                        key={`preview-entry-${serviceEntryIndex}`}
+                        style={{
+                          border: "1px solid #E2E8F0",
+                          borderRadius: "12px",
+                          background: "#F8FAFC",
+                          padding: "0.95rem",
+                          display: "grid",
+                          gap: "0.9rem",
+                        }}
+                      >
+                        {allowMultipleEntries ? (
+                          <strong
+                            style={{
+                              fontSize: "0.94rem",
+                              color: "#1E293B",
+                              fontWeight: 700,
+                              borderBottom: "2px solid #E2E8F0",
+                              paddingBottom: "0.45rem",
+                            }}
+                          >
+                            Entry {serviceEntryIndex + 1}
+                          </strong>
+                        ) : null}
+
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(12, minmax(0, 1fr))", gap: "0.75rem" }}>
+                          {candidatePreviewFields.map((field, previewIndex) => {
+                            if (allowMultipleEntries && field.fieldType === "file" && serviceEntryIndex > 0) {
+                              return null;
+                            }
+
+                            const fieldRowKey = `${field.fieldKey}-${previewIndex}-${serviceEntryIndex}`;
+                            const width = getPreviewFieldWidth(field);
+                            const gridSpan = getPreviewGridColumnSpan(width);
+                            const notApplicableLabel = field.notApplicableText.trim() || "Not Applicable";
+                            const questionRepeatable =
+                              field.repeatable && !allowMultipleEntries && field.fieldType !== "file";
+                            const personalDetailsSourceLabel =
+                              personalDetailsFieldOptions.find(
+                                (option) => option.value === field.copyFromPersonalDetailsFieldKey,
+                              )?.label || field.copyFromPersonalDetailsFieldKey;
+                            const constraintHint = getPreviewConstraintHint(field);
+                            const inputType =
+                              field.fieldType === "number"
+                                ? "number"
+                                : field.fieldType === "date"
+                                  ? "date"
+                                  : "text";
+                            const isDropdownField = field.fieldType === "dropdown";
+                            const isPrimaryCard = field.isPrimaryForSource;
+                            const canMoveUp = isPrimaryCard && field.sourceFieldIndex > 0;
+                            const canMoveDown =
+                              isPrimaryCard && field.sourceFieldIndex < fields.length - 1;
+                            const isDropTarget =
+                              isPrimaryCard &&
+                              dropPreviewSourceIndex === field.sourceFieldIndex &&
+                              draggedPreviewSourceIndex !== null &&
+                              draggedPreviewSourceIndex !== field.sourceFieldIndex;
+
+                            return (
+                              <div
+                                key={fieldRowKey}
+                                draggable={isPrimaryCard}
+                                onDragStart={() => {
+                                  if (!isPrimaryCard) {
+                                    return;
+                                  }
+
+                                  setDraggedPreviewSourceIndex(field.sourceFieldIndex);
+                                  setDropPreviewSourceIndex(field.sourceFieldIndex);
+                                }}
+                                onDragOver={(event) => {
+                                  if (!isPrimaryCard || draggedPreviewSourceIndex === null) {
+                                    return;
+                                  }
+
+                                  event.preventDefault();
+                                  if (draggedPreviewSourceIndex !== field.sourceFieldIndex) {
+                                    setDropPreviewSourceIndex(field.sourceFieldIndex);
+                                  }
+                                }}
+                                onDrop={(event) => {
+                                  if (!isPrimaryCard) {
+                                    return;
+                                  }
+
+                                  event.preventDefault();
+                                  if (
+                                    draggedPreviewSourceIndex !== null &&
+                                    draggedPreviewSourceIndex !== field.sourceFieldIndex
+                                  ) {
+                                    moveField(draggedPreviewSourceIndex, field.sourceFieldIndex);
+                                  }
+                                  clearPreviewDragState();
+                                }}
+                                onDragEnd={clearPreviewDragState}
+                                style={{
+                                  gridColumn: `span ${gridSpan}`,
+                                  border: `1px solid ${isDropTarget ? "#60A5FA" : "#DDE5F2"}`,
+                                  borderRadius: "11px",
+                                  background: isDropTarget ? "#EFF6FF" : "#FFFFFF",
+                                  padding: "0.75rem",
+                                  display: "grid",
+                                  gap: "0.42rem",
+                                  boxShadow: isDropTarget
+                                    ? "0 0 0 2px rgba(59, 130, 246, 0.14)"
+                                    : "0 1px 3px rgba(15, 23, 42, 0.04)",
+                                  cursor: isPrimaryCard ? "grab" : "default",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    gap: "0.5rem",
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <div style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                                    {isPrimaryCard ? <GripVertical size={14} color="#64748B" /> : null}
+                                    <span style={{ fontSize: "0.74rem", color: "#475569", fontWeight: 700 }}>
+                                      Question {field.sourceFieldIndex + 1}
+                                    </span>
+                                    {field.sourceFieldType === "composite" ? (
+                                      <span
+                                        style={{
+                                          fontSize: "0.7rem",
+                                          color: "#166534",
+                                          background: "#DCFCE7",
+                                          border: "1px solid #BBF7D0",
+                                          borderRadius: "999px",
+                                          padding: "0.08rem 0.4rem",
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        Composite
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  {isPrimaryCard ? (
+                                    <div style={{ display: "inline-flex", alignItems: "center", gap: "0.28rem", flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => moveField(field.sourceFieldIndex, field.sourceFieldIndex - 1)}
+                                        disabled={!canMoveUp}
+                                        style={{
+                                          border: "1px solid #CBD5E1",
+                                          borderRadius: "6px",
+                                          background: "#F8FAFC",
+                                          color: canMoveUp ? "#334155" : "#94A3B8",
+                                          width: "28px",
+                                          height: "28px",
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          cursor: canMoveUp ? "pointer" : "not-allowed",
+                                        }}
+                                        aria-label="Move question up"
+                                      >
+                                        <ArrowUp size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => moveField(field.sourceFieldIndex, field.sourceFieldIndex + 1)}
+                                        disabled={!canMoveDown}
+                                        style={{
+                                          border: "1px solid #CBD5E1",
+                                          borderRadius: "6px",
+                                          background: "#F8FAFC",
+                                          color: canMoveDown ? "#334155" : "#94A3B8",
+                                          width: "28px",
+                                          height: "28px",
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          cursor: canMoveDown ? "pointer" : "not-allowed",
+                                        }}
+                                        aria-label="Move question down"
+                                      >
+                                        <ArrowDown size={14} />
+                                      </button>
+                                      {([
+                                        ["full", "1/1"],
+                                        ["half", "1/2"],
+                                        ["third", "1/3"],
+                                      ] as Array<[PreviewFieldWidth, string]>).map(([sizeOption, label]) => {
+                                        const isActive = width === sizeOption;
+
+                                        return (
+                                          <button
+                                            key={`${fieldRowKey}-${sizeOption}`}
+                                            type="button"
+                                            onClick={() => setPreviewFieldWidth(field, sizeOption)}
+                                            style={{
+                                              border: isActive ? "1px solid #3B82F6" : "1px solid #CBD5E1",
+                                              borderRadius: "6px",
+                                              background: isActive ? "#EFF6FF" : "#FFFFFF",
+                                              color: isActive ? "#1D4ED8" : "#475569",
+                                              minWidth: "38px",
+                                              height: "28px",
+                                              padding: "0 0.35rem",
+                                              fontSize: "0.72rem",
+                                              fontWeight: 700,
+                                              cursor: "pointer",
+                                            }}
+                                            title={`Set width ${label}`}
+                                          >
+                                            {label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize: "0.72rem", color: "#64748B", fontWeight: 600 }}>
+                                      Uses parent layout
+                                    </span>
+                                  )}
+                                </div>
+
+                                <label className="label">{renderPreviewQuestionPrompt(field)}</label>
+
+                                {field.allowNotApplicable ? (
+                                  <label
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "0.4rem",
+                                      color: "#4A5E79",
+                                      fontSize: "0.82rem",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    <input type="checkbox" disabled />
+                                    {notApplicableLabel}
+                                  </label>
+                                ) : null}
+
+                                {field.copyFromPersonalDetailsFieldKey ? (
+                                  <p style={{ margin: 0, color: "#64748B", fontSize: "0.79rem" }}>
+                                    Copy option from Personal Details: {personalDetailsSourceLabel}
+                                  </p>
+                                ) : null}
+
+                                {field.repeatable && allowMultipleEntries ? (
+                                  <p style={{ margin: 0, color: "#15803D", fontSize: "0.8rem", fontWeight: 600 }}>
+                                    Specific-question multiple entries is enabled in Service Builder.
+                                  </p>
+                                ) : null}
+
+                                {field.fieldType === "file" ? (
+                                  <>
+                                    <input
+                                      className="input"
+                                      type="file"
+                                      disabled
+                                      accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+                                    />
+                                    <p style={{ margin: 0, color: "#6C757D", fontSize: "0.82rem" }}>
+                                      PDF, JPG, PNG only. Maximum size 5MB.
+                                    </p>
+                                    {allowMultipleEntries ? (
+                                      <p style={{ margin: 0, color: "#6C757D", fontSize: "0.8rem" }}>
+                                        This uploaded file is shared across all whole-service entries.
+                                      </p>
+                                    ) : null}
+                                  </>
+                                ) : questionRepeatable ? (
+                                  <>
+                                    {[0, 1].map((repeatIndex) => (
+                                      <div
+                                        key={`${fieldRowKey}-repeat-${repeatIndex}`}
+                                        style={{
+                                          border: "1px solid #DEE2E6",
+                                          borderRadius: "10px",
+                                          background: "#FFFFFF",
+                                          padding: "0.52rem",
+                                          display: "grid",
+                                          gap: "0.35rem",
+                                        }}
+                                      >
+                                        {field.fieldType === "long_text" ? (
+                                          <textarea
+                                            className="input"
+                                            rows={4}
+                                            disabled
+                                            placeholder={`Entry ${repeatIndex + 1}`}
+                                            style={{ minHeight: "108px", resize: "vertical" }}
+                                          />
+                                        ) : isDropdownField ? (
+                                          <select className="input" disabled defaultValue="">
+                                            <option value="">Select an option</option>
+                                            {field.dropdownOptions.map((option, optionIndex) => (
+                                              <option
+                                                key={`${fieldRowKey}-repeat-option-${repeatIndex}-${optionIndex}`}
+                                                value={option}
+                                              >
+                                                {option}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        ) : (
+                                          <input className="input" type={inputType} disabled />
+                                        )}
+                                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                          <button
+                                            type="button"
+                                            disabled
+                                            style={{
+                                              padding: "0.35rem 0.65rem",
+                                              fontSize: "0.8rem",
+                                              border: "1px solid #CBD5E1",
+                                              borderRadius: "6px",
+                                              background: "#F8FAFC",
+                                              color: "#64748B",
+                                              opacity: 0.7,
+                                              cursor: "not-allowed",
+                                            }}
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      disabled
+                                      style={{
+                                        justifySelf: "start",
+                                        padding: "0.35rem 0.7rem",
+                                        fontSize: "0.82rem",
+                                        border: "1px solid #CBD5E1",
+                                        borderRadius: "6px",
+                                        background: "#F8FAFC",
+                                        color: "#475569",
+                                        opacity: 0.7,
+                                        cursor: "not-allowed",
+                                      }}
+                                    >
+                                      + Add another entry
+                                    </button>
+                                  </>
+                                ) : field.fieldType === "long_text" ? (
+                                  <textarea
+                                    className="input"
+                                    rows={5}
+                                    disabled
+                                    style={{ minHeight: "120px", resize: "vertical" }}
+                                  />
+                                ) : isDropdownField ? (
+                                  <select className="input" disabled defaultValue="">
+                                    <option value="">Select an option</option>
+                                    {field.dropdownOptions.map((option, optionIndex) => (
+                                      <option key={`${fieldRowKey}-option-${optionIndex}`} value={option}>
+                                        {option}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <input className="input" type={inputType} disabled />
+                                )}
+
+                                {field.fieldType === "date" ? (
+                                  <p style={{ margin: 0, color: "#6C757D", fontSize: "0.82rem" }}>
+                                    Pick a date from the calendar.
+                                  </p>
+                                ) : null}
+
+                                {questionRepeatable ? (
+                                  <p style={{ margin: 0, color: "#15803D", fontSize: "0.8rem", fontWeight: 600 }}>
+                                    Candidate can add multiple entries for this question.
+                                  </p>
+                                ) : null}
+
+                                {constraintHint ? (
+                                  <p style={{ margin: 0, color: "#6C757D", fontSize: "0.82rem" }}>
+                                    {constraintHint}
+                                  </p>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem", borderTop: "1px solid #E2E8F0", paddingTop: "1.5rem", marginTop: "0.5rem" }}>
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.55rem",
+                  color: "#334155",
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={saveCandidateLayoutSnapshot}
+                  onChange={(e) => setSaveCandidateLayoutSnapshot(e.target.checked)}
+                />
+                Save and mirror this layout to candidate portal forms
+              </label>
+
               <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
                 <button
                   type="button"
@@ -1876,7 +2826,12 @@ export default function ServiceFormBuilder({
                   disabled={saving}
                   style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "#2563EB", color: "#fff", border: "none", padding: "0.75rem 1.5rem", borderRadius: "6px", fontWeight: 600, cursor: "pointer", transition: "all 0.2s", opacity: saving ? 0.7 : 1 }}
                 >
-                  <Save size={18} /> {saving ? "Saving Changes..." : "Save Configuration"}
+                  <Save size={18} />
+                  {saving
+                    ? "Saving Changes..."
+                    : saveCandidateLayoutSnapshot
+                      ? "Save Configuration + Mirror"
+                      : "Save Configuration"}
                 </button>
               </div>
 
