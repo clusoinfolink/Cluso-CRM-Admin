@@ -42,7 +42,7 @@ type QuestionIconKey = (typeof SUPPORTED_QUESTION_ICON_KEYS)[number];
 const DEFAULT_QUESTION_ICON: QuestionIconKey = "diary";
 const SERVICE_COUNTRY_FIELD_KEY = "system_service_country";
 const SERVICE_COUNTRY_FIELD_QUESTION =
-  "Select verification country for this service";
+  "Country";
 const SERVICE_COUNTRY_FIELD_OPTIONS = [
   "Afghanistan",
   "Armenia",

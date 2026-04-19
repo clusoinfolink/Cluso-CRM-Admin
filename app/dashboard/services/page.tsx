@@ -1,7 +1,17 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  Suspense,
+  WheelEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Package, Plus, Trash, Tag, FileText, LayoutList } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import ServiceFormBuilder from "@/components/ServiceFormBuilder";
@@ -21,6 +31,16 @@ async function fetchServices() {
 
   const serviceJson = (await serviceRes.json()) as { items: ServiceItem[] };
   return serviceJson.items ?? [];
+}
+
+function preventNumberInputStep(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+  }
+}
+
+function preventNumberInputWheel(event: WheelEvent<HTMLInputElement>) {
+  event.currentTarget.blur();
 }
 
 function ServicesPageContent() {
@@ -352,10 +372,12 @@ function ServicesPageContent() {
                   <div>
                     <label className="text-sm font-semibold text-slate-600 mb-1.5 block">Default Price</label>
                     <input 
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-400 outline-none transition-all" 
+                      className="manual-number-input w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-400 outline-none transition-all" 
                       type="number" min={0} step="0.01" 
                       value={newServiceDefaultPrice} 
                       onChange={(e) => setNewServiceDefaultPrice(e.target.value)} 
+                      onWheel={preventNumberInputWheel}
+                      onKeyDown={preventNumberInputStep}
                       placeholder="0.00" 
                     />
                   </div>

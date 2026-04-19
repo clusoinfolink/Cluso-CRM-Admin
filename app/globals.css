@@ -128,6 +128,17 @@ body {
   box-shadow: 0 0 0 3px rgba(60, 140, 218, 0.2);
 }
 
+.manual-number-input {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.manual-number-input::-webkit-outer-spin-button,
+.manual-number-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .search-input-wrap {
   position: relative;
 }

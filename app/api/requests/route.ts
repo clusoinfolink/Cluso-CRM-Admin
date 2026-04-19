@@ -11,7 +11,7 @@ const verifyServicePatchSchema = z.object({
   requestId: z.string().min(1),
   serviceId: z.string().min(1),
   serviceEntryIndex: z.number().int().min(1).optional().default(1),
-  serviceStatus: z.enum(["verified", "unverified"]),
+  serviceStatus: z.enum(["in-progress", "verified", "unverified"]),
   verificationMode: z.string().trim().max(120).optional().default("manual"),
   comment: z.string().trim().max(500).optional().default(""),
   verifierNote: z.string().trim().max(1200).optional().default(""),
@@ -63,11 +63,11 @@ type ServiceVerificationLike = {
   serviceEntryIndex?: unknown;
   serviceEntryCount?: unknown;
   serviceInstanceKey?: unknown;
-  status?: "pending" | "verified" | "unverified";
+  status?: "pending" | "in-progress" | "verified" | "unverified";
   verificationMode?: string;
   comment?: string;
   attempts?: Array<{
-    status?: "verified" | "unverified";
+    status?: "in-progress" | "verified" | "unverified";
     verificationMode?: string;
     comment?: string;
     verifierNote?: string;
@@ -97,11 +97,11 @@ type NormalizedServiceVerification = {
   serviceEntryIndex: number;
   serviceEntryCount: number;
   serviceInstanceKey: string;
-  status: "pending" | "verified" | "unverified";
+  status: "pending" | "in-progress" | "verified" | "unverified";
   verificationMode: string;
   comment: string;
   attempts: Array<{
-    status: "verified" | "unverified";
+    status: "in-progress" | "verified" | "unverified";
     verificationMode: string;
     comment: string;
     verifierNote: string;
@@ -134,6 +134,13 @@ type ReportPayloadForShare = {
   };
   status: string;
   createdAt: string;
+  personalDetails: Array<{
+    question: string;
+    value: string;
+    fieldType: string;
+    fileName: string;
+    fileData: string;
+  }>;
   services: Array<{
     serviceId: string;
     serviceEntryIndex: number;
@@ -247,7 +254,7 @@ function toServiceDisplayName(
   serviceEntryIndex: number,
   serviceEntryCount: number,
 ) {
-  const trimmedName = serviceName.trim() || "Unnamed Service";
+  const trimmedName = serviceName.trim() || "Service";
   if (serviceEntryCount <= 1) {
     return trimmedName;
   }
@@ -343,6 +350,137 @@ function parseImageDataUrl(dataUrl: string, fallbackMimeType = "") {
   }
 }
 
+const PERSONAL_DETAILS_SERVICE_NAME = "personal details";
+const PERSONAL_DETAILS_QUESTION_SEQUENCE = [
+  "Full name (as per government ID)",
+  "Date of birth",
+  "Mobile number",
+  "Current residential address",
+  "Primary government ID number",
+  "Email address",
+  "Nationality",
+  "Gender",
+] as const;
+const PERSONAL_DETAILS_QUESTION_ORDER = new Map(
+  PERSONAL_DETAILS_QUESTION_SEQUENCE.map((question, index) => [
+    question.trim().toLowerCase(),
+    index,
+  ]),
+);
+
+function normalizeQuestionKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isPersonalDetailsServiceName(serviceName: string) {
+  return normalizeQuestionKey(serviceName) === PERSONAL_DETAILS_SERVICE_NAME;
+}
+
+function isLikelyPersonalDetailsQuestion(question: string) {
+  return PERSONAL_DETAILS_QUESTION_ORDER.has(normalizeQuestionKey(question));
+}
+
+function normalizeReportAnswer(answer: {
+  question?: string;
+  value?: string;
+  fieldType?: string;
+  fileName?: string;
+  fileData?: string;
+}) {
+  return {
+    question: (answer.question ?? "").trim() || "Field",
+    value: (answer.value ?? "").trim() || "-",
+    fieldType: (answer.fieldType ?? "").trim() || "text",
+    fileName: (answer.fileName ?? "").trim(),
+    fileData: (answer.fileData ?? "").trim(),
+  };
+}
+
+function dedupePersonalDetailsAnswers(
+  answers: Array<{
+    question: string;
+    value: string;
+    fieldType: string;
+    fileName: string;
+    fileData: string;
+  }>,
+) {
+  const dedupedByQuestion = new Map<string, (typeof answers)[number]>();
+
+  for (const answer of answers) {
+    const normalized = normalizeReportAnswer(answer);
+    const key = normalizeQuestionKey(normalized.question);
+    if (!key) {
+      continue;
+    }
+
+    const existing = dedupedByQuestion.get(key);
+    if (!existing) {
+      dedupedByQuestion.set(key, normalized);
+      continue;
+    }
+
+    if ((existing.value === "-" || !existing.value.trim()) && normalized.value !== "-") {
+      dedupedByQuestion.set(key, normalized);
+    }
+  }
+
+  return Array.from(dedupedByQuestion.values()).sort((first, second) => {
+    const firstKey = normalizeQuestionKey(first.question);
+    const secondKey = normalizeQuestionKey(second.question);
+    const firstRank = PERSONAL_DETAILS_QUESTION_ORDER.get(firstKey) ?? Number.MAX_SAFE_INTEGER;
+    const secondRank = PERSONAL_DETAILS_QUESTION_ORDER.get(secondKey) ?? Number.MAX_SAFE_INTEGER;
+    if (firstRank !== secondRank) {
+      return firstRank - secondRank;
+    }
+
+    return firstKey.localeCompare(secondKey);
+  });
+}
+
+function splitReportSectionsForShare<
+  TService extends {
+    serviceName: string;
+    candidateAnswers: Array<{
+      question: string;
+      value: string;
+      fieldType: string;
+      fileName: string;
+      fileData: string;
+    }>;
+  },
+>(services: TService[]) {
+  const filteredServices: TService[] = [];
+  const personalDetails: Array<{
+    question: string;
+    value: string;
+    fieldType: string;
+    fileName: string;
+    fileData: string;
+  }> = [];
+
+  for (const service of services) {
+    const normalizedAnswers = (service.candidateAnswers ?? []).map((answer) =>
+      normalizeReportAnswer(answer),
+    );
+    const looksLikePersonalDetails =
+      normalizedAnswers.length > 0 &&
+      normalizedAnswers.every((answer) => isLikelyPersonalDetailsQuestion(answer.question));
+
+    if (isPersonalDetailsServiceName(service.serviceName) || looksLikePersonalDetails) {
+      personalDetails.push(...normalizedAnswers);
+      continue;
+    }
+
+    filteredServices.push(service);
+  }
+
+  return {
+    services: filteredServices,
+    personalDetails: dedupePersonalDetailsAnswers(personalDetails),
+  };
+}
+
 function parseReportPayload(value: unknown): ReportPayloadForShare | null {
   const root = asRecord(value);
   if (!root) {
@@ -351,6 +489,35 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
 
   const candidate = asRecord(root.candidate);
   const company = asRecord(root.company);
+  const personalDetailsRaw = Array.isArray(root.personalDetails)
+    ? root.personalDetails
+    : [];
+  const personalDetailsFromPayload = personalDetailsRaw
+    .map((answerValue) => {
+      const answer = asRecord(answerValue);
+      if (!answer) {
+        return null;
+      }
+
+      return normalizeReportAnswer({
+        question: asString(answer.question),
+        value: asString(answer.value),
+        fieldType: asString(answer.fieldType, "text"),
+        fileName: asString(answer.fileName),
+        fileData: asString(answer.fileData),
+      });
+    })
+    .filter(
+      (
+        answer,
+      ): answer is {
+        question: string;
+        value: string;
+        fieldType: string;
+        fileName: string;
+        fileData: string;
+      } => Boolean(answer),
+    );
 
   const servicesRaw = Array.isArray(root.services) ? root.services : [];
   const services = servicesRaw
@@ -474,6 +641,12 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
       } => Boolean(service),
     );
 
+  const splitSections = splitReportSectionsForShare(services);
+  const personalDetails =
+    personalDetailsFromPayload.length > 0
+      ? dedupePersonalDetailsAnswers(personalDetailsFromPayload)
+      : splitSections.personalDetails;
+
   return {
     reportNumber: asString(root.reportNumber),
     generatedAt: asString(root.generatedAt),
@@ -489,7 +662,8 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
     },
     status: asString(root.status),
     createdAt: asString(root.createdAt),
-    services,
+    personalDetails,
+    services: splitSections.services,
   };
 }
 
@@ -507,6 +681,10 @@ function normalizeReportPayloadForShare(
   const nowIso = new Date().toISOString();
   const fallbackServices = fallback?.services ?? [];
   const parsedServices = parsed.services.length > 0 ? parsed.services : fallbackServices;
+  const fallbackPersonalDetails = fallback?.personalDetails ?? [];
+  const parsedPersonalDetails = parsed.personalDetails;
+  const resolvedPersonalDetails =
+    parsedPersonalDetails.length > 0 ? parsedPersonalDetails : fallbackPersonalDetails;
 
   return {
     reportNumber:
@@ -527,6 +705,7 @@ function normalizeReportPayloadForShare(
     },
     status: parsed.status.trim() || fallback?.status || "verified",
     createdAt: parsed.createdAt.trim() || fallback?.createdAt || nowIso,
+    personalDetails: resolvedPersonalDetails,
     services: parsedServices,
   };
 }
@@ -701,7 +880,7 @@ function normalizeServiceVerifications(
       continue;
     }
 
-    const serviceName = (service.serviceName ?? "").trim() || "Unnamed Service";
+    const serviceName = (service.serviceName ?? "").trim() || "Service";
     if (!serviceNameById.has(serviceId)) {
       serviceNameById.set(serviceId, serviceName);
     }
@@ -728,7 +907,7 @@ function normalizeServiceVerifications(
       continue;
     }
 
-    const serviceName = (serviceResponse.serviceName ?? "").trim() || "Unnamed Service";
+    const serviceName = (serviceResponse.serviceName ?? "").trim() || "Service";
     if (!serviceNameById.has(serviceId)) {
       serviceNameById.set(serviceId, serviceName);
     }
@@ -748,7 +927,7 @@ function normalizeServiceVerifications(
       continue;
     }
 
-    const fallbackServiceName = serviceNameById.get(serviceId) ?? "Unnamed Service";
+    const fallbackServiceName = serviceNameById.get(serviceId) ?? "Service";
     const baseServiceName =
       (verification.serviceName ?? "").trim() || fallbackServiceName;
     if (!serviceNameById.has(serviceId)) {
@@ -782,7 +961,7 @@ function normalizeServiceVerifications(
       verificationMode: verification.verificationMode ?? "",
       comment: verification.comment ?? "",
       attempts: (verification.attempts ?? []).map((attempt) => ({
-        status: attempt.status ?? "verified",
+        status: attempt.status ?? "in-progress",
         verificationMode: attempt.verificationMode ?? "",
         comment: attempt.comment ?? "",
         verifierNote: attempt.verifierNote ?? "",
@@ -874,7 +1053,7 @@ function normalizeServiceVerifications(
   const normalizedServices: NormalizedServiceVerification[] = [];
 
   for (const serviceId of orderedServiceIds) {
-    const baseServiceName = serviceNameById.get(serviceId) ?? "Unnamed Service";
+    const baseServiceName = serviceNameById.get(serviceId) ?? "Service";
     const serviceEntryCount = Math.max(
       1,
       selectedCountByServiceId.get(serviceId) ?? 0,

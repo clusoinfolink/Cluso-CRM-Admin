@@ -1,6 +1,16 @@
 "use client";
 
-import { Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
+import {
+  Dispatch,
+  FormEvent,
+  KeyboardEvent,
+  SetStateAction,
+  WheelEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Building,
   ChevronDown,
@@ -101,6 +111,38 @@ function getNextAvailableCountryRateOption(currentRates: CountrySpecificRate[]) 
 
 function isAssignableCompanyService(service: ServiceItem) {
   return !service.hiddenFromCustomerPortal && !service.isDefaultPersonalDetails;
+}
+
+function preventNumberInputStep(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+  }
+}
+
+function preventNumberInputWheel(event: WheelEvent<HTMLInputElement>) {
+  event.currentTarget.blur();
+}
+
+function parseDefaultPriceInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return Number.NaN;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return Number.NaN;
+  }
+
+  return parsed;
+}
+
+function formatDefaultPriceInput(value: number): number | "" {
+  return Number.isFinite(value) ? value : "";
+}
+
+function hasInvalidDefaultPrice(serviceSelection: CompanyServiceSelection) {
+  return !Number.isFinite(serviceSelection.price) || serviceSelection.price < 0;
 }
 
 export default function CompaniesPage() {
@@ -510,13 +552,13 @@ export default function CompaniesPage() {
   }
 
   function updateCompanyServicePrice(serviceId: string, value: string) {
-    const parsed = Number(value);
+    const parsed = parseDefaultPriceInput(value);
     setSelectedCompanyServices((prev) =>
       prev.map((item) =>
         item.serviceId === serviceId
           ? {
               ...item,
-              price: Number.isNaN(parsed) ? 0 : parsed,
+              price: parsed,
             }
           : item,
       ),
@@ -558,13 +600,13 @@ export default function CompaniesPage() {
   }
 
   function updateManageCompanyServicePrice(serviceId: string, value: string) {
-    const parsed = Number(value);
+    const parsed = parseDefaultPriceInput(value);
     setManageCompanyServices((prev) =>
       prev.map((item) =>
         item.serviceId === serviceId
           ? {
               ...item,
-              price: Number.isNaN(parsed) ? 0 : parsed,
+              price: parsed,
             }
           : item,
       ),
@@ -598,6 +640,16 @@ export default function CompaniesPage() {
     e.preventDefault();
     setMessage("");
 
+    const selectedAssignableServices = selectedCompanyServices.filter((serviceSelection) => {
+      const service = services.find((item) => item.id === serviceSelection.serviceId);
+      return Boolean(service && isAssignableCompanyService(service));
+    });
+    const invalidDefaultPriceService = selectedAssignableServices.find(hasInvalidDefaultPrice);
+    if (invalidDefaultPriceService) {
+      setMessage(`Please enter a valid default price for ${invalidDefaultPriceService.serviceName}.`);
+      return;
+    }
+
     const res = await fetch("/api/customers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -605,10 +657,7 @@ export default function CompaniesPage() {
         name: companyName,
         email: companyEmail,
         password: companyPassword,
-        selectedServices: selectedCompanyServices.filter((serviceSelection) => {
-          const service = services.find((item) => item.id === serviceSelection.serviceId);
-          return Boolean(service && isAssignableCompanyService(service));
-        }),
+        selectedServices: selectedAssignableServices,
       }),
     });
 
@@ -636,16 +685,23 @@ export default function CompaniesPage() {
       return;
     }
 
+    const selectedAssignableServices = manageCompanyServices.filter((serviceSelection) => {
+      const service = services.find((item) => item.id === serviceSelection.serviceId);
+      return Boolean(service && isAssignableCompanyService(service));
+    });
+    const invalidDefaultPriceService = selectedAssignableServices.find(hasInvalidDefaultPrice);
+    if (invalidDefaultPriceService) {
+      setMessage(`Please enter a valid default price for ${invalidDefaultPriceService.serviceName}.`);
+      return;
+    }
+
     const res = await fetch("/api/customers", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "update-services",
         customerId: manageCompanyId,
-        selectedServices: manageCompanyServices.filter((serviceSelection) => {
-          const service = services.find((item) => item.id === serviceSelection.serviceId);
-          return Boolean(service && isAssignableCompanyService(service));
-        }),
+        selectedServices: selectedAssignableServices,
       }),
     });
 
@@ -843,7 +899,17 @@ export default function CompaniesPage() {
                               <div style={{ display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
                                 <div>
                                   <label className="label">Default Price</label>
-                                  <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateCompanyServicePrice(service.id, e.target.value)} required />
+                                  <input
+                                    className="input manual-number-input"
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    value={formatDefaultPriceInput(selected.price)}
+                                    onChange={(e) => updateCompanyServicePrice(service.id, e.target.value)}
+                                    onWheel={preventNumberInputWheel}
+                                    onKeyDown={preventNumberInputStep}
+                                    required
+                                  />
                                 </div>
                                 <div>
                                   <label className="label">Default Currency</label>
@@ -933,7 +999,7 @@ export default function CompaniesPage() {
                                           <div>
                                             <label className="label">Price</label>
                                             <input
-                                              className="input"
+                                              className="input manual-number-input"
                                               type="number"
                                               min={0}
                                               step="0.01"
@@ -945,6 +1011,8 @@ export default function CompaniesPage() {
                                                   e.target.value,
                                                 )
                                               }
+                                              onWheel={preventNumberInputWheel}
+                                              onKeyDown={preventNumberInputStep}
                                             />
                                           </div>
                                           <div>
@@ -1112,7 +1180,17 @@ export default function CompaniesPage() {
                             <div style={{ display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
                               <div>
                                 <label className="label">Default Price</label>
-                                <input className="input" type="number" min={0} step="0.01" value={selected.price} onChange={(e) => updateManageCompanyServicePrice(service.id, e.target.value)} required />
+                                <input
+                                  className="input manual-number-input"
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={formatDefaultPriceInput(selected.price)}
+                                  onChange={(e) => updateManageCompanyServicePrice(service.id, e.target.value)}
+                                  onWheel={preventNumberInputWheel}
+                                  onKeyDown={preventNumberInputStep}
+                                  required
+                                />
                               </div>
                               <div>
                                 <label className="label">Default Currency</label>
@@ -1202,7 +1280,7 @@ export default function CompaniesPage() {
                                         <div>
                                           <label className="label">Price</label>
                                           <input
-                                            className="input"
+                                            className="input manual-number-input"
                                             type="number"
                                             min={0}
                                             step="0.01"
@@ -1214,6 +1292,8 @@ export default function CompaniesPage() {
                                                 e.target.value,
                                               )
                                             }
+                                            onWheel={preventNumberInputWheel}
+                                            onKeyDown={preventNumberInputStep}
                                           />
                                         </div>
                                         <div>

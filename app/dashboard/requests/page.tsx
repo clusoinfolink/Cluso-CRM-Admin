@@ -57,7 +57,7 @@ const DEFAULT_VERIFICATION_MODE_OPTIONS = [
 ] as const;
 
 type ServiceAttemptDraft = {
-  status: "verified" | "unverified";
+  status: "in-progress" | "verified" | "unverified";
   verificationMode: string;
   comment: string;
   verifierNote: string;
@@ -91,6 +91,8 @@ type ReportPreviewCandidateAnswer = {
   fileData: string;
 };
 
+type ReportPreviewPersonalDetail = ReportPreviewCandidateAnswer;
+
 type ReportPreviewService = {
   serviceId: string;
   serviceEntryIndex: number;
@@ -119,6 +121,7 @@ type ReportPreviewData = {
   };
   status: string;
   createdAt: string;
+  personalDetails: ReportPreviewPersonalDetail[];
   services: ReportPreviewService[];
   createdByName: string;
   verifiedByName: string;
@@ -180,6 +183,10 @@ function toReportStatusLabel(value: string) {
     return "-";
   }
 
+  if (normalized === "in-progress") {
+    return "In Progress";
+  }
+
   return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
 }
 
@@ -187,6 +194,10 @@ function toReportAttemptStatusLabel(value: string) {
   const normalized = value.trim().toLowerCase();
   if (normalized === "verified") {
     return "Verified";
+  }
+
+  if (normalized === "unverified") {
+    return "Unverified";
   }
 
   return "In Progress";
@@ -224,7 +235,135 @@ function getReportAttemptStatusColor(status: string) {
     return "#0A7D2A";
   }
 
+  if (normalized === "unverified" || normalized === "rejected") {
+    return "#C62828";
+  }
+
   return "#A16207";
+}
+
+const PERSONAL_DETAILS_SERVICE_NAME = "personal details";
+const PERSONAL_DETAILS_QUESTION_SEQUENCE = [
+  "Full name (as per government ID)",
+  "Date of birth",
+  "Mobile number",
+  "Current residential address",
+  "Primary government ID number",
+  "Email address",
+  "Nationality",
+  "Gender",
+] as const;
+const PERSONAL_DETAILS_QUESTION_ORDER = new Map(
+  PERSONAL_DETAILS_QUESTION_SEQUENCE.map((question, index) => [
+    question.trim().toLowerCase(),
+    index,
+  ]),
+);
+
+function normalizeQuestionKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizePreviewAnswer(
+  answer: Partial<ReportPreviewCandidateAnswer>,
+): ReportPreviewCandidateAnswer {
+  return {
+    question: (answer.question ?? "").trim() || "Field",
+    value: (answer.value ?? "").trim() || "-",
+    fieldType: (answer.fieldType ?? "").trim() || "text",
+    fileName: (answer.fileName ?? "").trim(),
+    fileData: (answer.fileData ?? "").trim(),
+  };
+}
+
+function isPersonalDetailsServiceName(serviceName: string) {
+  return normalizeQuestionKey(serviceName) === PERSONAL_DETAILS_SERVICE_NAME;
+}
+
+function isLikelyPersonalDetailsQuestion(question: string) {
+  return PERSONAL_DETAILS_QUESTION_ORDER.has(normalizeQuestionKey(question));
+}
+
+function dedupePersonalDetailsAnswers(
+  answers: ReportPreviewCandidateAnswer[],
+): ReportPreviewPersonalDetail[] {
+  const dedupedByQuestion = new Map<string, ReportPreviewPersonalDetail>();
+
+  for (const rawAnswer of answers) {
+    const answer = normalizePreviewAnswer(rawAnswer);
+    const key = normalizeQuestionKey(answer.question);
+    if (!key) {
+      continue;
+    }
+
+    const existing = dedupedByQuestion.get(key);
+    if (!existing) {
+      dedupedByQuestion.set(key, answer);
+      continue;
+    }
+
+    if ((existing.value === "-" || !existing.value.trim()) && answer.value !== "-") {
+      dedupedByQuestion.set(key, answer);
+    }
+  }
+
+  return Array.from(dedupedByQuestion.values()).sort((first, second) => {
+    const firstKey = normalizeQuestionKey(first.question);
+    const secondKey = normalizeQuestionKey(second.question);
+    const firstRank = PERSONAL_DETAILS_QUESTION_ORDER.get(firstKey) ?? Number.MAX_SAFE_INTEGER;
+    const secondRank = PERSONAL_DETAILS_QUESTION_ORDER.get(secondKey) ?? Number.MAX_SAFE_INTEGER;
+    if (firstRank !== secondRank) {
+      return firstRank - secondRank;
+    }
+
+    return firstKey.localeCompare(secondKey);
+  });
+}
+
+function splitReportSections(
+  services: ReportPreviewService[],
+): {
+  services: ReportPreviewService[];
+  personalDetails: ReportPreviewPersonalDetail[];
+} {
+  const filteredServices: ReportPreviewService[] = [];
+  const personalDetails: ReportPreviewPersonalDetail[] = [];
+
+  for (const service of services) {
+    const answers = (service.candidateAnswers ?? []).map((answer) =>
+      normalizePreviewAnswer(answer),
+    );
+    const looksLikePersonalDetails =
+      answers.length > 0 && answers.every((answer) => isLikelyPersonalDetailsQuestion(answer.question));
+
+    if (isPersonalDetailsServiceName(service.serviceName) || looksLikePersonalDetails) {
+      personalDetails.push(...answers);
+      continue;
+    }
+
+    filteredServices.push({
+      ...service,
+      candidateAnswers: answers,
+    });
+  }
+
+  return {
+    services: filteredServices,
+    personalDetails: dedupePersonalDetailsAnswers(personalDetails),
+  };
+}
+
+function normalizeAttemptDraftStatus(status?: string): ServiceAttemptDraft["status"] {
+  const normalized = (status ?? "").trim().toLowerCase();
+  if (normalized === "verified") {
+    return "verified";
+  }
+
+  if (normalized === "unverified") {
+    return "unverified";
+  }
+
+  return "in-progress";
 }
 
 function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdByName" | "verifiedByName"> | null {
@@ -235,6 +374,29 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
 
   const candidateRecord = asRecord(root.candidate);
   const companyRecord = asRecord(root.company);
+  const personalDetailsRaw = Array.isArray(root.personalDetails)
+    ? root.personalDetails
+    : [];
+  const personalDetailsFromPayload = personalDetailsRaw
+    .map((answerEntry) => {
+      const answerRecord = asRecord(answerEntry);
+      if (!answerRecord) {
+        return null;
+      }
+
+      return normalizePreviewAnswer({
+        question: asString(answerRecord.question),
+        value: asString(answerRecord.value),
+        fieldType: asString(answerRecord.fieldType, "text"),
+        fileName: asString(answerRecord.fileName),
+        fileData: asString(answerRecord.fileData),
+      });
+    })
+    .filter(
+      (
+        answer,
+      ): answer is ReportPreviewPersonalDetail => answer !== null,
+    );
 
   const servicesRaw = Array.isArray(root.services) ? root.services : [];
   const services = servicesRaw
@@ -304,7 +466,7 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
         serviceEntryIndex,
         serviceEntryCount,
         serviceInstanceKey,
-        serviceName: asString(serviceRecord.serviceName, "Unnamed Service"),
+        serviceName: asString(serviceRecord.serviceName, "Service"),
         status: asString(serviceRecord.status, "pending"),
         verificationMode: asString(serviceRecord.verificationMode),
         comment: asString(serviceRecord.comment),
@@ -313,6 +475,12 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
       } satisfies ReportPreviewService;
     })
     .filter((service): service is ReportPreviewService => service !== null);
+
+  const splitSections = splitReportSections(services);
+  const personalDetails =
+    personalDetailsFromPayload.length > 0
+      ? dedupePersonalDetailsAnswers(personalDetailsFromPayload)
+      : splitSections.personalDetails;
 
   return {
     reportNumber: asString(root.reportNumber),
@@ -329,7 +497,8 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
     },
     status: asString(root.status, "pending"),
     createdAt: asString(root.createdAt),
-    services,
+    personalDetails,
+    services: splitSections.services,
   };
 }
 
@@ -368,8 +537,14 @@ function buildReportPreviewData(item: RequestItem, viewerName: string) {
             })),
           };
         })
-      : (item.selectedServices ?? []).map((service) => {
-          const serviceId = service.serviceId;
+    const sourceServices = stored?.services.length ? stored.services : fallbackServices;
+    const splitSections = splitReportSections(sourceServices);
+    const personalDetails =
+      stored?.personalDetails && stored.personalDetails.length > 0
+        ? dedupePersonalDetailsAnswers(stored.personalDetails)
+        : splitSections.personalDetails;
+    const services = splitSections.services;
+    const latestAttempt = services
           const matchingResponses = (item.candidateFormResponses ?? []).find(
             (response) => response.serviceId === serviceId,
           );
@@ -436,6 +611,7 @@ function buildReportPreviewData(item: RequestItem, viewerName: string) {
     },
     status: stored?.status || item.status,
     createdAt: stored?.createdAt || item.createdAt,
+    personalDetails,
     services,
     createdByName: generatedByName,
     verifiedByName:
@@ -461,6 +637,13 @@ function toShareReportPayload(report: ReportPreviewData) {
     },
     status: report.status,
     createdAt: report.createdAt,
+    personalDetails: report.personalDetails.map((detail) => ({
+      question: detail.question,
+      value: detail.value,
+      fieldType: detail.fieldType,
+      fileName: detail.fileName,
+      fileData: detail.fileData,
+    })),
     services: report.services.map((service) => ({
       serviceId: service.serviceId,
       serviceEntryIndex: service.serviceEntryIndex,
@@ -549,7 +732,7 @@ function formatServiceInstanceName(
   serviceEntryIndex: number,
   serviceEntryCount: number,
 ) {
-  const trimmedName = serviceName.trim() || "Unnamed Service";
+  const trimmedName = serviceName.trim() || "Service";
   if (serviceEntryCount <= 1) {
     return trimmedName;
   }
@@ -931,7 +1114,7 @@ function RequestsPageContent() {
         const { serviceInstanceKey } = getServiceIdentity(service);
         const latestAttempt = service.attempts?.[service.attempts.length - 1];
         requestDraft[serviceInstanceKey] = {
-          status: service.status === "unverified" ? "unverified" : "verified",
+          status: normalizeAttemptDraftStatus(latestAttempt?.status || service.status),
           verificationMode: service.verificationMode || "manual",
           comment: service.comment || "",
           verifierNote: latestAttempt?.verifierNote || "",
@@ -961,7 +1144,7 @@ function RequestsPageContent() {
     setServiceDraftsByRequest((prev) => {
       const requestDraft = prev[requestId] ?? {};
       const existing = requestDraft[serviceInstanceKey] ?? {
-        status: "verified" as const,
+        status: "in-progress" as const,
         verificationMode: "manual",
         comment: "",
         verifierNote: "",
@@ -1919,11 +2102,12 @@ function RequestsPageContent() {
                   serviceInstanceKey,
                   serviceDisplayName,
                 } = getServiceIdentity(service);
+                const latestAttempt = service.attempts?.[service.attempts.length - 1];
                 const draft = requestDraft[serviceInstanceKey] ?? {
-                  status: service.status === "unverified" ? "unverified" : "verified",
+                  status: normalizeAttemptDraftStatus(latestAttempt?.status || service.status),
                   verificationMode: service.verificationMode || "manual",
                   comment: service.comment || "",
-                  verifierNote: service.attempts?.[service.attempts.length - 1]?.verifierNote || "",
+                  verifierNote: latestAttempt?.verifierNote || "",
                   extraPaymentDone: false,
                   extraPaymentAmount: null,
                   screenshotFileName: "",
@@ -2058,10 +2242,11 @@ function RequestsPageContent() {
                         value={draft.status}
                         onChange={(e) =>
                           updateServiceDraft(item._id, serviceInstanceKey, {
-                            status: e.target.value as "verified" | "unverified",
+                            status: e.target.value as "in-progress" | "verified" | "unverified",
                           })
                         }
                       >
+                        <option value="in-progress">In Progress</option>
                         <option value="verified">Verified</option>
                         <option value="unverified">Unverified</option>
                       </select>
@@ -2511,6 +2696,78 @@ function RequestsPageContent() {
             </section>
 
             <div style={{ borderTop: "1px solid #717171", marginTop: "1.1rem" }} />
+
+            {report.personalDetails.length > 0 ? (
+              <section style={{ marginTop: "1.05rem" }}>
+                <h3 style={{ margin: 0, color: "#1F4597", fontSize: "1.52rem", fontWeight: 700 }}>
+                  Personal Details
+                </h3>
+                <div style={{ overflowX: "auto", marginTop: "0.45rem" }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      minWidth: "690px",
+                      borderCollapse: "collapse",
+                      fontSize: "0.94rem",
+                      border: "1px solid #CBD5E1",
+                    }}
+                  >
+                    <thead>
+                      <tr style={{ background: "#F8FAFC", textAlign: "left" }}>
+                        <th style={{ padding: "0.3rem 0.35rem", width: "42%" }}>Field</th>
+                        <th style={{ padding: "0.3rem 0.35rem" }}>Response</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.personalDetails.map((detail, detailIndex) => (
+                        <tr
+                          key={`${requestId}-preview-personal-detail-${detailIndex}`}
+                          style={{ borderTop: "1px solid #E2E8F0", verticalAlign: "top" }}
+                        >
+                          <td style={{ padding: "0.35rem" }}>{detail.question || "Field"}</td>
+                          <td style={{ padding: "0.35rem", lineHeight: 1.35 }}>
+                            {detail.fieldType === "file" && detail.fileData ? (
+                              <span style={{ display: "inline-flex", gap: "0.55rem", flexWrap: "wrap" }}>
+                                <span>{detail.fileName || "Attachment"}</span>
+                                <a
+                                  href={detail.fileData}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{ color: "#2563EB", textDecoration: "none" }}
+                                  onMouseEnter={(event) =>
+                                    (event.currentTarget.style.textDecoration = "underline")
+                                  }
+                                  onMouseLeave={(event) =>
+                                    (event.currentTarget.style.textDecoration = "none")
+                                  }
+                                >
+                                  View
+                                </a>
+                                <a
+                                  href={detail.fileData}
+                                  download={detail.fileName || `personal-detail-${detailIndex + 1}`}
+                                  style={{ color: "#2563EB", textDecoration: "none" }}
+                                  onMouseEnter={(event) =>
+                                    (event.currentTarget.style.textDecoration = "underline")
+                                  }
+                                  onMouseLeave={(event) =>
+                                    (event.currentTarget.style.textDecoration = "none")
+                                  }
+                                >
+                                  Download
+                                </a>
+                              </span>
+                            ) : (
+                              detail.value || "-"
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ) : null}
 
             <section style={{ marginTop: "1.35rem" }}>
               <h3 style={{ margin: 0, color: "#1F4597", fontSize: "2.05rem", fontWeight: 700 }}>

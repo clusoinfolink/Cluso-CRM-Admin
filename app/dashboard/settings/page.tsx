@@ -1183,27 +1183,6 @@ export default function SettingsPage() {
                       ))}
                     </select>
                   </div>
-
-                  <div>
-                    <label className="label" htmlFor="cluso-referred-by">
-                      If referred, list by whom
-                    </label>
-                    <input
-                      id="cluso-referred-by"
-                      className="input"
-                      placeholder="Name of referring client or person"
-                      value={profile.additionalQuestions.referredBy}
-                      onChange={(e) =>
-                        setProfile((prev) => ({
-                          ...prev,
-                          additionalQuestions: {
-                            ...prev.additionalQuestions,
-                            referredBy: e.target.value,
-                          },
-                        }))
-                      }
-                    />
-                  </div>
                 </div>
 
                 <div

@@ -17,11 +17,11 @@ type ServiceVerificationLike = {
   serviceEntryIndex?: unknown;
   serviceEntryCount?: unknown;
   serviceInstanceKey?: unknown;
-  status?: "pending" | "verified" | "unverified";
+  status?: "pending" | "in-progress" | "verified" | "unverified";
   verificationMode?: string;
   comment?: string;
   attempts?: Array<{
-    status?: "verified" | "unverified";
+    status?: "in-progress" | "verified" | "unverified";
     verificationMode?: string;
     comment?: string;
     attemptedAt?: Date;
@@ -35,6 +35,7 @@ type CandidateFormResponseLike = {
   serviceName: string;
   serviceEntryCount?: unknown;
   answers?: Array<{
+    fieldKey?: string;
     question?: string;
     fieldType?: string;
     repeatable?: boolean;
@@ -50,7 +51,7 @@ type NormalizedServiceVerification = {
   serviceEntryIndex: number;
   serviceEntryCount: number;
   serviceInstanceKey: string;
-  status: "pending" | "verified" | "unverified";
+  status: "pending" | "in-progress" | "verified" | "unverified";
   verificationMode: string;
   comment: string;
   candidateAnswers: Array<{
@@ -61,13 +62,21 @@ type NormalizedServiceVerification = {
     fileData: string;
   }>;
   attempts: Array<{
-    status: "verified" | "unverified";
+    status: "in-progress" | "verified" | "unverified";
     verificationMode: string;
     comment: string;
     attemptedAt: Date;
     verifierName: string;
     managerName: string;
   }>;
+};
+
+type ReportAnswer = {
+  question: string;
+  value: string;
+  fieldType: string;
+  fileName: string;
+  fileData: string;
 };
 
 type ReportPayload = {
@@ -85,6 +94,7 @@ type ReportPayload = {
   };
   status: string;
   createdAt: string;
+  personalDetails: ReportAnswer[];
   services: Array<{
     serviceId: string;
     serviceEntryIndex: number;
@@ -94,13 +104,7 @@ type ReportPayload = {
     status: string;
     verificationMode: string;
     comment: string;
-    candidateAnswers: Array<{
-      question: string;
-      value: string;
-      fieldType: string;
-      fileName: string;
-      fileData: string;
-    }>;
+    candidateAnswers: ReportAnswer[];
     attempts: Array<{
       attemptedAt: string;
       status: string;
@@ -111,6 +115,27 @@ type ReportPayload = {
     }>;
   }>;
 };
+
+type PersonalDetailAnswer = ReportAnswer;
+
+const PERSONAL_DETAILS_SERVICE_NAME = "personal details";
+const PERSONAL_DETAILS_FIELD_KEY_PREFIX = "personal_";
+const PERSONAL_DETAILS_QUESTION_SEQUENCE = [
+  "Full name (as per government ID)",
+  "Date of birth",
+  "Mobile number",
+  "Current residential address",
+  "Primary government ID number",
+  "Email address",
+  "Nationality",
+  "Gender",
+] as const;
+const PERSONAL_DETAILS_QUESTION_ORDER = new Map(
+  PERSONAL_DETAILS_QUESTION_SEQUENCE.map((question, index) => [
+    question.trim().toLowerCase(),
+    index,
+  ]),
+);
 
 type InvoiceSnapshot = {
   currency: string;
@@ -177,7 +202,7 @@ function toServiceDisplayName(
   serviceEntryIndex: number,
   serviceEntryCount: number,
 ) {
-  const trimmedName = serviceName.trim() || "Unnamed Service";
+  const trimmedName = serviceName.trim() || "Service";
   if (serviceEntryCount <= 1) {
     return trimmedName;
   }
@@ -188,6 +213,110 @@ function toServiceDisplayName(
   }
 
   return `${trimmedName}${suffix}`;
+}
+
+function normalizeQuestionKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizePersonalDetailAnswer(
+  answer: Partial<PersonalDetailAnswer>,
+): PersonalDetailAnswer {
+  return {
+    question: (answer.question ?? "").trim() || "Field",
+    value: (answer.value ?? "").trim() || "-",
+    fieldType: (answer.fieldType ?? "").trim() || "text",
+    fileName: (answer.fileName ?? "").trim(),
+    fileData: (answer.fileData ?? "").trim(),
+  };
+}
+
+function isPersonalDetailsServiceName(serviceName: string) {
+  return normalizeQuestionKey(serviceName) === PERSONAL_DETAILS_SERVICE_NAME;
+}
+
+function isLikelyPersonalDetailsQuestion(question: string) {
+  const normalizedQuestion = normalizeQuestionKey(question);
+  return PERSONAL_DETAILS_QUESTION_ORDER.has(normalizedQuestion);
+}
+
+function isPersonalDetailsAnswerEntry(
+  answer: Partial<PersonalDetailAnswer> & { fieldKey?: string },
+) {
+  const fieldKey = (answer.fieldKey ?? "").trim().toLowerCase();
+  if (fieldKey.startsWith(PERSONAL_DETAILS_FIELD_KEY_PREFIX)) {
+    return true;
+  }
+
+  return isLikelyPersonalDetailsQuestion(answer.question ?? "");
+}
+
+function sortPersonalDetailsAnswers(answers: PersonalDetailAnswer[]) {
+  return answers
+    .slice()
+    .sort((first, second) => {
+      const firstKey = normalizeQuestionKey(first.question);
+      const secondKey = normalizeQuestionKey(second.question);
+      const firstRank = PERSONAL_DETAILS_QUESTION_ORDER.get(firstKey) ?? Number.MAX_SAFE_INTEGER;
+      const secondRank = PERSONAL_DETAILS_QUESTION_ORDER.get(secondKey) ?? Number.MAX_SAFE_INTEGER;
+      if (firstRank !== secondRank) {
+        return firstRank - secondRank;
+      }
+
+      return firstKey.localeCompare(secondKey);
+    });
+}
+
+function dedupePersonalDetailsAnswers(answers: PersonalDetailAnswer[]) {
+  const dedupedByQuestion = new Map<string, PersonalDetailAnswer>();
+
+  for (const answer of answers) {
+    const normalized = normalizePersonalDetailAnswer(answer);
+    const questionKey = normalizeQuestionKey(normalized.question);
+    if (!questionKey) {
+      continue;
+    }
+
+    const existing = dedupedByQuestion.get(questionKey);
+    if (!existing) {
+      dedupedByQuestion.set(questionKey, normalized);
+      continue;
+    }
+
+    if ((existing.value === "-" || !existing.value.trim()) && normalized.value !== "-") {
+      dedupedByQuestion.set(questionKey, normalized);
+    }
+  }
+
+  return sortPersonalDetailsAnswers(Array.from(dedupedByQuestion.values()));
+}
+
+function splitReportServicesAndPersonalDetails<
+  TService extends { serviceName: string; candidateAnswers: PersonalDetailAnswer[] },
+>(services: TService[]) {
+  const filteredServices: TService[] = [];
+  const personalDetails: PersonalDetailAnswer[] = [];
+
+  for (const service of services) {
+    const serviceName = service.serviceName ?? "";
+    const serviceAnswers = Array.isArray(service.candidateAnswers)
+      ? service.candidateAnswers.map((answer) => normalizePersonalDetailAnswer(answer))
+      : [];
+    const looksLikePersonalDetails =
+      serviceAnswers.length > 0 && serviceAnswers.every((answer) => isPersonalDetailsAnswerEntry(answer));
+
+    if (isPersonalDetailsServiceName(serviceName) || looksLikePersonalDetails) {
+      personalDetails.push(...serviceAnswers);
+      continue;
+    }
+
+    filteredServices.push(service);
+  }
+
+  return {
+    services: filteredServices,
+    personalDetails: dedupePersonalDetailsAnswers(personalDetails),
+  };
 }
 
 function parseRepeatableAnswerValues(rawValue: string, repeatable?: boolean) {
@@ -242,6 +371,26 @@ function parseStoredReportData(value: unknown): ReportPayload | null {
 
   const candidate = asRecord(root.candidate);
   const company = asRecord(root.company);
+
+  const personalDetailsRaw = Array.isArray(root.personalDetails)
+    ? root.personalDetails
+    : [];
+  const personalDetailsFromPayload = personalDetailsRaw
+    .map((answerValue) => {
+      const answer = asRecord(answerValue);
+      if (!answer) {
+        return null;
+      }
+
+      return normalizePersonalDetailAnswer({
+        question: asString(answer.question),
+        value: asString(answer.value),
+        fieldType: asString(answer.fieldType, "text"),
+        fileName: asString(answer.fileName),
+        fileData: asString(answer.fileData),
+      });
+    })
+    .filter((answer): answer is PersonalDetailAnswer => Boolean(answer));
 
   const servicesRaw = Array.isArray(root.services) ? root.services : [];
   const services = servicesRaw
@@ -365,6 +514,12 @@ function parseStoredReportData(value: unknown): ReportPayload | null {
       } => Boolean(service),
     );
 
+  const splitSections = splitReportServicesAndPersonalDetails(services);
+  const personalDetails =
+    personalDetailsFromPayload.length > 0
+      ? dedupePersonalDetailsAnswers(personalDetailsFromPayload)
+      : splitSections.personalDetails;
+
   return {
     reportNumber: asString(root.reportNumber),
     generatedAt: asString(root.generatedAt),
@@ -380,7 +535,8 @@ function parseStoredReportData(value: unknown): ReportPayload | null {
     },
     status: asString(root.status),
     createdAt: asString(root.createdAt),
-    services,
+    personalDetails,
+    services: splitSections.services,
   };
 }
 
@@ -395,6 +551,10 @@ function normalizeReportDataForGeneration(
 
   const nowIso = new Date().toISOString();
   const fallbackServices = fallback.services;
+  const fallbackPersonalDetails = fallback.personalDetails;
+  const parsedPersonalDetails = parsed.personalDetails;
+  const resolvedPersonalDetails =
+    fallbackPersonalDetails.length > 0 ? fallbackPersonalDetails : parsedPersonalDetails;
 
   return {
     reportNumber: parsed.reportNumber.trim() || fallback.reportNumber,
@@ -411,6 +571,7 @@ function normalizeReportDataForGeneration(
     },
     status: parsed.status.trim() || fallback.status,
     createdAt: parsed.createdAt.trim() || fallback.createdAt || nowIso,
+    personalDetails: resolvedPersonalDetails,
     // Always use latest verification snapshot when regenerating report.
     services: fallbackServices,
   };
@@ -452,6 +613,10 @@ function toDisplayStatus(value: string) {
     return "-";
   }
 
+  if (normalized === "in-progress") {
+    return "In Progress";
+  }
+
   return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
 }
 
@@ -459,6 +624,10 @@ function toDisplayAttemptStatus(value: string) {
   const normalized = value.trim().toLowerCase();
   if (normalized === "verified") {
     return "Verified";
+  }
+
+  if (normalized === "unverified") {
+    return "Unverified";
   }
 
   return "In Progress";
@@ -525,7 +694,7 @@ function normalizeServiceVerifications(
       continue;
     }
 
-    const serviceName = (service.serviceName ?? "").trim() || "Unnamed Service";
+    const serviceName = (service.serviceName ?? "").trim() || "Service";
     if (!serviceNameById.has(serviceId)) {
       serviceNameById.set(serviceId, serviceName);
     }
@@ -552,7 +721,7 @@ function normalizeServiceVerifications(
       continue;
     }
 
-    const serviceName = (serviceResponse.serviceName ?? "").trim() || "Unnamed Service";
+    const serviceName = (serviceResponse.serviceName ?? "").trim() || "Service";
     if (!serviceNameById.has(serviceId)) {
       serviceNameById.set(serviceId, serviceName);
     }
@@ -608,7 +777,7 @@ function normalizeServiceVerifications(
       continue;
     }
 
-    const fallbackServiceName = serviceNameById.get(serviceId) ?? "Unnamed Service";
+    const fallbackServiceName = serviceNameById.get(serviceId) ?? "Service";
     const baseServiceName =
       (verification.serviceName ?? "").trim() || fallbackServiceName;
     if (!serviceNameById.has(serviceId)) {
@@ -642,7 +811,7 @@ function normalizeServiceVerifications(
       verificationMode: verification.verificationMode ?? "",
       comment: verification.comment ?? "",
       attempts: (verification.attempts ?? []).map((attempt) => ({
-        status: attempt.status ?? "verified",
+        status: attempt.status ?? "in-progress",
         verificationMode: attempt.verificationMode ?? "",
         comment: attempt.comment ?? "",
         attemptedAt: attempt.attemptedAt ? new Date(attempt.attemptedAt) : new Date(),
@@ -720,7 +889,7 @@ function normalizeServiceVerifications(
   const normalizedServices: NormalizedServiceVerification[] = [];
 
   for (const serviceId of orderedServiceIds) {
-    const baseServiceName = serviceNameById.get(serviceId) ?? "Unnamed Service";
+    const baseServiceName = serviceNameById.get(serviceId) ?? "Service";
     const serviceEntryCount = Math.max(
       1,
       selectedCountByServiceId.get(serviceId) ?? 0,
@@ -777,7 +946,7 @@ function normalizeServiceVerifications(
     }
   }
 
-  return normalizedServices;
+  return splitReportServicesAndPersonalDetails(normalizedServices);
 }
 
 async function getScopedRequest(auth: {
@@ -1078,6 +1247,10 @@ async function buildPdfBuffer(report: ReportPayload) {
       return palette.danger;
     }
 
+    if (normalized === "in-progress" || normalized === "pending") {
+      return rgb(0.63, 0.38, 0.03);
+    }
+
     return palette.ink;
   }
 
@@ -1085,6 +1258,10 @@ async function buildPdfBuffer(report: ReportPayload) {
     const normalized = status.trim().toLowerCase();
     if (normalized === "verified") {
       return palette.success;
+    }
+
+    if (normalized === "unverified") {
+      return palette.danger;
     }
 
     return rgb(0.63, 0.38, 0.03);
@@ -1218,6 +1395,133 @@ async function buildPdfBuffer(report: ReportPayload) {
   drawHorizontalLine(detailsBottomY, contentLeft + 16, contentWidth - 16, palette.lineSoft, 0.9);
   y = detailsBottomY - 22;
 
+  const personalDetails = dedupePersonalDetailsAnswers(
+    Array.isArray(report.personalDetails) ? report.personalDetails : [],
+  );
+
+  const qaTableColumns = {
+    question: { x: contentLeft, width: Math.floor(contentWidth * 0.42) },
+    response: {
+      x: contentLeft + Math.floor(contentWidth * 0.42),
+      width: contentWidth - Math.floor(contentWidth * 0.42),
+    },
+  };
+
+  function drawQATableHeader(leftLabel: string, rightLabel: string) {
+    const headerHeight = 20;
+    ensureSpace(headerHeight + 4);
+
+    page.drawRectangle({
+      x: contentLeft,
+      y: y - headerHeight,
+      width: contentWidth,
+      height: headerHeight,
+      borderColor: palette.lineSoft,
+      borderWidth: 0.7,
+      color: rgb(0.97, 0.98, 1),
+      opacity: 1,
+    });
+    page.drawLine({
+      start: { x: qaTableColumns.response.x, y },
+      end: { x: qaTableColumns.response.x, y: y - headerHeight },
+      thickness: 0.7,
+      color: palette.lineSoft,
+    });
+    page.drawText(leftLabel, {
+      x: qaTableColumns.question.x + 4,
+      y: y - 14,
+      size: 10.5,
+      font: boldFont,
+      color: palette.ink,
+    });
+    page.drawText(rightLabel, {
+      x: qaTableColumns.response.x + 4,
+      y: y - 14,
+      size: 10.5,
+      font: boldFont,
+      color: palette.ink,
+    });
+    y -= headerHeight;
+  }
+
+  function drawQATableRow(questionText: string, responseText: string, fontSize = 10.2) {
+    const questionLines = wrapText(
+      questionText || "Field",
+      fontSize,
+      qaTableColumns.question.width - 8,
+      false,
+      "-",
+    );
+    const responseLines = wrapText(
+      responseText || "-",
+      fontSize,
+      qaTableColumns.response.width - 8,
+      false,
+      "-",
+    );
+    const lineHeight = 12;
+    const rowLineCount = Math.max(questionLines.length, responseLines.length, 1);
+    const rowHeight = rowLineCount * lineHeight + 8;
+
+    ensureSpace(rowHeight + 2);
+    page.drawRectangle({
+      x: contentLeft,
+      y: y - rowHeight,
+      width: contentWidth,
+      height: rowHeight,
+      borderColor: palette.lineSoft,
+      borderWidth: 0.65,
+    });
+    page.drawLine({
+      start: { x: qaTableColumns.response.x, y },
+      end: { x: qaTableColumns.response.x, y: y - rowHeight },
+      thickness: 0.65,
+      color: palette.lineSoft,
+    });
+    drawWrappedLines(
+      questionLines,
+      qaTableColumns.question.x + 4,
+      y - 12,
+      fontSize,
+      palette.ink,
+      false,
+      lineHeight,
+    );
+    drawWrappedLines(
+      responseLines,
+      qaTableColumns.response.x + 4,
+      y - 12,
+      fontSize,
+      palette.ink,
+      false,
+      lineHeight,
+    );
+    y -= rowHeight;
+  }
+
+  if (personalDetails.length > 0) {
+    ensureSpace(58);
+    page.drawText("Personal Details", {
+      x: contentLeft,
+      y,
+      size: 14,
+      font: boldFont,
+      color: palette.headingBlue,
+    });
+    y -= 18;
+
+    drawQATableHeader("Field", "Response");
+    for (const detail of personalDetails) {
+      const responseText =
+        detail.fieldType === "file" && detail.fileData
+          ? detail.fileName || "Attachment"
+          : detail.value || "-";
+      drawQATableRow(detail.question || "Field", responseText, 10.2);
+    }
+
+    y -= 10;
+  }
+
   page.drawText("Service Verification Summary", {
     x: contentLeft,
     y,
@@ -1289,10 +1593,27 @@ async function buildPdfBuffer(report: ReportPayload) {
     const candidateAnswersHeight =
       candidateAnswers.length > 0
         ?
-            14 +
+            20 +
             candidateAnswers.reduce((sum, answer) => {
-              const answerText = `${answer.question || "Field"}: ${answer.value || "-"}`;
-              return sum + wrapText(answerText, 10.5, contentWidth, false, "-").length * 12.2 + 3;
+              const responseText =
+                answer.fieldType === "file" && answer.fileData
+                  ? answer.fileName || "Attachment"
+                  : answer.value || "-";
+              const questionLines = wrapText(
+                answer.question || "Field",
+                10.2,
+                qaTableColumns.question.width - 8,
+                false,
+                "-",
+              ).length;
+              const responseLines = wrapText(
+                responseText,
+                10.2,
+                qaTableColumns.response.width - 8,
+                false,
+                "-",
+              ).length;
+              return sum + Math.max(questionLines, responseLines, 1) * 12 + 8;
             }, 0)
         : 0;
 
@@ -1459,20 +1780,13 @@ async function buildPdfBuffer(report: ReportPayload) {
 
     if (candidateAnswers.length > 0) {
       y -= 2;
-      page.drawText("Candidate Answers:", {
-        x: contentLeft,
-        y,
-        size: 10.8,
-        font: boldFont,
-        color: palette.ink,
-      });
-      y -= 13;
-
+      drawQATableHeader("Candidate Answers", "Response");
       for (const answer of candidateAnswers) {
-        const answerText = `${answer.question || "Field"}: ${answer.value || "-"}`;
-        const answerLines = wrapText(answerText, 10.5, contentWidth, false, "-");
-        drawWrappedLines(answerLines, contentLeft, y, 10.5, palette.ink, false, 12.2);
-        y -= answerLines.length * 12.2 + 3;
+        const responseText =
+          answer.fieldType === "file" && answer.fileData
+            ? answer.fileName || "Attachment"
+            : answer.value || "-";
+        drawQATableRow(answer.question || "Field", responseText, 10.2);
       }
     }
 
@@ -1804,7 +2118,7 @@ export async function POST(
   const selectedServices = (scoped.item.selectedServices ?? []) as SelectedServiceLike[];
   const candidateFormResponses =
     (scoped.item.candidateFormResponses ?? []) as CandidateFormResponseLike[];
-  const serviceVerifications = normalizeServiceVerifications(
+  const normalizedReportSections = normalizeServiceVerifications(
     selectedServices,
     (scoped.item.serviceVerifications ?? []) as ServiceVerificationLike[],
     candidateFormResponses,
@@ -1826,7 +2140,14 @@ export async function POST(
     },
     status: scoped.item.status,
     createdAt: asDate(scoped.item.createdAt)?.toISOString() ?? new Date().toISOString(),
-    services: serviceVerifications.map((service) => ({
+    personalDetails: normalizedReportSections.personalDetails.map((detail) => ({
+      question: detail.question,
+      value: detail.value,
+      fieldType: detail.fieldType,
+      fileName: detail.fileName,
+      fileData: detail.fileData,
+    })),
+    services: normalizedReportSections.services.map((service) => ({
       serviceId: service.serviceId,
       serviceEntryIndex: service.serviceEntryIndex,
       serviceEntryCount: service.serviceEntryCount,

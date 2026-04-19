@@ -69,7 +69,7 @@ type ServiceQuestionIconKey =
 const DEFAULT_QUESTION_ICON: ServiceQuestionIconKey = "diary";
 const SYSTEM_SERVICE_COUNTRY_FIELD_KEY = "system_service_country";
 const SYSTEM_SERVICE_COUNTRY_FIELD_QUESTION =
-  "Select verification country for this service";
+  "Country";
 const SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS = [
   "Afghanistan",
   "Armenia",
@@ -249,11 +249,17 @@ function normalizeDraftDropdownOptions(rawOptions: unknown) {
     return [] as string[];
   }
 
-  return rawOptions.map((option) => String(option ?? "").trim());
+  return rawOptions.map((option) => String(option ?? ""));
 }
 
 function sanitizeDropdownOptions(rawOptions: unknown) {
-  return [...new Set(normalizeDraftDropdownOptions(rawOptions).filter(Boolean))];
+  return [
+    ...new Set(
+      normalizeDraftDropdownOptions(rawOptions)
+        .map((option) => option.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function sanitizeSubFields(rawSubFields: unknown): ServiceFormSubField[] {
@@ -2695,7 +2701,7 @@ export default function ServiceFormBuilder({
                                           />
                                         ) : isDropdownField ? (
                                           <select className="input" disabled defaultValue="">
-                                            <option value="">Select an option</option>
+                                            <option value="">Select</option>
                                             {field.dropdownOptions.map((option, optionIndex) => (
                                               <option
                                                 key={`${fieldRowKey}-repeat-option-${repeatIndex}-${optionIndex}`}
@@ -2755,7 +2761,7 @@ export default function ServiceFormBuilder({
                                   />
                                 ) : isDropdownField ? (
                                   <select className="input" disabled defaultValue="">
-                                    <option value="">Select an option</option>
+                                    <option value="">Select</option>
                                     {field.dropdownOptions.map((option, optionIndex) => (
                                       <option key={`${fieldRowKey}-option-${optionIndex}`} value={option}>
                                         {option}
