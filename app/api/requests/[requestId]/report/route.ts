@@ -161,6 +161,24 @@ function asString(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
+function normalizeServiceId(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const normalizedLower = normalized.toLowerCase();
+  if (
+    normalizedLower === "undefined" ||
+    normalizedLower === "null" ||
+    normalizedLower === "nan"
+  ) {
+    return "";
+  }
+
+  return normalized;
+}
+
 function normalizePositiveInteger(value: unknown, fallback = 1) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -683,13 +701,13 @@ function normalizeServiceVerifications(
   const fallbackEntryCounterByServiceId = new Map<string, number>();
   const existingServiceIds = new Set(
     existingVerifications
-      .map((verification) => String(verification.serviceId))
+      .map((verification) => normalizeServiceId(verification.serviceId))
       .filter((serviceId) => Boolean(serviceId)),
   );
   const candidateAnswersByInstanceKey = new Map<string, CandidateAnswer[]>();
 
   for (const service of selectedServices) {
-    const serviceId = String(service.serviceId);
+    const serviceId = normalizeServiceId(service.serviceId);
     if (!serviceId) {
       continue;
     }
@@ -705,19 +723,19 @@ function normalizeServiceVerifications(
     );
   }
 
+  const hasSelectedServices = selectedCountByServiceId.size > 0;
+
   for (const serviceResponse of candidateFormResponses) {
-    const serviceId = String(serviceResponse.serviceId);
+    const serviceId = normalizeServiceId(serviceResponse.serviceId);
     if (!serviceId) {
       continue;
     }
 
-    const shouldScopeByKnownServices =
-      selectedCountByServiceId.size > 0 || existingServiceIds.size > 0;
-    if (
-      shouldScopeByKnownServices &&
-      !selectedCountByServiceId.has(serviceId) &&
-      !existingServiceIds.has(serviceId)
-    ) {
+    if (hasSelectedServices && !selectedCountByServiceId.has(serviceId)) {
+      continue;
+    }
+
+    if (!hasSelectedServices && existingServiceIds.size > 0 && !existingServiceIds.has(serviceId)) {
       continue;
     }
 
@@ -772,8 +790,12 @@ function normalizeServiceVerifications(
   }
 
   for (const verification of existingVerifications) {
-    const serviceId = String(verification.serviceId);
+    const serviceId = normalizeServiceId(verification.serviceId);
     if (!serviceId) {
+      continue;
+    }
+
+    if (hasSelectedServices && !selectedCountByServiceId.has(serviceId)) {
       continue;
     }
 
@@ -849,7 +871,7 @@ function normalizeServiceVerifications(
   const seenServiceIds = new Set<string>();
 
   for (const service of selectedServices) {
-    const serviceId = String(service.serviceId);
+    const serviceId = normalizeServiceId(service.serviceId);
     if (!serviceId || seenServiceIds.has(serviceId)) {
       continue;
     }
@@ -859,8 +881,16 @@ function normalizeServiceVerifications(
   }
 
   for (const serviceResponse of candidateFormResponses) {
-    const serviceId = String(serviceResponse.serviceId);
+    const serviceId = normalizeServiceId(serviceResponse.serviceId);
     if (!serviceId || seenServiceIds.has(serviceId)) {
+      continue;
+    }
+
+    if (hasSelectedServices && !selectedCountByServiceId.has(serviceId)) {
+      continue;
+    }
+
+    if (!hasSelectedServices && existingServiceIds.size > 0 && !existingServiceIds.has(serviceId)) {
       continue;
     }
 
@@ -869,6 +899,10 @@ function normalizeServiceVerifications(
   }
 
   for (const serviceId of existingEncounterOrder) {
+    if (hasSelectedServices && !selectedCountByServiceId.has(serviceId)) {
+      continue;
+    }
+
     if (seenServiceIds.has(serviceId)) {
       continue;
     }
@@ -878,6 +912,10 @@ function normalizeServiceVerifications(
   }
 
   for (const serviceId of serviceNameById.keys()) {
+    if (hasSelectedServices && !selectedCountByServiceId.has(serviceId)) {
+      continue;
+    }
+
     if (seenServiceIds.has(serviceId)) {
       continue;
     }

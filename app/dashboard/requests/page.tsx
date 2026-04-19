@@ -43,6 +43,7 @@ const REQUESTS_STALE_TIME_MS = 5 * 60 * 1000;
 const REQUESTS_PER_COMPANY_GROUP_PAGE = 20;
 const CUSTOM_VERIFICATION_MODE_STORAGE_KEY = "cluso-admin-custom-verification-modes";
 const CUSTOM_VERIFICATION_MODE_SENTINEL = "__add_custom_mode__";
+const CUSTOM_VERIFICATION_MODE_REMOVE_SENTINEL = "__remove_custom_mode__";
 const MAX_ATTEMPT_SCREENSHOT_BYTES = 2 * 1024 * 1024;
 const ATTEMPT_SCREENSHOT_MIME_TYPES = new Set([
   "image/png",
@@ -537,46 +538,61 @@ function buildReportPreviewData(item: RequestItem, viewerName: string) {
             })),
           };
         })
-    const sourceServices = stored?.services.length ? stored.services : fallbackServices;
-    const splitSections = splitReportSections(sourceServices);
-    const personalDetails =
-      stored?.personalDetails && stored.personalDetails.length > 0
-        ? dedupePersonalDetailsAnswers(stored.personalDetails)
-        : splitSections.personalDetails;
-    const services = splitSections.services;
-    const latestAttempt = services
-          const matchingResponses = (item.candidateFormResponses ?? []).find(
-            (response) => response.serviceId === serviceId,
+      : (() => {
+          const selectedServices = (item.selectedServices ?? []).filter((service) =>
+            Boolean(normalizeServiceId(service.serviceId)),
           );
-          const serviceEntryCount = matchingResponses
-            ? resolveServiceResponseEntryCount(matchingResponses)
-            : 1;
-          const serviceEntryIndex = 1;
-          const serviceInstanceKey = buildServiceInstanceKey(
-            serviceId,
-            serviceEntryIndex,
-          );
+          const totalCountByServiceId = new Map<string, number>();
+          for (const selected of selectedServices) {
+            const serviceId = normalizeServiceId(selected.serviceId);
+            if (!serviceId) {
+              continue;
+            }
 
-          return {
-            serviceId,
-            serviceEntryIndex,
-            serviceEntryCount,
-            serviceInstanceKey,
-            serviceName: formatServiceInstanceName(
-              service.serviceName,
+            totalCountByServiceId.set(
+              serviceId,
+              (totalCountByServiceId.get(serviceId) ?? 0) + 1,
+            );
+          }
+
+          const entryIndexByServiceId = new Map<string, number>();
+          return selectedServices.map((service) => {
+            const serviceId = normalizeServiceId(service.serviceId);
+            const serviceEntryIndex = (entryIndexByServiceId.get(serviceId) ?? 0) + 1;
+            entryIndexByServiceId.set(serviceId, serviceEntryIndex);
+            const serviceEntryCount = totalCountByServiceId.get(serviceId) ?? 1;
+            const serviceInstanceKey = buildServiceInstanceKey(
+              serviceId,
+              serviceEntryIndex,
+            );
+
+            return {
+              serviceId,
               serviceEntryIndex,
               serviceEntryCount,
-            ),
-            status: "pending",
-            verificationMode: "",
-            comment: "",
-            candidateAnswers:
-              candidateAnswersByServiceInstance.get(serviceInstanceKey) ?? [],
-            attempts: [],
-          };
-        });
+              serviceInstanceKey,
+              serviceName: formatServiceInstanceName(
+                service.serviceName,
+                serviceEntryIndex,
+                serviceEntryCount,
+              ),
+              status: "pending",
+              verificationMode: "",
+              comment: "",
+              candidateAnswers:
+                candidateAnswersByServiceInstance.get(serviceInstanceKey) ?? [],
+              attempts: [],
+            };
+          });
+        })();
 
-  const services = stored?.services.length ? stored.services : fallbackServices;
+  const sourceServices = stored?.services.length ? stored.services : fallbackServices;
+  const splitSections = splitReportSections(sourceServices);
+  const personalDetails =
+    stored?.personalDetails && stored.personalDetails.length > 0
+      ? dedupePersonalDetailsAnswers(stored.personalDetails)
+      : splitSections.personalDetails;
+  const services = splitSections.services;
   const latestAttempt = services
     .flatMap((service) => service.attempts)
     .slice()
@@ -723,6 +739,24 @@ function normalizePositiveInteger(value: unknown, fallback = 1) {
   return Math.floor(parsed);
 }
 
+function normalizeServiceId(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const normalizedLower = normalized.toLowerCase();
+  if (
+    normalizedLower === "undefined" ||
+    normalizedLower === "null" ||
+    normalizedLower === "nan"
+  ) {
+    return "";
+  }
+
+  return normalized;
+}
+
 function buildServiceInstanceKey(serviceId: string, serviceEntryIndex: number) {
   return `${serviceId}::${normalizePositiveInteger(serviceEntryIndex)}`;
 }
@@ -773,7 +807,7 @@ function resolveServiceResponseEntryCount(serviceResponse: CandidateServiceRespo
   const declaredCount = normalizePositiveInteger(serviceResponse.serviceEntryCount, 1);
   const maxRepeatableCount = serviceResponse.answers.reduce((maxCount, answer) => {
     const repeatableValues = parseRepeatableAnswerValues(answer.value, answer.repeatable);
-    return Math.max(maxCount, repeatableValues.length || 1);
+    return Math.max(maxCount, repeatableValues.length);
   }, 1);
 
   return Math.max(declaredCount, maxRepeatableCount, 1);
@@ -782,7 +816,7 @@ function resolveServiceResponseEntryCount(serviceResponse: CandidateServiceRespo
 function getAnswerValueForEntry(answer: CandidateServiceAnswer, entryIndex: number) {
   const repeatableValues = parseRepeatableAnswerValues(answer.value, answer.repeatable);
   if (repeatableValues.length === 0) {
-    return answer.value;
+    return answer.value ?? "";
   }
 
   return repeatableValues[entryIndex] ?? "";
@@ -918,6 +952,19 @@ function normalizeVerificationModeInput(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function isDefaultVerificationMode(value: string) {
+  const normalizedValueLower = normalizeVerificationModeInput(value).toLowerCase();
+  if (!normalizedValueLower) {
+    return false;
+  }
+
+  return DEFAULT_VERIFICATION_MODE_OPTIONS.some(
+    (option) =>
+      option.value.toLowerCase() === normalizedValueLower ||
+      option.label.toLowerCase() === normalizedValueLower,
+  );
+}
+
 function loadStoredCustomVerificationModes() {
   if (typeof window === "undefined") {
     return [] as string[];
@@ -946,12 +993,7 @@ function loadStoredCustomVerificationModes() {
       }
 
       const normalizedModeLower = normalizedMode.toLowerCase();
-      const isDefault = DEFAULT_VERIFICATION_MODE_OPTIONS.some(
-        (option) =>
-          option.value.toLowerCase() === normalizedModeLower ||
-          option.label.toLowerCase() === normalizedModeLower,
-      );
-      if (isDefault) {
+      if (isDefaultVerificationMode(normalizedModeLower)) {
         continue;
       }
 
@@ -990,6 +1032,7 @@ function RequestsPageContent() {
     me?.role === "admin" || me?.role === "superadmin" || me?.role === "manager";
   const canDeleteVerificationLogs =
     me?.role === "admin" || me?.role === "superadmin" || me?.role === "manager";
+  const canEditVerificationModeList = me?.role === "admin" || me?.role === "superadmin";
   const [searchText, setSearchText] = useState("");
   const [message, setMessage] = useState("");
   const [highlightedRequestId, setHighlightedRequestId] = useState("");
@@ -1058,28 +1101,67 @@ function RequestsPageContent() {
     [customVerificationModes],
   );
 
+  function persistCustomVerificationModes(nextModes: string[]) {
+    setCustomVerificationModes(nextModes);
+
+    try {
+      window.localStorage.setItem(
+        CUSTOM_VERIFICATION_MODE_STORAGE_KEY,
+        JSON.stringify(nextModes),
+      );
+    } catch {
+      // Ignore storage errors; mode list remains available for this session.
+    }
+  }
+
   function getServiceVerifications(item: RequestItem): ServiceVerification[] {
+    const selectedServices = (item.selectedServices ?? []).filter((service) =>
+      Boolean(normalizeServiceId(service.serviceId)),
+    );
+    const selectedServiceIds = new Set(
+      selectedServices.map((service) => normalizeServiceId(service.serviceId)),
+    );
+
     if (item.serviceVerifications && item.serviceVerifications.length > 0) {
-      return item.serviceVerifications;
+      const filteredVerifications = item.serviceVerifications.filter((service) => {
+        const serviceId = normalizeServiceId(service.serviceId);
+        if (!serviceId) {
+          return false;
+        }
+
+        if (selectedServiceIds.size > 0 && !selectedServiceIds.has(serviceId)) {
+          return false;
+        }
+
+        return true;
+      });
+        if (filteredVerifications.length > 0) {
+          return filteredVerifications;
+        }
     }
 
-    const selectedServices = item.selectedServices ?? [];
     const totalCountByServiceId = new Map<string, number>();
     for (const service of selectedServices) {
+        const serviceId = normalizeServiceId(service.serviceId);
+        if (!serviceId) {
+          continue;
+        }
+
       totalCountByServiceId.set(
-        service.serviceId,
-        (totalCountByServiceId.get(service.serviceId) ?? 0) + 1,
+          serviceId,
+          (totalCountByServiceId.get(serviceId) ?? 0) + 1,
       );
     }
 
     const entryIndexByServiceId = new Map<string, number>();
     return selectedServices.map((service) => {
-      const serviceEntryIndex = (entryIndexByServiceId.get(service.serviceId) ?? 0) + 1;
-      entryIndexByServiceId.set(service.serviceId, serviceEntryIndex);
-      const serviceEntryCount = totalCountByServiceId.get(service.serviceId) ?? 1;
+        const serviceId = normalizeServiceId(service.serviceId);
+        const serviceEntryIndex = (entryIndexByServiceId.get(serviceId) ?? 0) + 1;
+        entryIndexByServiceId.set(serviceId, serviceEntryIndex);
+        const serviceEntryCount = totalCountByServiceId.get(serviceId) ?? 1;
 
       return {
-        serviceId: service.serviceId,
+          serviceId,
         serviceName: formatServiceInstanceName(
           service.serviceName,
           serviceEntryIndex,
@@ -1087,7 +1169,7 @@ function RequestsPageContent() {
         ),
         serviceEntryIndex,
         serviceEntryCount,
-        serviceInstanceKey: buildServiceInstanceKey(service.serviceId, serviceEntryIndex),
+          serviceInstanceKey: buildServiceInstanceKey(serviceId, serviceEntryIndex),
         status: "pending",
         verificationMode: "",
         comment: "",
@@ -1193,21 +1275,17 @@ function RequestsPageContent() {
     }
 
     const nextModes = [...customVerificationModes, normalizedInput];
-    setCustomVerificationModes(nextModes);
-
-    try {
-      window.localStorage.setItem(
-        CUSTOM_VERIFICATION_MODE_STORAGE_KEY,
-        JSON.stringify(nextModes),
-      );
-    } catch {
-      // Ignore storage errors; mode remains available for this session.
-    }
+    persistCustomVerificationModes(nextModes);
 
     return { mode: normalizedInput, added: true };
   }
 
   function saveCustomModeForService(requestId: string, serviceInstanceKey: string) {
+    if (!canEditVerificationModeList) {
+      setMessage("Only Admin and Super Admin can edit the verification mode list.");
+      return;
+    }
+
     const serviceKey = `${requestId}:${serviceInstanceKey}`;
     const rawInput = customModeInputByService[serviceKey] ?? "";
     const resolved = resolveVerificationMode(rawInput);
@@ -1231,6 +1309,85 @@ function RequestsPageContent() {
         ? `Saved \"${resolved.mode}\" for upcoming verification mode dropdowns.`
         : `Verification mode set to \"${resolved.mode}\".`,
     );
+  }
+
+  function removeCustomModeForService(requestId: string, serviceInstanceKey: string) {
+    if (!canEditVerificationModeList) {
+      setMessage("Only Admin and Super Admin can edit the verification mode list.");
+      return;
+    }
+
+    const activeMode =
+      serviceDraftsByRequest[requestId]?.[serviceInstanceKey]?.verificationMode ?? "";
+    const normalizedMode = normalizeVerificationModeInput(activeMode);
+    if (!normalizedMode) {
+      setMessage("Choose a custom mode before removing it from the list.");
+      return;
+    }
+
+    if (isDefaultVerificationMode(normalizedMode)) {
+      setMessage("Default verification modes cannot be removed.");
+      return;
+    }
+
+    const normalizedModeLower = normalizedMode.toLowerCase();
+    const hasCustomMode = customVerificationModes.some(
+      (mode) => mode.toLowerCase() === normalizedModeLower,
+    );
+    if (!hasCustomMode) {
+      setMessage(`\"${normalizedMode}\" is not in the saved custom mode list.`);
+      return;
+    }
+
+    const nextModes = customVerificationModes.filter(
+      (mode) => mode.toLowerCase() !== normalizedModeLower,
+    );
+    persistCustomVerificationModes(nextModes);
+
+    setServiceDraftsByRequest((prev) => {
+      let didChange = false;
+      const next: Record<string, Record<string, ServiceAttemptDraft>> = {};
+
+      for (const [draftRequestId, requestDraft] of Object.entries(prev)) {
+        let requestChanged = false;
+        const nextRequestDraft: Record<string, ServiceAttemptDraft> = {};
+
+        for (const [draftServiceKey, draftState] of Object.entries(requestDraft)) {
+          if (
+            normalizeVerificationModeInput(draftState.verificationMode).toLowerCase() ===
+            normalizedModeLower
+          ) {
+            requestChanged = true;
+            nextRequestDraft[draftServiceKey] = {
+              ...draftState,
+              verificationMode: "manual",
+            };
+          } else {
+            nextRequestDraft[draftServiceKey] = draftState;
+          }
+        }
+
+        if (requestChanged) {
+          didChange = true;
+          next[draftRequestId] = nextRequestDraft;
+        } else {
+          next[draftRequestId] = requestDraft;
+        }
+      }
+
+      return didChange ? next : prev;
+    });
+
+    const serviceKey = `${requestId}:${serviceInstanceKey}`;
+    setShowCustomModeInputByService((prev) => ({
+      ...prev,
+      [serviceKey]: false,
+    }));
+    setCustomModeInputByService((prev) => ({
+      ...prev,
+      [serviceKey]: "",
+    }));
+    setMessage(`Removed \"${normalizedMode}\" from verification mode list.`);
   }
 
   function clearAttemptScreenshot(requestId: string, serviceInstanceKey: string) {
@@ -2078,345 +2235,52 @@ function RequestsPageContent() {
           Log verification attempts per service with result, mode, comments, and internal verifier notes.
         </p>
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: "1510px", borderCollapse: "collapse", background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
-            <thead>
-              <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Service</th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Current Status</th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Verification Mode</th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Result</th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Comment</th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>
-                  Verifier Note (Internal)
-                </th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Extra Payment</th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Screenshot / Receipt (Max 2MB)</th>
-                <th style={{ padding: "0.65rem", fontSize: "0.8rem", color: "#475569" }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {services.map((service) => {
-                const {
-                  serviceEntryIndex,
-                  serviceInstanceKey,
-                  serviceDisplayName,
-                } = getServiceIdentity(service);
-                const latestAttempt = service.attempts?.[service.attempts.length - 1];
-                const draft = requestDraft[serviceInstanceKey] ?? {
-                  status: normalizeAttemptDraftStatus(latestAttempt?.status || service.status),
-                  verificationMode: service.verificationMode || "manual",
-                  comment: service.comment || "",
-                  verifierNote: latestAttempt?.verifierNote || "",
-                  extraPaymentDone: false,
-                  extraPaymentAmount: null,
-                  screenshotFileName: "",
-                  screenshotMimeType: "",
-                  screenshotFileSize: null,
-                  screenshotData: "",
-                };
-                const serviceKey = `${item._id}:${serviceInstanceKey}`;
-                const showCustomModeInput = Boolean(showCustomModeInputByService[serviceKey]);
-                const customModeInput = customModeInputByService[serviceKey] ?? "";
-                const hasDraftModeOption = verificationModeOptions.some(
-                  (option) => option.value === draft.verificationMode,
-                );
-                const rowModeOptions = hasDraftModeOption
-                  ? verificationModeOptions
-                  : draft.verificationMode
-                    ? [
-                        ...verificationModeOptions,
-                        {
-                          value: draft.verificationMode,
-                          label: draft.verificationMode,
-                        },
-                      ]
-                    : verificationModeOptions;
-                const selectedServiceForCurrency =
-                  (item.selectedServices ?? []).find(
-                    (entry) =>
-                      entry.serviceId === service.serviceId ||
-                      entry.serviceName.toLowerCase() === service.serviceName.toLowerCase(),
-                  ) ?? null;
-                const serviceCurrency =
-                  selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
-                const canSubmitAttempt =
-                  canVerifyWorkflow &&
-                  item.candidateFormStatus === "submitted" &&
-                  (item.status === "approved" || item.status === "verified");
-
-                return (
-                  <tr key={`${item._id}-${serviceInstanceKey}`} style={{ borderTop: "1px solid #F1F5F9" }}>
-                    <td style={{ padding: "0.65rem", fontWeight: 600, color: "#1E293B" }}>
-                      {serviceDisplayName}
-                    </td>
-                    <td style={{ padding: "0.65rem" }}>
-                      <span className={`status-pill status-pill-${service.status === "unverified" ? "rejected" : service.status === "verified" ? "verified" : "pending"}`} style={{ textTransform: "capitalize" }}>
-                        {service.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "0.65rem", minWidth: "240px" }}>
-                      <select
-                        className="input"
-                        style={{ minWidth: "160px", padding: "0.35rem 0.45rem" }}
-                        value={draft.verificationMode}
-                        onChange={(e) => {
-                          const selectedMode = e.target.value;
-                          if (selectedMode === CUSTOM_VERIFICATION_MODE_SENTINEL) {
-                            setShowCustomModeInputByService((prev) => ({
-                              ...prev,
-                              [serviceKey]: true,
-                            }));
-                            return;
-                          }
-
-                          setShowCustomModeInputByService((prev) => ({
-                            ...prev,
-                            [serviceKey]: false,
-                          }));
-                          updateServiceDraft(item._id, serviceInstanceKey, {
-                            verificationMode: selectedMode,
-                          });
-                        }}
-                      >
-                        {rowModeOptions.map((option) => (
-                          <option key={`${serviceKey}-${option.value}`} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                        <option value={CUSTOM_VERIFICATION_MODE_SENTINEL}>+ Add custom mode</option>
-                      </select>
-
-                      {showCustomModeInput ? (
-                        <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
-                          <input
-                            className="input"
-                            style={{ minWidth: "150px", padding: "0.32rem 0.45rem" }}
-                            value={customModeInput}
-                            placeholder="Type custom mode"
-                            onChange={(e) =>
-                              setCustomModeInputByService((prev) => ({
-                                ...prev,
-                                [serviceKey]: e.target.value,
-                              }))
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                saveCustomModeForService(item._id, serviceInstanceKey);
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
-                            onClick={() => saveCustomModeForService(item._id, serviceInstanceKey)}
-                          >
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
-                            onClick={() => {
-                              setShowCustomModeInputByService((prev) => ({
-                                ...prev,
-                                [serviceKey]: false,
-                              }));
-                              setCustomModeInputByService((prev) => ({
-                                ...prev,
-                                [serviceKey]: "",
-                              }));
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : null}
-                    </td>
-                    <td style={{ padding: "0.65rem" }}>
-                      <select
-                        className="input"
-                        style={{ minWidth: "130px", padding: "0.35rem 0.45rem" }}
-                        value={draft.status}
-                        onChange={(e) =>
-                          updateServiceDraft(item._id, serviceInstanceKey, {
-                            status: e.target.value as "in-progress" | "verified" | "unverified",
-                          })
-                        }
-                      >
-                        <option value="in-progress">In Progress</option>
-                        <option value="verified">Verified</option>
-                        <option value="unverified">Unverified</option>
-                      </select>
-                    </td>
-                    <td style={{ padding: "0.65rem", minWidth: "210px" }}>
-                      <input
-                        className="input"
-                        style={{ padding: "0.35rem 0.45rem" }}
-                        value={draft.comment}
-                        placeholder="Add attempt comment"
-                        onChange={(e) =>
-                          updateServiceDraft(item._id, serviceInstanceKey, {
-                            comment: e.target.value,
-                          })
-                        }
-                      />
-                    </td>
-                    <td style={{ padding: "0.65rem", minWidth: "260px" }}>
-                      <textarea
-                        className="input"
-                        rows={2}
-                        style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
-                        value={draft.verifierNote}
-                        placeholder="Internal note for verification method (not shown in report)"
-                        onChange={(e) =>
-                          updateServiceDraft(item._id, serviceInstanceKey, {
-                            verifierNote: e.target.value,
-                          })
-                        }
-                      />
-                    </td>
-                    <td style={{ padding: "0.65rem", minWidth: "190px" }}>
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{
-                            padding: "0.32rem 0.55rem",
-                            fontSize: "0.75rem",
-                            borderColor: draft.extraPaymentDone ? "#16A34A" : "#CBD5E1",
-                            background: draft.extraPaymentDone ? "#ECFDF5" : "#F8FAFC",
-                            color: draft.extraPaymentDone ? "#166534" : "#334155",
-                            fontWeight: 700,
-                          }}
-                          onClick={() => {
-                            const nextValue = !draft.extraPaymentDone;
-                            updateServiceDraft(item._id, serviceInstanceKey, {
-                              extraPaymentDone: nextValue,
-                              extraPaymentAmount: nextValue ? draft.extraPaymentAmount : null,
-                            });
-                            if (nextValue) {
-                              setMessage("Extra payment marked as done. Enter amount and upload receipt.");
-                            }
-                          }}
-                        >
-                          {draft.extraPaymentDone ? "Yes, Receipt Needed" : "No Extra Payment"}
-                        </button>
-
-                        {draft.extraPaymentDone ? (
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            className="input"
-                            style={{ padding: "0.32rem 0.45rem" }}
-                            value={
-                              typeof draft.extraPaymentAmount === "number"
-                                ? String(draft.extraPaymentAmount)
-                                : ""
-                            }
-                            placeholder={`Extra amount (${serviceCurrency})`}
-                            onChange={(event) => {
-                              const rawValue = event.target.value.trim();
-                              const parsedAmount = Number(rawValue);
-                              updateServiceDraft(item._id, serviceInstanceKey, {
-                                extraPaymentAmount:
-                                  rawValue && Number.isFinite(parsedAmount) && parsedAmount > 0
-                                    ? Math.round(parsedAmount * 100) / 100
-                                    : null,
-                              });
-                            }}
-                          />
-                        ) : null}
-                      </div>
-                    </td>
-                    <td style={{ padding: "0.65rem", minWidth: "260px" }}>
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <input
-                          type="file"
-                          accept=".png,.jpg,.jpeg,.webp,image/png,image/x-png,image/jpeg,image/jpg,image/pjpeg,image/webp"
-                          className="input"
-                          style={{ padding: "0.35rem 0.45rem" }}
-                          onChange={(event) =>
-                            void selectAttemptScreenshot(item._id, serviceInstanceKey, event)
-                          }
-                        />
-                        {draft.screenshotData ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap", fontSize: "0.75rem", color: "#475569" }}>
-                            <span style={{ fontWeight: 600, color: "#1E293B" }}>
-                              {draft.screenshotFileName || (draft.extraPaymentDone ? "Selected receipt" : "Selected screenshot")}
-                            </span>
-                            {typeof draft.screenshotFileSize === "number" ? (
-                              <span>({formatFileSize(draft.screenshotFileSize)})</span>
-                            ) : null}
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              style={{ padding: "0.2rem 0.45rem", fontSize: "0.72rem" }}
-                              onClick={() => clearAttemptScreenshot(item._id, serviceInstanceKey)}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        ) : draft.extraPaymentDone ? (
-                          <span style={{ fontSize: "0.75rem", color: "#B45309", fontWeight: 600 }}>
-                            Receipt and amount are required when extra payment is marked done.
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: "0.75rem", color: "#94A3B8" }}>
-                            Optional: attach verification screenshot
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td style={{ padding: "0.65rem" }}>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem" }}
-                        disabled={
-                          !canSubmitAttempt ||
-                          verifyingServiceKey === serviceKey ||
-                          (draft.extraPaymentDone &&
-                            (!draft.screenshotData ||
-                              typeof draft.extraPaymentAmount !== "number" ||
-                              draft.extraPaymentAmount <= 0))
-                        }
-                        onClick={() =>
-                          logServiceAttempt(
-                            item._id,
-                            service.serviceId,
-                            serviceEntryIndex,
-                            serviceInstanceKey,
-                          )
-                        }
-                      >
-                        {verifyingServiceKey === serviceKey
-                          ? "Saving..."
-                          : draft.extraPaymentDone &&
-                              (!draft.screenshotData ||
-                                typeof draft.extraPaymentAmount !== "number" ||
-                                draft.extraPaymentAmount <= 0)
-                            ? "Add Amount & Receipt"
-                            : "Log Attempt"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div style={{ display: "grid", gap: "0.85rem", marginTop: "0.9rem" }}>
+        <div style={{ display: "grid", gap: "0.95rem" }}>
           {services.map((service) => {
             const {
               serviceEntryIndex,
               serviceInstanceKey,
               serviceDisplayName,
             } = getServiceIdentity(service);
+            const latestAttempt = service.attempts?.[service.attempts.length - 1];
+            const draft = requestDraft[serviceInstanceKey] ?? {
+              status: normalizeAttemptDraftStatus(latestAttempt?.status || service.status),
+              verificationMode: service.verificationMode || "manual",
+              comment: service.comment || "",
+              verifierNote: latestAttempt?.verifierNote || "",
+              extraPaymentDone: false,
+              extraPaymentAmount: null,
+              screenshotFileName: "",
+              screenshotMimeType: "",
+              screenshotFileSize: null,
+              screenshotData: "",
+            };
+            const serviceKey = `${item._id}:${serviceInstanceKey}`;
+            const showCustomModeInput = Boolean(showCustomModeInputByService[serviceKey]);
+            const customModeInput = customModeInputByService[serviceKey] ?? "";
+            const hasDraftModeOption = verificationModeOptions.some(
+              (option) => option.value === draft.verificationMode,
+            );
+            const canRemoveSelectedMode =
+              canEditVerificationModeList &&
+              Boolean(draft.verificationMode) &&
+              !isDefaultVerificationMode(draft.verificationMode) &&
+              customVerificationModes.some(
+                (mode) =>
+                  mode.toLowerCase() ===
+                  normalizeVerificationModeInput(draft.verificationMode).toLowerCase(),
+              );
+            const rowModeOptions = hasDraftModeOption
+              ? verificationModeOptions
+              : draft.verificationMode
+                ? [
+                    ...verificationModeOptions,
+                    {
+                      value: draft.verificationMode,
+                      label: draft.verificationMode,
+                    },
+                  ]
+                : verificationModeOptions;
             const selectedServiceForCurrency =
               (item.selectedServices ?? []).find(
                 (entry) =>
@@ -2425,37 +2289,307 @@ function RequestsPageContent() {
               ) ?? null;
             const serviceCurrency =
               selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
+            const canSubmitAttempt =
+              canVerifyWorkflow &&
+              item.candidateFormStatus === "submitted" &&
+              (item.status === "approved" || item.status === "verified");
 
             return (
-            <div key={`${item._id}-${serviceInstanceKey}-attempts`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#FFFFFF", padding: "0.75rem" }}>
-              <div style={{ fontWeight: 600, color: "#334155", marginBottom: "0.45rem" }}>
-                Attempts: {serviceDisplayName}
-              </div>
-              {service.attempts.length === 0 ? (
-                <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: "1240px", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr style={{ textAlign: "left", borderBottom: "1px solid #E2E8F0" }}>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Date/Time</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Result</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Mode</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Comment</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>
-                          Verifier Note (Internal)
-                        </th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Extra Payment</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Extra Amount</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Screenshot</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Verifier</th>
-                        <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Manager</th>
-                        {canDeleteVerificationLogs ? (
-                          <th style={{ padding: "0.45rem", fontSize: "0.75rem", color: "#64748B" }}>Action</th>
-                        ) : null}
-                      </tr>
-                    </thead>
-                    <tbody>
+              <div key={`${item._id}-${serviceInstanceKey}`} style={{ border: "1px solid #E2E8F0", borderRadius: "10px", background: "#FFFFFF", padding: "0.85rem", display: "grid", gap: "0.75rem" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 700, color: "#1E293B" }}>{serviceDisplayName}</div>
+                  <span className={`status-pill status-pill-${service.status === "unverified" ? "rejected" : service.status === "verified" ? "verified" : "pending"}`} style={{ textTransform: "capitalize" }}>
+                    {service.status}
+                  </span>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.7rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                  <div style={{ display: "grid", gap: "0.3rem" }}>
+                    <label className="label" style={{ marginBottom: 0 }}>Verification Mode</label>
+                    <select
+                      className="input"
+                      style={{ padding: "0.35rem 0.45rem" }}
+                      value={draft.verificationMode}
+                      onChange={(e) => {
+                        const selectedMode = e.target.value;
+                        if (selectedMode === CUSTOM_VERIFICATION_MODE_SENTINEL) {
+                          if (!canEditVerificationModeList) {
+                            setMessage("Only Admin and Super Admin can edit the verification mode list.");
+                            return;
+                          }
+
+                          setShowCustomModeInputByService((prev) => ({
+                            ...prev,
+                            [serviceKey]: true,
+                          }));
+                          return;
+                        }
+
+                        if (selectedMode === CUSTOM_VERIFICATION_MODE_REMOVE_SENTINEL) {
+                          removeCustomModeForService(item._id, serviceInstanceKey);
+                          return;
+                        }
+
+                        setShowCustomModeInputByService((prev) => ({
+                          ...prev,
+                          [serviceKey]: false,
+                        }));
+                        updateServiceDraft(item._id, serviceInstanceKey, {
+                          verificationMode: selectedMode,
+                        });
+                      }}
+                    >
+                      {rowModeOptions.map((option) => (
+                        <option key={`${serviceKey}-${option.value}`} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                      {canEditVerificationModeList ? (
+                        <option value={CUSTOM_VERIFICATION_MODE_SENTINEL}>+ Add custom mode</option>
+                      ) : null}
+                      {canRemoveSelectedMode ? (
+                        <option value={CUSTOM_VERIFICATION_MODE_REMOVE_SENTINEL}>
+                          - Remove selected custom mode
+                        </option>
+                      ) : null}
+                    </select>
+                  </div>
+
+                  <div style={{ display: "grid", gap: "0.3rem" }}>
+                    <label className="label" style={{ marginBottom: 0 }}>Result</label>
+                    <select
+                      className="input"
+                      style={{ padding: "0.35rem 0.45rem" }}
+                      value={draft.status}
+                      onChange={(e) =>
+                        updateServiceDraft(item._id, serviceInstanceKey, {
+                          status: e.target.value as "in-progress" | "verified" | "unverified",
+                        })
+                      }
+                    >
+                      <option value="in-progress">In Progress</option>
+                      <option value="verified">Verified</option>
+                      <option value="unverified">Unverified</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "grid", gap: "0.3rem", gridColumn: "1 / -1" }}>
+                    <label className="label" style={{ marginBottom: 0 }}>Comment</label>
+                    <textarea
+                      className="input"
+                      rows={2}
+                      style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
+                      value={draft.comment}
+                      placeholder="Add attempt comment"
+                      onChange={(e) =>
+                        updateServiceDraft(item._id, serviceInstanceKey, {
+                          comment: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div style={{ display: "grid", gap: "0.3rem", gridColumn: "1 / -1" }}>
+                    <label className="label" style={{ marginBottom: 0 }}>Verifier Note (Internal)</label>
+                    <textarea
+                      className="input"
+                      rows={2}
+                      style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
+                      value={draft.verifierNote}
+                      placeholder="Internal note for verification method (not shown in report)"
+                      onChange={(e) =>
+                        updateServiceDraft(item._id, serviceInstanceKey, {
+                          verifierNote: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div style={{ display: "grid", gap: "0.3rem" }}>
+                    <label className="label" style={{ marginBottom: 0 }}>Extra Payment</label>
+                    <div style={{ display: "grid", gap: "0.35rem" }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{
+                          padding: "0.32rem 0.55rem",
+                          fontSize: "0.75rem",
+                          borderColor: draft.extraPaymentDone ? "#16A34A" : "#CBD5E1",
+                          background: draft.extraPaymentDone ? "#ECFDF5" : "#F8FAFC",
+                          color: draft.extraPaymentDone ? "#166534" : "#334155",
+                          fontWeight: 700,
+                        }}
+                        onClick={() => {
+                          const nextValue = !draft.extraPaymentDone;
+                          updateServiceDraft(item._id, serviceInstanceKey, {
+                            extraPaymentDone: nextValue,
+                            extraPaymentAmount: nextValue ? draft.extraPaymentAmount : null,
+                          });
+                          if (nextValue) {
+                            setMessage("Extra payment marked as done. Enter amount and upload receipt.");
+                          }
+                        }}
+                      >
+                        {draft.extraPaymentDone ? "Yes, Receipt Needed" : "No Extra Payment"}
+                      </button>
+
+                      {draft.extraPaymentDone ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="input"
+                          style={{ padding: "0.32rem 0.45rem" }}
+                          value={
+                            typeof draft.extraPaymentAmount === "number"
+                              ? String(draft.extraPaymentAmount)
+                              : ""
+                          }
+                          placeholder={`Extra amount (${serviceCurrency})`}
+                          onChange={(event) => {
+                            const rawValue = event.target.value.trim();
+                            const parsedAmount = Number(rawValue);
+                            updateServiceDraft(item._id, serviceInstanceKey, {
+                              extraPaymentAmount:
+                                rawValue && Number.isFinite(parsedAmount) && parsedAmount > 0
+                                  ? Math.round(parsedAmount * 100) / 100
+                                  : null,
+                            });
+                          }}
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gap: "0.3rem" }}>
+                    <label className="label" style={{ marginBottom: 0 }}>Screenshot / Receipt (Max 2MB)</label>
+                    <div style={{ display: "grid", gap: "0.35rem" }}>
+                      <input
+                        type="file"
+                        accept=".png,.jpg,.jpeg,.webp,image/png,image/x-png,image/jpeg,image/jpg,image/pjpeg,image/webp"
+                        className="input"
+                        style={{ padding: "0.35rem 0.45rem" }}
+                        onChange={(event) =>
+                          void selectAttemptScreenshot(item._id, serviceInstanceKey, event)
+                        }
+                      />
+                      {draft.screenshotData ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap", fontSize: "0.75rem", color: "#475569" }}>
+                          <span style={{ fontWeight: 600, color: "#1E293B" }}>
+                            {draft.screenshotFileName || (draft.extraPaymentDone ? "Selected receipt" : "Selected screenshot")}
+                          </span>
+                          {typeof draft.screenshotFileSize === "number" ? (
+                            <span>({formatFileSize(draft.screenshotFileSize)})</span>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: "0.2rem 0.45rem", fontSize: "0.72rem" }}
+                            onClick={() => clearAttemptScreenshot(item._id, serviceInstanceKey)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : draft.extraPaymentDone ? (
+                        <span style={{ fontSize: "0.75rem", color: "#B45309", fontWeight: 600 }}>
+                          Receipt and amount are required when extra payment is marked done.
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: "0.75rem", color: "#94A3B8" }}>
+                          Optional: attach verification screenshot
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {showCustomModeInput ? (
+                  <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", flexWrap: "wrap" }}>
+                    <input
+                      className="input"
+                      style={{ minWidth: "180px", padding: "0.32rem 0.45rem" }}
+                      value={customModeInput}
+                      placeholder="Type custom mode"
+                      onChange={(e) =>
+                        setCustomModeInputByService((prev) => ({
+                          ...prev,
+                          [serviceKey]: e.target.value,
+                        }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          saveCustomModeForService(item._id, serviceInstanceKey);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
+                      onClick={() => saveCustomModeForService(item._id, serviceInstanceKey)}
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
+                      onClick={() => {
+                        setShowCustomModeInputByService((prev) => ({
+                          ...prev,
+                          [serviceKey]: false,
+                        }));
+                        setCustomModeInputByService((prev) => ({
+                          ...prev,
+                          [serviceKey]: "",
+                        }));
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
+
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem" }}
+                    disabled={
+                      !canSubmitAttempt ||
+                      verifyingServiceKey === serviceKey ||
+                      (draft.extraPaymentDone &&
+                        (!draft.screenshotData ||
+                          typeof draft.extraPaymentAmount !== "number" ||
+                          draft.extraPaymentAmount <= 0))
+                    }
+                    onClick={() =>
+                      logServiceAttempt(
+                        item._id,
+                        service.serviceId,
+                        serviceEntryIndex,
+                        serviceInstanceKey,
+                      )
+                    }
+                  >
+                    {verifyingServiceKey === serviceKey
+                      ? "Saving..."
+                      : draft.extraPaymentDone &&
+                          (!draft.screenshotData ||
+                            typeof draft.extraPaymentAmount !== "number" ||
+                            draft.extraPaymentAmount <= 0)
+                        ? "Add Amount & Receipt"
+                        : "Log Attempt"}
+                  </button>
+                </div>
+
+                <div style={{ borderTop: "1px solid #E2E8F0", paddingTop: "0.65rem", display: "grid", gap: "0.55rem" }}>
+                  <div style={{ fontWeight: 600, color: "#334155" }}>Attempts</div>
+                  {service.attempts.length === 0 ? (
+                    <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
+                  ) : (
+                    <div style={{ display: "grid", gap: "0.5rem" }}>
                       {service.attempts
                         .slice()
                         .reverse()
@@ -2464,103 +2598,96 @@ function RequestsPageContent() {
                           const attemptKey = `${item._id}:${serviceInstanceKey}:${originalAttemptIndex}`;
 
                           return (
-                          <tr key={`${item._id}-${serviceInstanceKey}-attempt-${originalAttemptIndex}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {new Date(attempt.attemptedAt).toLocaleString()}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: getReportAttemptStatusColor(attempt.status), fontWeight: 700 }}>
-                              {toReportAttemptStatusLabel(attempt.status)}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.verificationMode || "-"}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.comment || "-"}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.verifierNote || "-"}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.extraPaymentDone ? "Yes" : "No"}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.extraPaymentDone &&
-                              typeof attempt.extraPaymentAmount === "number" &&
-                              attempt.extraPaymentAmount > 0
-                                ? `${serviceCurrency} ${attempt.extraPaymentAmount.toFixed(2)}`
-                                : "-"}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.screenshotData ? (
-                                <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
-                                  <a
-                                    href={attempt.screenshotData}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
-                                    onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
-                                    onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
-                                  >
-                                    View
-                                  </a>
-                                  <a
-                                    href={attempt.screenshotData}
-                                    download={attempt.screenshotFileName || `attempt-screenshot-${originalAttemptIndex + 1}`}
-                                    style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
-                                    onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
-                                    onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
-                                  >
-                                    Download
-                                  </a>
+                            <div key={`${item._id}-${serviceInstanceKey}-attempt-${originalAttemptIndex}`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#F8FAFC", padding: "0.6rem", display: "grid", gap: "0.45rem" }}>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", alignItems: "center" }}>
+                                <span style={{ fontSize: "0.78rem", color: "#334155", fontWeight: 600 }}>
+                                  {new Date(attempt.attemptedAt).toLocaleString()}
                                 </span>
-                              ) : (
-                                "-"
-                              )}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.verifierName || "-"}
-                            </td>
-                            <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                              {attempt.managerName || "-"}
-                            </td>
-                            {canDeleteVerificationLogs ? (
-                              <td style={{ padding: "0.45rem", fontSize: "0.8rem", color: "#334155" }}>
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary"
-                                  style={{
-                                    padding: "0.25rem 0.55rem",
-                                    fontSize: "0.74rem",
-                                    color: "#B91C1C",
-                                    borderColor: "#FCA5A5",
-                                    background: "#FEF2F2",
-                                  }}
-                                  disabled={deletingAttemptKey === attemptKey}
-                                  onClick={() =>
-                                    deleteServiceAttemptLog(
-                                      item._id,
-                                      service.serviceId,
-                                      serviceEntryIndex,
-                                      serviceInstanceKey,
-                                      originalAttemptIndex,
-                                    )
-                                  }
-                                >
-                                  {deletingAttemptKey === attemptKey ? "Deleting..." : "Delete"}
-                                </button>
-                              </td>
-                            ) : null}
-                          </tr>
-                        );
+                                <span style={{ fontSize: "0.78rem", color: getReportAttemptStatusColor(attempt.status), fontWeight: 700 }}>
+                                  {toReportAttemptStatusLabel(attempt.status)}
+                                </span>
+                                <span style={{ fontSize: "0.78rem", color: "#334155" }}>
+                                  Mode: {attempt.verificationMode || "-"}
+                                </span>
+                              </div>
+
+                              <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Comment:</strong> {attempt.comment || "-"}</div>
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Verifier Note:</strong> {attempt.verifierNote || "-"}</div>
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Extra Payment:</strong> {attempt.extraPaymentDone ? "Yes" : "No"}</div>
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}>
+                                  <strong>Extra Amount:</strong> {attempt.extraPaymentDone && typeof attempt.extraPaymentAmount === "number" && attempt.extraPaymentAmount > 0 ? `${serviceCurrency} ${attempt.extraPaymentAmount.toFixed(2)}` : "-"}
+                                </div>
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Verifier:</strong> {attempt.verifierName || "-"}</div>
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Manager:</strong> {attempt.managerName || "-"}</div>
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}>
+                                  <strong>Screenshot:</strong>{" "}
+                                  {attempt.screenshotData ? (
+                                    <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+                                      <a
+                                        href={attempt.screenshotData}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
+                                        onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
+                                        onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
+                                      >
+                                        View
+                                      </a>
+                                      <a
+                                        href={attempt.screenshotData}
+                                        download={attempt.screenshotFileName || `attempt-screenshot-${originalAttemptIndex + 1}`}
+                                        style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
+                                        onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
+                                        onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
+                                      >
+                                        Download
+                                      </a>
+                                    </span>
+                                  ) : (
+                                    "-"
+                                  )}
+                                </div>
+                              </div>
+
+                              {canDeleteVerificationLogs ? (
+                                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    style={{
+                                      padding: "0.25rem 0.55rem",
+                                      fontSize: "0.74rem",
+                                      color: "#B91C1C",
+                                      borderColor: "#FCA5A5",
+                                      background: "#FEF2F2",
+                                    }}
+                                    disabled={deletingAttemptKey === attemptKey}
+                                    onClick={() =>
+                                      deleteServiceAttemptLog(
+                                        item._id,
+                                        service.serviceId,
+                                        serviceEntryIndex,
+                                        serviceInstanceKey,
+                                        originalAttemptIndex,
+                                      )
+                                    }
+                                  >
+                                    {deletingAttemptKey === attemptKey ? "Deleting..." : "Delete"}
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          );
                         })}
-                    </tbody>
-                  </table>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </div>
             );
           })}
         </div>
+
       </div>
     );
   }

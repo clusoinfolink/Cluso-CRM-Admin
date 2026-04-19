@@ -3,7 +3,7 @@
 import {
   Dispatch,
   FormEvent,
-  KeyboardEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   SetStateAction,
   WheelEvent,
   useCallback,
@@ -113,7 +113,7 @@ function isAssignableCompanyService(service: ServiceItem) {
   return !service.hiddenFromCustomerPortal && !service.isDefaultPersonalDetails;
 }
 
-function preventNumberInputStep(event: KeyboardEvent<HTMLInputElement>) {
+function preventNumberInputStep(event: ReactKeyboardEvent<HTMLInputElement>) {
   if (event.key === "ArrowUp" || event.key === "ArrowDown") {
     event.preventDefault();
   }
@@ -139,6 +139,105 @@ function parseDefaultPriceInput(value: string) {
 
 function formatDefaultPriceInput(value: number): number | "" {
   return Number.isFinite(value) ? value : "";
+}
+
+function normalizeSearchText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function tokenizeSearchText(value: string) {
+  return normalizeSearchText(value)
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function getLevenshteinDistanceWithinLimit(
+  source: string,
+  target: string,
+  maxDistance: number,
+) {
+  const sourceLength = source.length;
+  const targetLength = target.length;
+
+  if (Math.abs(sourceLength - targetLength) > maxDistance) {
+    return maxDistance + 1;
+  }
+
+  const previousRow = new Array<number>(targetLength + 1);
+  const currentRow = new Array<number>(targetLength + 1);
+
+  for (let column = 0; column <= targetLength; column += 1) {
+    previousRow[column] = column;
+  }
+
+  for (let row = 1; row <= sourceLength; row += 1) {
+    currentRow[0] = row;
+    let minInRow = currentRow[0];
+
+    for (let column = 1; column <= targetLength; column += 1) {
+      const substitutionCost = source[row - 1] === target[column - 1] ? 0 : 1;
+      const substitution = previousRow[column - 1] + substitutionCost;
+      const insertion = currentRow[column - 1] + 1;
+      const deletion = previousRow[column] + 1;
+      const distance = Math.min(substitution, insertion, deletion);
+
+      currentRow[column] = distance;
+      if (distance < minInRow) {
+        minInRow = distance;
+      }
+    }
+
+    if (minInRow > maxDistance) {
+      return maxDistance + 1;
+    }
+
+    for (let column = 0; column <= targetLength; column += 1) {
+      previousRow[column] = currentRow[column];
+    }
+  }
+
+  return previousRow[targetLength];
+}
+
+function tokenMatchesWithTolerance(searchToken: string, candidateToken: string) {
+  if (!searchToken || !candidateToken) {
+    return false;
+  }
+
+  if (
+    candidateToken.includes(searchToken) ||
+    searchToken.includes(candidateToken)
+  ) {
+    return true;
+  }
+
+  // Allow small typos for longer words (for example: "employement" -> "employment").
+  if (searchToken.length < 5 || candidateToken.length < 5) {
+    return false;
+  }
+
+  return getLevenshteinDistanceWithinLimit(searchToken, candidateToken, 2) <= 2;
+}
+
+function matchesServiceSearch(service: ServiceItem, normalizedSearchValue: string) {
+  if (!normalizedSearchValue) {
+    return true;
+  }
+
+  const searchTokens = tokenizeSearchText(normalizedSearchValue);
+  if (searchTokens.length === 0) {
+    return true;
+  }
+
+  const candidateTokens = tokenizeSearchText(
+    `${service.name} ${service.description}`,
+  );
+
+  return searchTokens.every((searchToken) =>
+    candidateTokens.some((candidateToken) =>
+      tokenMatchesWithTolerance(searchToken, candidateToken),
+    ),
+  );
 }
 
 function hasInvalidDefaultPrice(serviceSelection: CompanyServiceSelection) {
@@ -239,7 +338,7 @@ export default function CompaniesPage() {
       return;
     }
 
-    const onKeyDown = (event: KeyboardEvent) => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         setProfileModalCompanyId("");
       }
@@ -407,13 +506,25 @@ export default function CompaniesPage() {
   }
 
   function updateCompanyServiceCountryRatePrice(serviceId: string, rateIndex: number, value: string) {
-    const parsed = Number(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      patchCountryRates(setSelectedCompanyServices, serviceId, (currentRates) =>
+        currentRates.filter((_, index) => index !== rateIndex),
+      );
+      return;
+    }
+
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return;
+    }
+
     patchCountryRates(setSelectedCompanyServices, serviceId, (currentRates) =>
       currentRates.map((rate, index) =>
         index === rateIndex
           ? {
               ...rate,
-              price: Number.isNaN(parsed) ? 0 : parsed,
+              price: parsed,
             }
           : rate,
       ),
@@ -487,13 +598,25 @@ export default function CompaniesPage() {
     rateIndex: number,
     value: string,
   ) {
-    const parsed = Number(value);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      patchCountryRates(setManageCompanyServices, serviceId, (currentRates) =>
+        currentRates.filter((_, index) => index !== rateIndex),
+      );
+      return;
+    }
+
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return;
+    }
+
     patchCountryRates(setManageCompanyServices, serviceId, (currentRates) =>
       currentRates.map((rate, index) =>
         index === rateIndex
           ? {
               ...rate,
-              price: Number.isNaN(parsed) ? 0 : parsed,
+              price: parsed,
             }
           : rate,
       ),
@@ -763,38 +886,18 @@ export default function CompaniesPage() {
     );
   }
 
-  const normalizedIssueServiceSearch = issueServiceSearch.trim().toLowerCase();
-  const normalizedManageServiceSearch = manageServiceSearch.trim().toLowerCase();
+  const normalizedIssueServiceSearch = normalizeSearchText(issueServiceSearch);
+  const normalizedManageServiceSearch = normalizeSearchText(manageServiceSearch);
   const assignableServices = services.filter((service) =>
     isAssignableCompanyService(service),
   );
 
   const filteredIssueServices = assignableServices.filter((service) => {
-    const selected = selectedCompanyServices.some((item) => item.serviceId === service.id);
-    if (selected) {
-      return true;
-    }
-
-    if (!normalizedIssueServiceSearch) {
-      return true;
-    }
-
-    const searchable = `${service.name} ${service.description}`.toLowerCase();
-    return searchable.includes(normalizedIssueServiceSearch);
+    return matchesServiceSearch(service, normalizedIssueServiceSearch);
   });
 
   const filteredManageServices = assignableServices.filter((service) => {
-    const selected = manageCompanyServices.some((item) => item.serviceId === service.id);
-    if (selected) {
-      return true;
-    }
-
-    if (!normalizedManageServiceSearch) {
-      return true;
-    }
-
-    const searchable = `${service.name} ${service.description}`.toLowerCase();
-    return searchable.includes(normalizedManageServiceSearch);
+    return matchesServiceSearch(service, normalizedManageServiceSearch);
   });
 
   const selectedCompanyForInfo = companies.find((company) => company.id === viewCompanyId) ?? null;

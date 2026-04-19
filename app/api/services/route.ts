@@ -5,6 +5,11 @@ import { getAdminAuthFromRequest } from "@/lib/auth";
 import { connectMongo } from "@/lib/mongodb";
 import Service from "@/lib/models/Service";
 import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
+import {
+  getAllCountryOptions,
+  getSystemLocationFieldConfig,
+  resolveSystemLocationFieldType,
+} from "@/lib/locationHierarchy";
 
 const formFieldTypeSchema = z.enum([
   "text",
@@ -13,6 +18,8 @@ const formFieldTypeSchema = z.enum([
   "file",
   "date",
   "dropdown",
+  "email",
+  "mobile",
   "composite",
 ]);
 
@@ -40,62 +47,8 @@ const SUPPORTED_QUESTION_ICON_KEYS = [
 type QuestionIconKey = (typeof SUPPORTED_QUESTION_ICON_KEYS)[number];
 
 const DEFAULT_QUESTION_ICON: QuestionIconKey = "diary";
-const SERVICE_COUNTRY_FIELD_KEY = "system_service_country";
-const SERVICE_COUNTRY_FIELD_QUESTION =
-  "Country";
-const SERVICE_COUNTRY_FIELD_OPTIONS = [
-  "Afghanistan",
-  "Armenia",
-  "Australia",
-  "Azerbaijan",
-  "Bangladesh",
-  "Bhutan",
-  "Brunei",
-  "Cambodia",
-  "China",
-  "Fiji",
-  "Georgia",
-  "Hong Kong",
-  "India",
-  "Indonesia",
-  "Japan",
-  "Kazakhstan",
-  "Kiribati",
-  "Kyrgyzstan",
-  "Laos",
-  "Macau",
-  "Malaysia",
-  "Maldives",
-  "Marshall Islands",
-  "Micronesia",
-  "Mongolia",
-  "Myanmar",
-  "Nauru",
-  "Nepal",
-  "New Zealand",
-  "Pakistan",
-  "Palau",
-  "Papua New Guinea",
-  "Philippines",
-  "Samoa",
-  "Singapore",
-  "Solomon Islands",
-  "South Korea",
-  "Sri Lanka",
-  "Taiwan",
-  "Tajikistan",
-  "Thailand",
-  "Timor-Leste",
-  "Tonga",
-  "Turkmenistan",
-  "Tuvalu",
-  "Uzbekistan",
-  "Vanuatu",
-  "Vietnam",
-  "United Arab Emirates",
-  "United States",
-  "United Kingdom",
-] as const;
+const SERVICE_LOCATION_FIELD_TYPES = ["country", "state", "city"] as const;
+type ServiceLocationFieldType = (typeof SERVICE_LOCATION_FIELD_TYPES)[number];
 
 function normalizeQuestionIconKey(rawIconKey: unknown): QuestionIconKey {
   if (typeof rawIconKey !== "string") {
@@ -194,6 +147,7 @@ const formFieldSchema = z
     const supportsLengthConstraints =
       field.fieldType === "text" ||
       field.fieldType === "long_text" ||
+      field.fieldType === "email" ||
       field.fieldType === "number";
 
     if (
@@ -263,14 +217,19 @@ const formFieldSchema = z
 
 type ParsedFormField = z.infer<typeof formFieldSchema>;
 
-function buildServiceCountrySystemField(): ParsedFormField {
+function buildSystemLocationField(locationType: ServiceLocationFieldType): ParsedFormField {
+  const config = getSystemLocationFieldConfig(locationType);
+
   return {
-    fieldKey: SERVICE_COUNTRY_FIELD_KEY,
-    question: SERVICE_COUNTRY_FIELD_QUESTION,
-    iconKey: "global",
+    fieldKey: config.fieldKey,
+    question: config.question,
+    iconKey: config.iconKey,
     fieldType: "dropdown",
     subFields: [],
-    dropdownOptions: [...SERVICE_COUNTRY_FIELD_OPTIONS],
+    dropdownOptions:
+      locationType === "country"
+        ? getAllCountryOptions()
+        : [...config.dropdownOptions],
     required: true,
     repeatable: false,
     minLength: null,
@@ -279,30 +238,29 @@ function buildServiceCountrySystemField(): ParsedFormField {
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
-    previewWidth: "half",
+    previewWidth: config.previewWidth,
   };
 }
 
-function ensureServiceCountrySystemField(
+function ensureSystemLocationFields(
   fields: ParsedFormField[],
   includeSystemField: boolean,
 ) {
-  const nextFields: ParsedFormField[] = [];
-  let hasSystemField = false;
+  const nonSystemFields: ParsedFormField[] = [];
+  const firstSystemFieldByType = new Map<ServiceLocationFieldType, ParsedFormField>();
 
   for (const field of fields) {
-    const isSystemField =
-      (field.fieldKey?.trim() ?? "") === SERVICE_COUNTRY_FIELD_KEY;
-
-    if (!isSystemField) {
-      nextFields.push(field);
+    const systemFieldType = resolveSystemLocationFieldType(field.fieldKey);
+    if (!systemFieldType) {
+      nonSystemFields.push(field);
       continue;
     }
 
-    if (!includeSystemField || hasSystemField) {
+    if (!includeSystemField || firstSystemFieldByType.has(systemFieldType)) {
       continue;
     }
 
+    const config = getSystemLocationFieldConfig(systemFieldType);
     const dropdownOptions = [
       ...new Set(
         (field.dropdownOptions ?? [])
@@ -311,16 +269,19 @@ function ensureServiceCountrySystemField(
       ),
     ];
 
-    nextFields.push({
-      fieldKey: SERVICE_COUNTRY_FIELD_KEY,
-      question: SERVICE_COUNTRY_FIELD_QUESTION,
-      iconKey: "global",
+    firstSystemFieldByType.set(systemFieldType, {
+      ...field,
+      fieldKey: config.fieldKey,
+      question: config.question,
+      iconKey: config.iconKey,
       fieldType: "dropdown",
       subFields: [],
       dropdownOptions:
-        dropdownOptions.length > 0
-          ? dropdownOptions
-          : [...SERVICE_COUNTRY_FIELD_OPTIONS],
+        systemFieldType === "country"
+          ? dropdownOptions.length > 0
+            ? dropdownOptions
+            : getAllCountryOptions()
+          : [...config.dropdownOptions],
       required: true,
       repeatable: false,
       minLength: null,
@@ -329,17 +290,19 @@ function ensureServiceCountrySystemField(
       allowNotApplicable: false,
       notApplicableText: "",
       copyFromPersonalDetailsFieldKey: "",
-      previewWidth: normalizePreviewWidth(field.previewWidth, "dropdown"),
+      previewWidth: config.previewWidth,
     });
-
-    hasSystemField = true;
   }
 
-  if (includeSystemField && !hasSystemField) {
-    nextFields.push(buildServiceCountrySystemField());
+  if (!includeSystemField) {
+    return nonSystemFields;
   }
 
-  return nextFields;
+  const locationSystemFields = SERVICE_LOCATION_FIELD_TYPES.map(
+    (locationType) => firstSystemFieldByType.get(locationType) ?? buildSystemLocationField(locationType),
+  );
+
+  return [...locationSystemFields, ...nonSystemFields];
 }
 
 function parseStoredFormFields(rawFields: unknown): ParsedFormField[] {
@@ -362,6 +325,7 @@ function normalizeFormField(field: ParsedFormField) {
   const supportsLengthConstraints =
     field.fieldType === "text" ||
     field.fieldType === "long_text" ||
+    field.fieldType === "email" ||
     field.fieldType === "number";
   const supportsUppercaseConstraint =
     field.fieldType === "text" || field.fieldType === "long_text";
@@ -417,7 +381,7 @@ function serializeFormField(field: {
   fieldKey?: string;
   question: string;
   iconKey?: unknown;
-  fieldType: "text" | "long_text" | "number" | "file" | "date" | "dropdown" | "composite";
+  fieldType: "text" | "long_text" | "number" | "file" | "date" | "dropdown" | "email" | "mobile" | "composite";
   subFields?: Array<{
     fieldKey?: string;
     question: string;
@@ -439,6 +403,7 @@ function serializeFormField(field: {
   const supportsLengthConstraints =
     field.fieldType === "text" ||
     field.fieldType === "long_text" ||
+    field.fieldType === "email" ||
     field.fieldType === "number";
   const supportsUppercaseConstraint =
     field.fieldType === "text" || field.fieldType === "long_text";
@@ -496,7 +461,9 @@ type CandidateLayoutSnapshotFieldType =
   | "number"
   | "file"
   | "date"
-  | "dropdown";
+  | "dropdown"
+  | "email"
+  | "mobile";
 
 type CandidateLayoutSnapshotField = {
   fieldKey: string;
@@ -524,7 +491,9 @@ function normalizeCandidateLayoutFieldType(
     rawFieldType === "number" ||
     rawFieldType === "file" ||
     rawFieldType === "date" ||
-    rawFieldType === "dropdown"
+    rawFieldType === "dropdown" ||
+    rawFieldType === "email" ||
+    rawFieldType === "mobile"
   ) {
     return rawFieldType;
   }
@@ -535,7 +504,12 @@ function normalizeCandidateLayoutFieldType(
 function supportsCandidateLayoutLengthConstraints(
   fieldType: CandidateLayoutSnapshotFieldType,
 ) {
-  return fieldType === "text" || fieldType === "long_text" || fieldType === "number";
+  return (
+    fieldType === "text" ||
+    fieldType === "long_text" ||
+    fieldType === "email" ||
+    fieldType === "number"
+  );
 }
 
 function supportsCandidateLayoutUppercaseConstraint(
@@ -544,13 +518,20 @@ function supportsCandidateLayoutUppercaseConstraint(
   return fieldType === "text" || fieldType === "long_text";
 }
 
-function buildCandidateLayoutSystemCountryField(): CandidateLayoutSnapshotField {
+function buildCandidateLayoutSystemLocationField(
+  locationType: ServiceLocationFieldType,
+): CandidateLayoutSnapshotField {
+  const config = getSystemLocationFieldConfig(locationType);
+
   return {
-    fieldKey: SERVICE_COUNTRY_FIELD_KEY,
-    question: SERVICE_COUNTRY_FIELD_QUESTION,
-    iconKey: "global",
+    fieldKey: config.fieldKey,
+    question: config.question,
+    iconKey: config.iconKey,
     fieldType: "dropdown",
-    dropdownOptions: [...SERVICE_COUNTRY_FIELD_OPTIONS],
+    dropdownOptions:
+      locationType === "country"
+        ? getAllCountryOptions()
+        : [...config.dropdownOptions],
     required: true,
     repeatable: false,
     minLength: null,
@@ -559,35 +540,42 @@ function buildCandidateLayoutSystemCountryField(): CandidateLayoutSnapshotField 
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
-    previewWidth: "half",
+    previewWidth: config.previewWidth,
   };
 }
 
-function ensureCandidateLayoutSnapshotSystemField(
+function ensureCandidateLayoutSnapshotSystemFields(
   fields: CandidateLayoutSnapshotField[],
   includeSystemField: boolean,
 ) {
-  const nextFields: CandidateLayoutSnapshotField[] = [];
-  let hasSystemField = false;
+  const nonSystemFields: CandidateLayoutSnapshotField[] = [];
+  const firstSystemFieldByType = new Map<ServiceLocationFieldType, CandidateLayoutSnapshotField>();
 
   for (const field of fields) {
-    const isSystemField =
-      (field.fieldKey?.trim() ?? "") === SERVICE_COUNTRY_FIELD_KEY;
-
-    if (!isSystemField) {
-      nextFields.push(field);
+    const systemFieldType = resolveSystemLocationFieldType(field.fieldKey);
+    if (!systemFieldType) {
+      nonSystemFields.push(field);
       continue;
     }
 
-    if (!includeSystemField || hasSystemField) {
+    if (!includeSystemField || firstSystemFieldByType.has(systemFieldType)) {
       continue;
     }
 
-    nextFields.push({
+    const config = getSystemLocationFieldConfig(systemFieldType);
+    const dropdownOptions = [
+      ...new Set(
+        (field.dropdownOptions ?? [])
+          .map((option) => option.trim())
+          .filter(Boolean),
+      ),
+    ];
+
+    firstSystemFieldByType.set(systemFieldType, {
       ...field,
-      fieldKey: SERVICE_COUNTRY_FIELD_KEY,
-      question: SERVICE_COUNTRY_FIELD_QUESTION,
-      iconKey: "global",
+      fieldKey: config.fieldKey,
+      question: config.question,
+      iconKey: config.iconKey,
       fieldType: "dropdown",
       required: true,
       repeatable: false,
@@ -597,21 +585,27 @@ function ensureCandidateLayoutSnapshotSystemField(
       allowNotApplicable: false,
       notApplicableText: "",
       copyFromPersonalDetailsFieldKey: "",
-      previewWidth: normalizePreviewWidth(field.previewWidth, "dropdown"),
+      previewWidth: config.previewWidth,
       dropdownOptions:
-        field.dropdownOptions.length > 0
-          ? field.dropdownOptions
-          : [...SERVICE_COUNTRY_FIELD_OPTIONS],
+        systemFieldType === "country"
+          ? dropdownOptions.length > 0
+            ? dropdownOptions
+            : getAllCountryOptions()
+          : [...config.dropdownOptions],
     });
-
-    hasSystemField = true;
   }
 
-  if (includeSystemField && !hasSystemField) {
-    nextFields.push(buildCandidateLayoutSystemCountryField());
+  if (!includeSystemField) {
+    return nonSystemFields;
   }
 
-  return nextFields;
+  const locationSystemFields = SERVICE_LOCATION_FIELD_TYPES.map(
+    (locationType) =>
+      firstSystemFieldByType.get(locationType) ??
+      buildCandidateLayoutSystemLocationField(locationType),
+  );
+
+  return [...locationSystemFields, ...nonSystemFields];
 }
 
 function buildCandidateLayoutSnapshotFromFormFields(
@@ -702,7 +696,7 @@ function buildCandidateLayoutSnapshotFromFormFields(
     });
   }
 
-  return ensureCandidateLayoutSnapshotSystemField(snapshotFields, includeSystemField);
+  return ensureCandidateLayoutSnapshotSystemFields(snapshotFields, includeSystemField);
 }
 
 const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
@@ -758,7 +752,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     fieldKey: "personal_email_address",
     question: "Email address",
     iconKey: "email",
-    fieldType: "text",
+    fieldType: "email",
     subFields: [],
     dropdownOptions: [],
     required: true,
@@ -1001,11 +995,11 @@ export async function GET(req: NextRequest) {
     items: items.map((item) => ({
       ...(function () {
         const parsedStoredFields = parseStoredFormFields(item.formFields ?? []);
-        const includeSystemCountryField =
+        const includeSystemLocationFields =
           !Boolean(item.isPackage) && !isHiddenService(item);
-        const normalizedOutputFields = ensureServiceCountrySystemField(
+        const normalizedOutputFields = ensureSystemLocationFields(
           parsedStoredFields,
-          includeSystemCountryField,
+          includeSystemLocationFields,
         ).map((field) => normalizeFormField(field));
 
         return {
@@ -1069,7 +1063,7 @@ export async function POST(req: NextRequest) {
 
     const isPackage = Boolean(parsed.data.isPackage);
     const includedServiceIds = [...new Set(parsed.data.includedServiceIds.map((id) => id.trim()).filter(Boolean))];
-    const normalizedFormFields = ensureServiceCountrySystemField(
+    const normalizedFormFields = ensureSystemLocationFields(
       parsed.data.formFields,
       !isPackage,
     ).map((field) => normalizeFormField(field));
@@ -1205,11 +1199,11 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Service not found." }, { status: 404 });
     }
 
-    const includeSystemCountryField =
+    const includeSystemLocationFields =
       !Boolean(existingService.isPackage) && !isHiddenService(existingService);
-    const normalizedFormFields = ensureServiceCountrySystemField(
+    const normalizedFormFields = ensureSystemLocationFields(
       parsed.data.formFields,
-      includeSystemCountryField,
+      includeSystemLocationFields,
     ).map((field) => normalizeFormField(field));
     const shouldSaveCandidateLayoutSnapshot =
       parsed.data.saveCandidateLayoutSnapshot ?? true;
@@ -1227,7 +1221,7 @@ export async function PATCH(req: NextRequest) {
       updatePayload.candidateLayoutSnapshot =
         buildCandidateLayoutSnapshotFromFormFields(
           normalizedFormFields,
-          includeSystemCountryField,
+          includeSystemLocationFields,
         );
     } else {
       updatePayload.candidateLayoutSnapshot = [];

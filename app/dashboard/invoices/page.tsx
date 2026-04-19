@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { MonthPicker } from "@/components/MonthPicker";
 import { getAlertTone } from "@/lib/alerts";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import type {
@@ -2462,13 +2463,11 @@ export default function InvoicesPage() {
             <label className="label" htmlFor="invoice-billing-month" style={{ marginBottom: 0 }}>
               Billing Month
             </label>
-            <input
+            <MonthPicker
               id="invoice-billing-month"
-              className="input"
-              type="month"
               value={selectedBillingMonth}
-              onChange={(event) =>
-                setSelectedBillingMonth(event.target.value || getCurrentBillingMonth())
+              onChange={(value) =>
+                setSelectedBillingMonth(value || getCurrentBillingMonth())
               }
             />
             <p style={{ margin: 0, color: "#64748B", fontSize: "0.8rem" }}>

@@ -2,6 +2,12 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import {
+  getAllCountryOptions,
+  getSystemLocationFieldConfig,
+  resolveSystemLocationFieldType,
+  SERVICE_COUNTRY_FIELD_QUESTION,
+} from "@/lib/locationHierarchy";
+import {
   ClipboardList,
   Plus,
   Save,
@@ -48,6 +54,8 @@ type ServiceFormFieldType =
   | "file"
   | "date"
   | "dropdown"
+  | "email"
+  | "mobile"
   | "composite";
 type ServiceQuestionIconKey =
   | "none"
@@ -67,61 +75,21 @@ type ServiceQuestionIconKey =
   | "security";
 
 const DEFAULT_QUESTION_ICON: ServiceQuestionIconKey = "diary";
-const SYSTEM_SERVICE_COUNTRY_FIELD_KEY = "system_service_country";
-const SYSTEM_SERVICE_COUNTRY_FIELD_QUESTION =
-  "Country";
-const SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS = [
-  "Afghanistan",
-  "Armenia",
-  "Australia",
-  "Azerbaijan",
-  "Bangladesh",
-  "Bhutan",
-  "Brunei",
-  "Cambodia",
-  "China",
-  "Fiji",
-  "Georgia",
-  "Hong Kong",
-  "India",
-  "Indonesia",
-  "Japan",
-  "Kazakhstan",
-  "Kiribati",
-  "Kyrgyzstan",
-  "Laos",
-  "Macau",
-  "Malaysia",
-  "Maldives",
-  "Marshall Islands",
-  "Micronesia",
-  "Mongolia",
-  "Myanmar",
-  "Nauru",
-  "Nepal",
-  "New Zealand",
-  "Pakistan",
-  "Palau",
-  "Papua New Guinea",
-  "Philippines",
-  "Samoa",
-  "Singapore",
-  "Solomon Islands",
-  "South Korea",
-  "Sri Lanka",
-  "Taiwan",
-  "Tajikistan",
-  "Thailand",
-  "Timor-Leste",
-  "Tonga",
-  "Turkmenistan",
-  "Tuvalu",
-  "Uzbekistan",
-  "Vanuatu",
-  "Vietnam",
-  "United Arab Emirates",
-  "United States",
-  "United Kingdom",
+const SYSTEM_LOCATION_FIELD_TYPES = ["country", "state", "city"] as const;
+type SystemLocationFieldType = (typeof SYSTEM_LOCATION_FIELD_TYPES)[number];
+const SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS = getAllCountryOptions();
+
+const PREVIEW_MOBILE_CODE_OPTIONS = [
+  "+1",
+  "+44",
+  "+60",
+  "+61",
+  "+65",
+  "+86",
+  "+91",
+  "+92",
+  "+94",
+  "+971",
 ];
 
 const QUESTION_ICON_OPTIONS: Array<{
@@ -218,7 +186,12 @@ type Props = {
 };
 
 function supportsLengthConstraints(fieldType: ServiceFormFieldType) {
-  return fieldType === "text" || fieldType === "long_text" || fieldType === "number";
+  return (
+    fieldType === "text" ||
+    fieldType === "long_text" ||
+    fieldType === "email" ||
+    fieldType === "number"
+  );
 }
 
 function supportsUppercaseConstraint(fieldType: ServiceFormFieldType) {
@@ -340,8 +313,81 @@ function createEmptyField(
   };
 }
 
-function isSystemServiceCountryField(field: ServiceFormField) {
-  return field.fieldKey?.trim() === SYSTEM_SERVICE_COUNTRY_FIELD_KEY;
+function resolveSystemServiceLocationType(field: ServiceFormField): SystemLocationFieldType | null {
+  const byFieldKey = resolveSystemLocationFieldType(field.fieldKey);
+  if (byFieldKey) {
+    return byFieldKey;
+  }
+
+  const normalizedQuestion = field.question.trim().toLowerCase();
+  if (normalizedQuestion === SERVICE_COUNTRY_FIELD_QUESTION.toLowerCase()) {
+    return "country";
+  }
+
+  return null;
+}
+
+function isSystemServiceLocationField(field: ServiceFormField) {
+  return resolveSystemServiceLocationType(field) !== null;
+}
+
+function buildSystemServiceLocationField(
+  locationType: SystemLocationFieldType,
+  sourceField?: ServiceFormField,
+): ServiceFormField {
+  const config = getSystemLocationFieldConfig(locationType);
+  const sourceDropdownOptions = sanitizeDropdownOptions(sourceField?.dropdownOptions);
+
+  return {
+    fieldKey: config.fieldKey,
+    question: config.question,
+    iconKey: normalizeQuestionIconKey(sourceField?.iconKey ?? config.iconKey),
+    fieldType: "dropdown",
+    subFields: [],
+    dropdownOptions:
+      locationType === "country"
+        ? sourceDropdownOptions.length > 0
+          ? sourceDropdownOptions
+          : [...SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS]
+        : [...config.dropdownOptions],
+    required: true,
+    repeatable: false,
+    minLength: null,
+    maxLength: null,
+    forceUppercase: false,
+    allowNotApplicable: false,
+    notApplicableText: "",
+    copyFromPersonalDetailsFieldKey: "",
+    previewWidth: config.previewWidth,
+  };
+}
+
+function ensureSystemLocationFields(rawFields: ServiceFormField[]) {
+  const nonSystemFields: ServiceFormField[] = [];
+  const firstSystemFieldByType = new Map<SystemLocationFieldType, ServiceFormField>();
+
+  for (const field of rawFields) {
+    const locationType = resolveSystemServiceLocationType(field);
+    if (!locationType) {
+      nonSystemFields.push(field);
+      continue;
+    }
+
+    if (!firstSystemFieldByType.has(locationType)) {
+      firstSystemFieldByType.set(
+        locationType,
+        buildSystemServiceLocationField(locationType, field),
+      );
+    }
+  }
+
+  const systemFields = SYSTEM_LOCATION_FIELD_TYPES.map(
+    (locationType) =>
+      firstSystemFieldByType.get(locationType) ??
+      buildSystemServiceLocationField(locationType),
+  );
+
+  return [...systemFields, ...nonSystemFields];
 }
 
 type CandidatePreviewField = {
@@ -423,7 +469,9 @@ function getPreviewFieldType(rawType: unknown): CandidatePreviewField["fieldType
     rawType === "number" ||
     rawType === "file" ||
     rawType === "date" ||
-    rawType === "dropdown"
+    rawType === "dropdown" ||
+    rawType === "email" ||
+    rawType === "mobile"
   ) {
     return rawType;
   }
@@ -661,36 +709,38 @@ export default function ServiceFormBuilder({
     [activeServiceId, regularServices],
   );
 
-  const fields: ServiceFormField[] = (drafts[activeServiceId] ?? selectedService?.formFields ?? []).map((field) => ({
-    ...field,
-    fieldKey: field.fieldKey?.trim() || "",
-    iconKey: normalizeQuestionIconKey(field.iconKey),
-    subFields:
-      field.fieldType === "composite"
-        ? sanitizeSubFields(field.subFields).map((subField) => ({
-            ...subField,
-            dropdownOptions:
-              subField.fieldType === "dropdown"
-                ? normalizeDraftDropdownOptions(subField.dropdownOptions)
-                : [],
-          }))
-        : [],
-    dropdownOptions: normalizeDraftDropdownOptions(field.dropdownOptions),
-    repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
-    minLength: typeof field.minLength === "number" ? field.minLength : null,
-    maxLength: typeof field.maxLength === "number" ? field.maxLength : null,
-    forceUppercase: Boolean(field.forceUppercase),
-    allowNotApplicable: Boolean(field.allowNotApplicable),
-    notApplicableText:
-      typeof field.notApplicableText === "string"
-        ? field.notApplicableText
-        : "Not Applicable",
-    copyFromPersonalDetailsFieldKey:
-      field.fieldType === "file" || field.fieldType === "composite"
-        ? ""
-        : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
-    previewWidth: normalizePreviewWidth(field.previewWidth, field.fieldType),
-  }));
+  const fields: ServiceFormField[] = ensureSystemLocationFields(
+    (drafts[activeServiceId] ?? selectedService?.formFields ?? []).map((field) => ({
+      ...field,
+      fieldKey: field.fieldKey?.trim() || "",
+      iconKey: normalizeQuestionIconKey(field.iconKey),
+      subFields:
+        field.fieldType === "composite"
+          ? sanitizeSubFields(field.subFields).map((subField) => ({
+              ...subField,
+              dropdownOptions:
+                subField.fieldType === "dropdown"
+                  ? normalizeDraftDropdownOptions(subField.dropdownOptions)
+                  : [],
+            }))
+          : [],
+      dropdownOptions: normalizeDraftDropdownOptions(field.dropdownOptions),
+      repeatable: field.fieldType === "file" ? false : Boolean(field.repeatable),
+      minLength: typeof field.minLength === "number" ? field.minLength : null,
+      maxLength: typeof field.maxLength === "number" ? field.maxLength : null,
+      forceUppercase: Boolean(field.forceUppercase),
+      allowNotApplicable: Boolean(field.allowNotApplicable),
+      notApplicableText:
+        typeof field.notApplicableText === "string"
+          ? field.notApplicableText
+          : "Not Applicable",
+      copyFromPersonalDetailsFieldKey:
+        field.fieldType === "file" || field.fieldType === "composite"
+          ? ""
+          : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
+      previewWidth: normalizePreviewWidth(field.previewWidth, field.fieldType),
+    })),
+  );
 
   const multipleEntriesLabel = activeServiceId
     ? serviceEntryLabelDrafts[activeServiceId] ?? selectedService?.multipleEntriesLabel
@@ -810,7 +860,7 @@ export default function ServiceFormBuilder({
       return;
     }
 
-    if (isSystemServiceCountryField(fields[index])) {
+    if (isSystemServiceLocationField(fields[index])) {
       return;
     }
 
@@ -830,7 +880,7 @@ export default function ServiceFormBuilder({
       return;
     }
 
-    if (isSystemServiceCountryField(fields[index])) {
+    if (isSystemServiceLocationField(fields[index])) {
       return;
     }
 
@@ -900,7 +950,7 @@ export default function ServiceFormBuilder({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
         idx === index
-          ? isSystemServiceCountryField(item)
+          ? isSystemServiceLocationField(item)
             ? item
             : { ...item, question }
           : item,
@@ -917,7 +967,7 @@ export default function ServiceFormBuilder({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
         idx === index
-          ? isSystemServiceCountryField(item)
+          ? isSystemServiceLocationField(item)
             ? item
             : { ...item, iconKey }
           : item,
@@ -935,7 +985,7 @@ export default function ServiceFormBuilder({
       [activeServiceId]: fields.map((item, idx) =>
         idx === index
           ? {
-              ...(isSystemServiceCountryField(item) ? item : {
+              ...(isSystemServiceLocationField(item) ? item : {
               ...item,
               fieldType,
               subFields: fieldType === "composite" ? item.subFields || [] : [],
@@ -974,7 +1024,7 @@ export default function ServiceFormBuilder({
           return item;
         }
 
-        if (isSystemServiceCountryField(item)) {
+        if (isSystemServiceLocationField(item)) {
           return item;
         }
 
@@ -1004,7 +1054,7 @@ export default function ServiceFormBuilder({
           return item;
         }
 
-        if (isSystemServiceCountryField(item)) {
+        if (isSystemServiceLocationField(item)) {
           return item;
         }
 
@@ -1028,7 +1078,7 @@ export default function ServiceFormBuilder({
           return item;
         }
 
-        if (isSystemServiceCountryField(item)) {
+        if (isSystemServiceLocationField(item)) {
           return item;
         }
 
@@ -1112,7 +1162,7 @@ export default function ServiceFormBuilder({
       ...prev,
       [activeServiceId]: fields.map((item, idx) =>
         idx === index
-          ? isSystemServiceCountryField(item)
+          ? isSystemServiceLocationField(item)
             ? item
             : { ...item, required }
           : item,
@@ -1195,7 +1245,7 @@ export default function ServiceFormBuilder({
         }
 
         if (
-          isSystemServiceCountryField(item) ||
+          isSystemServiceLocationField(item) ||
           item.fieldType === "file" ||
           item.fieldType === "composite"
         ) {
@@ -1236,7 +1286,7 @@ export default function ServiceFormBuilder({
       return;
     }
 
-    if (isSystemServiceCountryField(fields[index])) {
+    if (isSystemServiceLocationField(fields[index])) {
       return;
     }
 
@@ -1274,19 +1324,23 @@ export default function ServiceFormBuilder({
     const cleaned = fields.map((item, index) => {
       const previewWidth = resolveDraftPreviewWidth(item, index);
 
-      if (isSystemServiceCountryField(item)) {
+      const systemLocationFieldType = resolveSystemServiceLocationType(item);
+      if (systemLocationFieldType) {
+        const config = getSystemLocationFieldConfig(systemLocationFieldType);
         const dropdownOptions = sanitizeDropdownOptions(item.dropdownOptions);
 
         return {
-          fieldKey: SYSTEM_SERVICE_COUNTRY_FIELD_KEY,
-          question: SYSTEM_SERVICE_COUNTRY_FIELD_QUESTION,
-          iconKey: "global",
+          fieldKey: config.fieldKey,
+          question: config.question,
+          iconKey: normalizeQuestionIconKey(config.iconKey),
           fieldType: "dropdown" as const,
           subFields: [],
           dropdownOptions:
-            dropdownOptions.length > 0
-              ? dropdownOptions
-              : [...SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS],
+            systemLocationFieldType === "country"
+              ? dropdownOptions.length > 0
+                ? dropdownOptions
+                : [...SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS]
+              : [...config.dropdownOptions],
           required: true,
           repeatable: false,
           minLength: null,
@@ -1623,7 +1677,11 @@ export default function ServiceFormBuilder({
                 )}
 
                 {fields.map((field, index) => {
-                const isSystemCountryField = isSystemServiceCountryField(field);
+                const systemLocationType = resolveSystemServiceLocationType(field);
+                const isSystemLocationField = Boolean(systemLocationType);
+                const systemLocationConfig = systemLocationType
+                  ? getSystemLocationFieldConfig(systemLocationType)
+                  : null;
                 const fieldEditorKey = `${activeServiceId}::${field.fieldKey?.trim() || `field-${index}`}`;
                 const dropdownEditorKey = `${fieldEditorKey}::dropdown`;
                 const isDropdownEditorOpen = Boolean(expandedDropdownEditors[dropdownEditorKey]);
@@ -1632,7 +1690,7 @@ export default function ServiceFormBuilder({
                 <div
                   key={field.fieldKey || `${activeServiceId}-${index}`}
                   style={{
-                    border: isSystemCountryField ? "1px solid #BFDBFE" : "1px solid #E2E8F0",
+                    border: isSystemLocationField ? "1px solid #BFDBFE" : "1px solid #E2E8F0",
                     borderRadius: "8px",
                     background: "#ffffff",
                     position: "relative",
@@ -1642,7 +1700,7 @@ export default function ServiceFormBuilder({
                   <div
                     style={{
                       padding: "0.4rem 1rem",
-                      background: isSystemCountryField ? "#EFF6FF" : "#F8FAFC",
+                      background: isSystemLocationField ? "#EFF6FF" : "#F8FAFC",
                       borderBottom: "1px solid #E2E8F0",
                       display: "flex",
                       alignItems: "center",
@@ -1653,7 +1711,7 @@ export default function ServiceFormBuilder({
                       <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                         Field #{index + 1}
                       </span>
-                      {isSystemCountryField ? (
+                      {isSystemLocationField ? (
                         <span
                           style={{
                             fontSize: "0.72rem",
@@ -1672,19 +1730,19 @@ export default function ServiceFormBuilder({
                     <button
                       type="button"
                       onClick={() => removeField(index)}
-                      disabled={isSystemCountryField}
+                      disabled={isSystemLocationField}
                       style={{
                         background: "transparent",
                         border: "none",
-                        color: isSystemCountryField ? "#94A3B8" : "#EF4444",
-                        cursor: isSystemCountryField ? "not-allowed" : "pointer",
+                        color: isSystemLocationField ? "#94A3B8" : "#EF4444",
+                        cursor: isSystemLocationField ? "not-allowed" : "pointer",
                         display: "flex",
                         alignItems: "center",
                         padding: "0.2rem",
                         borderRadius: "4px",
                         transition: "background 0.2s",
                       }}
-                      title={isSystemCountryField ? "System field cannot be removed" : "Remove Field"}
+                      title={isSystemLocationField ? "System field cannot be removed" : "Remove Field"}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -1698,15 +1756,15 @@ export default function ServiceFormBuilder({
                       </label>
                       <input
                         style={{ padding: "0.6rem 0.8rem", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "0.95rem", width: "100%" }}
-                        value={isSystemCountryField ? SYSTEM_SERVICE_COUNTRY_FIELD_QUESTION : field.question}
+                        value={isSystemLocationField ? systemLocationConfig?.question ?? field.question : field.question}
                         onChange={(e) => updateFieldQuestion(index, e.target.value)}
                         placeholder="Example: Corporate Name"
-                        disabled={isSystemCountryField}
+                        disabled={isSystemLocationField}
                         required
                       />
-                      {isSystemCountryField ? (
+                      {isSystemLocationField ? (
                         <p style={{ margin: 0, fontSize: "0.8rem", color: "#1D4ED8" }}>
-                          This question is mandatory and managed by the system to map country-based pricing.
+                          This question is mandatory and managed by the system for Country-State-City dependency.
                         </p>
                       ) : null}
                     </div>
@@ -1750,7 +1808,7 @@ export default function ServiceFormBuilder({
                               key={`${field.fieldKey || `${activeServiceId}-${index}`}-${option.key}`}
                               type="button"
                               onClick={() => updateFieldIcon(index, option.key)}
-                              disabled={isSystemCountryField}
+                              disabled={isSystemLocationField}
                               style={{
                                 display: "inline-flex",
                                 alignItems: "center",
@@ -1763,8 +1821,8 @@ export default function ServiceFormBuilder({
                                 color: isActive ? "#1D4ED8" : "#475569",
                                 fontSize: "0.8rem",
                                 fontWeight: isActive ? 700 : 600,
-                                cursor: isSystemCountryField ? "not-allowed" : "pointer",
-                                opacity: isSystemCountryField ? 0.7 : 1,
+                                cursor: isSystemLocationField ? "not-allowed" : "pointer",
+                                opacity: isSystemLocationField ? 0.7 : 1,
                               }}
                               aria-label={`Select ${option.label} icon`}
                             >
@@ -1785,19 +1843,23 @@ export default function ServiceFormBuilder({
                         {field.fieldType === "long_text" && <FileText size={16} color="#64748B" />}
                         {field.fieldType === "number" && <Hash size={16} color="#64748B" />}
                         {field.fieldType === "date" && <Calendar size={16} color="#64748B" />}
+                        {field.fieldType === "email" && <Mail size={16} color="#64748B" />}
                         {field.fieldType === "file" && <Upload size={16} color="#64748B" />}
+                        {field.fieldType === "mobile" && <Phone size={16} color="#64748B" />}
                         Field Type
                       </label>
                       <select
                         style={{ padding: "0.6rem 0.8rem", border: "1px solid #CBD5E1", borderRadius: "6px", fontSize: "0.95rem", width: "100%", backgroundColor: "#fff" }}
-                        value={isSystemCountryField ? "dropdown" : field.fieldType}
+                        value={isSystemLocationField ? "dropdown" : field.fieldType}
                         onChange={(e) => updateFieldType(index, e.target.value as ServiceFormFieldType)}
-                        disabled={isSystemCountryField}
+                        disabled={isSystemLocationField}
                       >
                         <option value="text">Short Text</option>
                         <option value="long_text">Long Text</option>
                         <option value="number">Number</option>
                         <option value="date">Date</option>
+                        <option value="email">Email ID</option>
+                        <option value="mobile">Mobile Number</option>
                         <option value="file">File Upload</option>
                         <option value="dropdown">Dropdown</option>
                         <option value="composite">Group/Composite</option>
@@ -1824,9 +1886,9 @@ export default function ServiceFormBuilder({
                           >
                             <input
                               type="checkbox"
-                              checked={isSystemCountryField ? true : Boolean(field.required)}
+                              checked={isSystemLocationField ? true : Boolean(field.required)}
                               onChange={(e) => updateFieldRequired(index, e.target.checked)}
-                              disabled={isSystemCountryField}
+                              disabled={isSystemLocationField}
                               style={{ accentColor: "#DC2626", width: "1rem", height: "1rem" }}
                             />
                             Must answer
@@ -1837,7 +1899,7 @@ export default function ServiceFormBuilder({
                         <button
                           type="button"
                           onClick={() => addSecondInputInQuestion(index)}
-                          disabled={isSystemCountryField}
+                          disabled={isSystemLocationField}
                           style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.6rem 0.8rem", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: "6px", color: "#047857", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
                         >
                           <Plus size={16} />
@@ -1846,7 +1908,7 @@ export default function ServiceFormBuilder({
                         <button
                           type="button"
                           onClick={() => addFieldForSameQuestion(index)}
-                          disabled={isSystemCountryField}
+                          disabled={isSystemLocationField}
                           style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.6rem 0.8rem", background: "#F1F5F9", border: "1px solid #CBD5E1", borderRadius: "6px", color: "#475569", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}
                         >
                           <Copy size={16} />
@@ -1855,7 +1917,7 @@ export default function ServiceFormBuilder({
                       </div>
                     </div>
 
-                    {!isSystemCountryField &&
+                    {!isSystemLocationField &&
                     field.fieldType !== "file" &&
                     field.fieldType !== "composite" ? (
                       <div
@@ -1979,13 +2041,13 @@ export default function ServiceFormBuilder({
                                   value={opt}
                                   onChange={(e) => updateFieldDropdownOption(index, oIdx, e.target.value)}
                                   placeholder={`Option ${oIdx + 1}`}
-                                  disabled={isSystemCountryField}
+                                  disabled={isSystemLocationField}
                                 />
                                 <button
                                   type="button"
                                   onClick={() => removeFieldDropdownOption(index, oIdx)}
-                                  disabled={isSystemCountryField}
-                                  style={{ padding: "0.4rem", color: isSystemCountryField ? "#94A3B8" : "#DC2626", background: "none", border: "none", cursor: isSystemCountryField ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                                  disabled={isSystemLocationField}
+                                  style={{ padding: "0.4rem", color: isSystemLocationField ? "#94A3B8" : "#DC2626", background: "none", border: "none", cursor: isSystemLocationField ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
                                   aria-label="Remove option"
                                 >
                                   <Trash2 size={16} />
@@ -1995,8 +2057,8 @@ export default function ServiceFormBuilder({
                             <button
                               type="button"
                               onClick={() => addFieldDropdownOption(index)}
-                              disabled={isSystemCountryField}
-                              style={{ alignSelf: "flex-start", marginTop: "0.5rem", fontSize: "0.85rem", color: isSystemCountryField ? "#94A3B8" : "#2563EB", background: "none", border: "none", cursor: isSystemCountryField ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
+                              disabled={isSystemLocationField}
+                              style={{ alignSelf: "flex-start", marginTop: "0.5rem", fontSize: "0.85rem", color: isSystemLocationField ? "#94A3B8" : "#2563EB", background: "none", border: "none", cursor: isSystemLocationField ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: "0.2rem", fontWeight: 500 }}
                             >
                               <Plus size={14} /> Add Option
                             </button>
@@ -2170,7 +2232,7 @@ export default function ServiceFormBuilder({
                     )}
 
                     {/* Constraint Toggles Box */}
-                    {!isSystemCountryField ? (
+                    {!isSystemLocationField ? (
                     <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "-0.5rem" }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.5rem" }}>
                         
@@ -2457,8 +2519,11 @@ export default function ServiceFormBuilder({
                                 ? "number"
                                 : field.fieldType === "date"
                                   ? "date"
+                                  : field.fieldType === "email"
+                                    ? "email"
                                   : "text";
                             const isDropdownField = field.fieldType === "dropdown";
+                            const isMobileField = field.fieldType === "mobile";
                             const isPrimaryCard = field.isPrimaryForSource;
                             const canMoveUp = isPrimaryCard && field.sourceFieldIndex > 0;
                             const canMoveDown =
@@ -2711,6 +2776,26 @@ export default function ServiceFormBuilder({
                                               </option>
                                             ))}
                                           </select>
+                                        ) : isMobileField ? (
+                                          <div
+                                            style={{
+                                              display: "grid",
+                                              gridTemplateColumns: "minmax(120px, 0.9fr) minmax(0, 1fr)",
+                                              gap: "0.45rem",
+                                            }}
+                                          >
+                                            <select className="input" disabled defaultValue="+91">
+                                              {PREVIEW_MOBILE_CODE_OPTIONS.map((codeOption) => (
+                                                <option
+                                                  key={`${fieldRowKey}-repeat-mobile-code-${repeatIndex}-${codeOption}`}
+                                                  value={codeOption}
+                                                >
+                                                  {codeOption}
+                                                </option>
+                                              ))}
+                                            </select>
+                                            <input className="input" type="tel" disabled placeholder="Mobile number" />
+                                          </div>
                                         ) : (
                                           <input className="input" type={inputType} disabled />
                                         )}
@@ -2768,6 +2853,23 @@ export default function ServiceFormBuilder({
                                       </option>
                                     ))}
                                   </select>
+                                ) : isMobileField ? (
+                                  <div
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: "minmax(120px, 0.9fr) minmax(0, 1fr)",
+                                      gap: "0.45rem",
+                                    }}
+                                  >
+                                    <select className="input" disabled defaultValue="+91">
+                                      {PREVIEW_MOBILE_CODE_OPTIONS.map((codeOption) => (
+                                        <option key={`${fieldRowKey}-mobile-code-${codeOption}`} value={codeOption}>
+                                          {codeOption}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input className="input" type="tel" disabled placeholder="Mobile number" />
+                                  </div>
                                 ) : (
                                   <input className="input" type={inputType} disabled />
                                 )}
