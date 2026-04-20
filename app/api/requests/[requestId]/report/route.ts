@@ -1237,6 +1237,10 @@ async function buildPdfBuffer(report: ReportPayload) {
 
     const candidateFontFamilies = [
       {
+        regularFiles: ["segoeui.ttf"],
+        boldFiles: ["segoeuib.ttf"],
+      },
+      {
         regularFiles: ["Inter-Regular.ttf", "Inter.ttf", "inter.ttf"],
         boldFiles: ["Inter-Bold.ttf", "Inter-SemiBold.ttf", "interb.ttf"],
       },
@@ -1251,10 +1255,6 @@ async function buildPdfBuffer(report: ReportPayload) {
           "PlusJakartaSans-SemiBold.ttf",
           "plus-jakarta-sans-bold.ttf",
         ],
-      },
-      {
-        regularFiles: ["segoeui.ttf"],
-        boldFiles: ["segoeuib.ttf"],
       },
     ];
 
@@ -1827,6 +1827,7 @@ async function buildPdfBuffer(report: ReportPayload) {
   };
 
   const maxServiceBlockHeight = topStartY - bottomLimitY;
+  const maxServiceBlockHeightAfterSummaryHeading = maxServiceBlockHeight - 28;
 
   function dedupeAttempts(attempts: ReportPayload["services"][number]["attempts"]) {
     const seen = new Set<string>();
@@ -2032,7 +2033,12 @@ async function buildPdfBuffer(report: ReportPayload) {
     const candidateAnswers = Array.isArray(service.candidateAnswers)
       ? service.candidateAnswers
       : [];
-    ensureSpace(Math.min(estimateServiceIntroHeight(service) + 10, maxServiceBlockHeight));
+    ensureSpace(
+      Math.min(
+        estimateServiceIntroHeight(service) + 10,
+        maxServiceBlockHeightAfterSummaryHeading,
+      ),
+    );
 
     const heading = `${serviceIndex + 1}. ${service.serviceName}${isContinuation ? " (Continued)" : ""}`;
     page.drawText(sanitizePdfText(heading), {
@@ -2098,8 +2104,23 @@ async function buildPdfBuffer(report: ReportPayload) {
       firstService,
       firstAttemptRows,
     );
+    const firstServiceFitsAfterHeading =
+      firstServiceBlockHeight <= maxServiceBlockHeightAfterSummaryHeading;
+    const firstServiceIntroHeight = Math.min(
+      estimateServiceIntroHeight(firstService) + 10,
+      maxServiceBlockHeightAfterSummaryHeading,
+    );
+    const firstServiceMinimumTrailingHeight =
+      firstAttemptRows.length > 0 ? firstAttemptRows[0].rowHeight + 8 : 26;
+    const firstServiceMinimumChunkHeight = Math.min(
+      maxServiceBlockHeightAfterSummaryHeading,
+      firstServiceIntroHeight + firstServiceMinimumTrailingHeight,
+    );
     const headingAndFirstBlockHeight =
-      Math.min(maxServiceBlockHeight, firstServiceBlockHeight) + 28;
+      28 +
+      (firstServiceFitsAfterHeading
+        ? firstServiceBlockHeight
+        : firstServiceMinimumChunkHeight);
     ensureSpace(headingAndFirstBlockHeight);
   } else {
     ensureSpace(36);
@@ -2118,17 +2139,21 @@ async function buildPdfBuffer(report: ReportPayload) {
     const attempts = dedupeAttempts(service.attempts).slice().reverse();
     const attemptRows = attempts.map((attempt) => buildAttemptRowLayout(service, attempt));
     const serviceBlockHeight = estimateServiceBlockHeight(service, attemptRows);
-    const keepServiceTogether = serviceBlockHeight <= maxServiceBlockHeight;
+    const serviceAvailableHeight =
+      serviceIndex === 0
+        ? maxServiceBlockHeightAfterSummaryHeading
+        : maxServiceBlockHeight;
+    const keepServiceTogether = serviceBlockHeight <= serviceAvailableHeight;
     const serviceIntroHeight = Math.min(
       estimateServiceIntroHeight(service) + 10,
-      maxServiceBlockHeight,
+      serviceAvailableHeight,
     );
     const minimumTrailingHeight =
       attemptRows.length > 0
         ? attemptRows[0].rowHeight + 8
         : 26;
     const minimumChunkHeight = Math.min(
-      maxServiceBlockHeight,
+      serviceAvailableHeight,
       serviceIntroHeight + minimumTrailingHeight,
     );
 
