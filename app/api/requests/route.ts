@@ -15,7 +15,11 @@ const verifyServicePatchSchema = z.object({
   verificationMode: z.string().trim().max(120).optional().default("manual"),
   comment: z.string().trim().max(500).optional().default(""),
   verifierNote: z.string().trim().max(1200).optional().default(""),
+  respondentName: z.string().trim().max(120).optional().default(""),
+  respondentEmail: z.string().trim().max(180).optional().default(""),
+  respondentComment: z.string().trim().max(1200).optional().default(""),
   extraPaymentDone: z.boolean().optional().default(false),
+  requestCustomerApproval: z.boolean().optional().default(false),
   extraPaymentAmount: z.number().nonnegative().optional().nullable().default(null),
   screenshotFileName: z.string().trim().max(180).optional().default(""),
   screenshotMimeType: z.string().trim().max(100).optional().default(""),
@@ -71,8 +75,18 @@ type ServiceVerificationLike = {
     verificationMode?: string;
     comment?: string;
     verifierNote?: string;
+    respondentName?: string;
+    respondentEmail?: string;
+    respondentComment?: string;
     extraPaymentDone?: boolean;
     extraPaymentAmount?: number | null;
+    extraPaymentApprovalRequested?: boolean;
+    extraPaymentApprovalStatus?: string;
+    extraPaymentApprovalRequestedAt?: Date;
+    extraPaymentApprovalRequestedBy?: unknown;
+    extraPaymentApprovalRespondedAt?: Date;
+    extraPaymentApprovalRespondedBy?: unknown;
+    extraPaymentApprovalRejectionNote?: string;
     screenshotFileName?: string;
     screenshotMimeType?: string;
     screenshotFileSize?: number | null;
@@ -105,8 +119,18 @@ type NormalizedServiceVerification = {
     verificationMode: string;
     comment: string;
     verifierNote: string;
+    respondentName: string;
+    respondentEmail: string;
+    respondentComment: string;
     extraPaymentDone: boolean;
     extraPaymentAmount: number | null;
+    extraPaymentApprovalRequested: boolean;
+    extraPaymentApprovalStatus: ExtraPaymentApprovalStatus;
+    extraPaymentApprovalRequestedAt: Date | null;
+    extraPaymentApprovalRequestedBy: string | null;
+    extraPaymentApprovalRespondedAt: Date | null;
+    extraPaymentApprovalRespondedBy: string | null;
+    extraPaymentApprovalRejectionNote: string;
     screenshotFileName: string;
     screenshotMimeType: string;
     screenshotFileSize: number | null;
@@ -164,6 +188,9 @@ type ReportPayloadForShare = {
       comment: string;
       verifierName: string;
       managerName: string;
+      respondentName: string;
+      respondentEmail: string;
+      respondentComment: string;
     }>;
   }>;
 };
@@ -174,6 +201,28 @@ const ATTEMPT_SCREENSHOT_MIME_TYPES = new Set([
   "image/jpeg",
   "image/webp",
 ]);
+
+type ExtraPaymentApprovalStatus =
+  | "not-requested"
+  | "pending"
+  | "approved"
+  | "rejected";
+
+function normalizeExtraPaymentApprovalStatus(
+  value: unknown,
+): ExtraPaymentApprovalStatus | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (
+    normalized === "not-requested" ||
+    normalized === "pending" ||
+    normalized === "approved" ||
+    normalized === "rejected"
+  ) {
+    return normalized;
+  }
+
+  return null;
+}
 
 function normalizeAttemptScreenshotMimeType(rawMimeType: string) {
   const normalizedMimeType = rawMimeType.trim().toLowerCase();
@@ -601,6 +650,9 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
             comment: asString(attempt.comment),
             verifierName: asString(attempt.verifierName),
             managerName: asString(attempt.managerName),
+            respondentName: asString(attempt.respondentName),
+            respondentEmail: asString(attempt.respondentEmail),
+            respondentComment: asString(attempt.respondentComment),
           };
         })
         .filter(
@@ -613,6 +665,9 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
             comment: string;
             verifierName: string;
             managerName: string;
+            respondentName: string;
+            respondentEmail: string;
+            respondentComment: string;
           } => Boolean(attempt),
         );
 
@@ -655,6 +710,9 @@ function parseReportPayload(value: unknown): ReportPayloadForShare | null {
           comment: string;
           verifierName: string;
           managerName: string;
+          respondentName: string;
+          respondentEmail: string;
+          respondentComment: string;
         }>;
       } => Boolean(service),
     );
@@ -982,28 +1040,58 @@ function normalizeServiceVerifications(
       status: verification.status ?? "pending",
       verificationMode: verification.verificationMode ?? "",
       comment: verification.comment ?? "",
-      attempts: (verification.attempts ?? []).map((attempt) => ({
-        status: attempt.status ?? "in-progress",
-        verificationMode: attempt.verificationMode ?? "",
-        comment: attempt.comment ?? "",
-        verifierNote: attempt.verifierNote ?? "",
-        extraPaymentDone: Boolean(attempt.extraPaymentDone),
-        extraPaymentAmount:
-          typeof attempt.extraPaymentAmount === "number" &&
-          Number.isFinite(attempt.extraPaymentAmount) &&
-          attempt.extraPaymentAmount > 0
-            ? Math.round(attempt.extraPaymentAmount * 100) / 100
+      attempts: (verification.attempts ?? []).map((attempt) => {
+        const extraPaymentDone = Boolean(attempt.extraPaymentDone);
+        const extraPaymentApprovalRequested = Boolean(
+          attempt.extraPaymentApprovalRequested,
+        );
+        const extraPaymentApprovalStatus =
+          normalizeExtraPaymentApprovalStatus(
+            attempt.extraPaymentApprovalStatus,
+          ) ?? (extraPaymentApprovalRequested ? "pending" : "not-requested");
+
+        return {
+          status: attempt.status ?? "in-progress",
+          verificationMode: attempt.verificationMode ?? "",
+          comment: attempt.comment ?? "",
+          verifierNote: attempt.verifierNote ?? "",
+          respondentName: attempt.respondentName ?? "",
+          respondentEmail: attempt.respondentEmail ?? "",
+          respondentComment: attempt.respondentComment ?? "",
+          extraPaymentDone,
+          extraPaymentAmount:
+            typeof attempt.extraPaymentAmount === "number" &&
+            Number.isFinite(attempt.extraPaymentAmount) &&
+            attempt.extraPaymentAmount > 0
+              ? Math.round(attempt.extraPaymentAmount * 100) / 100
+              : null,
+          extraPaymentApprovalRequested,
+          extraPaymentApprovalStatus,
+          extraPaymentApprovalRequestedAt: attempt.extraPaymentApprovalRequestedAt
+            ? new Date(attempt.extraPaymentApprovalRequestedAt)
             : null,
-        screenshotFileName: attempt.screenshotFileName ?? "",
-        screenshotMimeType: attempt.screenshotMimeType ?? "",
-        screenshotFileSize: attempt.screenshotFileSize ?? null,
-        screenshotData: attempt.screenshotData ?? "",
-        attemptedAt: attempt.attemptedAt ? new Date(attempt.attemptedAt) : new Date(),
-        verifierId: attempt.verifierId ? String(attempt.verifierId) : null,
-        verifierName: attempt.verifierName ?? "",
-        managerId: attempt.managerId ? String(attempt.managerId) : null,
-        managerName: attempt.managerName ?? "",
-      })),
+          extraPaymentApprovalRequestedBy: attempt.extraPaymentApprovalRequestedBy
+            ? String(attempt.extraPaymentApprovalRequestedBy)
+            : null,
+          extraPaymentApprovalRespondedAt: attempt.extraPaymentApprovalRespondedAt
+            ? new Date(attempt.extraPaymentApprovalRespondedAt)
+            : null,
+          extraPaymentApprovalRespondedBy: attempt.extraPaymentApprovalRespondedBy
+            ? String(attempt.extraPaymentApprovalRespondedBy)
+            : null,
+          extraPaymentApprovalRejectionNote:
+            attempt.extraPaymentApprovalRejectionNote ?? "",
+          screenshotFileName: attempt.screenshotFileName ?? "",
+          screenshotMimeType: attempt.screenshotMimeType ?? "",
+          screenshotFileSize: attempt.screenshotFileSize ?? null,
+          screenshotData: attempt.screenshotData ?? "",
+          attemptedAt: attempt.attemptedAt ? new Date(attempt.attemptedAt) : new Date(),
+          verifierId: attempt.verifierId ? String(attempt.verifierId) : null,
+          verifierName: attempt.verifierName ?? "",
+          managerId: attempt.managerId ? String(attempt.managerId) : null,
+          managerName: attempt.managerName ?? "",
+        };
+      }),
     };
 
     const existingForInstance = existingByInstanceKey.get(serviceInstanceKey);
@@ -1301,6 +1389,23 @@ export async function GET(req: NextRequest) {
           fileMimeType: answer.fileMimeType ?? "",
           fileSize: answer.fileSize ?? null,
           fileData: answer.fileData ?? "",
+          entryFiles: Array.isArray(answer.entryFiles)
+            ? answer.entryFiles
+                .map((entryFile) => ({
+                  entryIndex:
+                    typeof entryFile.entryIndex === "number" &&
+                    Number.isFinite(entryFile.entryIndex) &&
+                    entryFile.entryIndex > 0
+                      ? Math.floor(entryFile.entryIndex)
+                      : 1,
+                  fileName: entryFile.fileName ?? "",
+                  fileMimeType: entryFile.fileMimeType ?? "",
+                  fileSize: entryFile.fileSize ?? null,
+                  fileData: entryFile.fileData ?? "",
+                }))
+                .filter((entryFile) => Boolean(entryFile.fileData))
+                .sort((first, second) => first.entryIndex - second.entryIndex)
+            : [],
         })),
       }))
       .filter((serviceResponse) => Boolean(serviceResponse.serviceId));
@@ -1757,6 +1862,20 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: normalizedScreenshot.error }, { status: 400 });
   }
 
+  const shouldRequestCustomerApproval = Boolean(
+    verifyPayload.requestCustomerApproval,
+  );
+
+  if (verifyPayload.extraPaymentDone && shouldRequestCustomerApproval) {
+    return NextResponse.json(
+      {
+        error:
+          "Choose either receipt logged (extra payment done) or request customer approval for extra payment.",
+      },
+      { status: 400 },
+    );
+  }
+
   if (verifyPayload.extraPaymentDone && !normalizedScreenshot.value.screenshotData) {
     return NextResponse.json(
       { error: "Receipt screenshot is required when extra payment is marked as done." },
@@ -1764,17 +1883,23 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
+  const requiresExtraPaymentAmount =
+    verifyPayload.extraPaymentDone || shouldRequestCustomerApproval;
+
   const normalizedExtraPaymentAmount =
-    verifyPayload.extraPaymentDone &&
+    requiresExtraPaymentAmount &&
     typeof verifyPayload.extraPaymentAmount === "number" &&
     Number.isFinite(verifyPayload.extraPaymentAmount) &&
     verifyPayload.extraPaymentAmount > 0
       ? Math.round(verifyPayload.extraPaymentAmount * 100) / 100
       : null;
 
-  if (verifyPayload.extraPaymentDone && !normalizedExtraPaymentAmount) {
+  if (requiresExtraPaymentAmount && !normalizedExtraPaymentAmount) {
     return NextResponse.json(
-      { error: "Extra payment amount must be greater than zero when extra payment is marked as done." },
+      {
+        error:
+          "Extra payment amount must be greater than zero when extra payment is marked as done or approval is requested.",
+      },
       { status: 400 },
     );
   }
@@ -1849,6 +1974,9 @@ export async function PATCH(req: NextRequest) {
   }
 
   const target = normalizedServiceVerifications[targetIndex];
+  const attemptedAt = new Date();
+  const extraPaymentApprovalStatus: ExtraPaymentApprovalStatus =
+    shouldRequestCustomerApproval ? "pending" : "not-requested";
   target.status = verifyPayload.serviceStatus;
   target.verificationMode = verifyPayload.verificationMode;
   target.comment = verifyPayload.comment;
@@ -1857,13 +1985,27 @@ export async function PATCH(req: NextRequest) {
     verificationMode: verifyPayload.verificationMode,
     comment: verifyPayload.comment,
     verifierNote: verifyPayload.verifierNote,
+    respondentName: verifyPayload.respondentName,
+    respondentEmail: verifyPayload.respondentEmail,
+    respondentComment: verifyPayload.respondentComment,
     extraPaymentDone: verifyPayload.extraPaymentDone,
     extraPaymentAmount: normalizedExtraPaymentAmount,
+    extraPaymentApprovalRequested: shouldRequestCustomerApproval,
+    extraPaymentApprovalStatus,
+    extraPaymentApprovalRequestedAt: shouldRequestCustomerApproval
+      ? attemptedAt
+      : null,
+    extraPaymentApprovalRequestedBy: shouldRequestCustomerApproval
+      ? auth.userId
+      : null,
+    extraPaymentApprovalRespondedAt: null,
+    extraPaymentApprovalRespondedBy: null,
+    extraPaymentApprovalRejectionNote: "",
     screenshotFileName: normalizedScreenshot.value.screenshotFileName,
     screenshotMimeType: normalizedScreenshot.value.screenshotMimeType,
     screenshotFileSize: normalizedScreenshot.value.screenshotFileSize,
     screenshotData: normalizedScreenshot.value.screenshotData,
-    attemptedAt: new Date(),
+    attemptedAt,
     verifierId: auth.userId,
     verifierName,
     managerId,
@@ -1912,10 +2054,14 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Request not found." }, { status: 404 });
   }
 
+  const baseMessage = shouldResetReportArtifacts
+    ? `Service verification attempt logged (${verifyPayload.serviceStatus}). Existing report was cleared. Generate and share an updated report with customer.`
+    : `Service verification attempt logged (${verifyPayload.serviceStatus}).`;
+
   return NextResponse.json({
-    message: shouldResetReportArtifacts
-      ? `Service verification attempt logged (${verifyPayload.serviceStatus}). Existing report was cleared. Generate and share an updated report with customer.`
-      : `Service verification attempt logged (${verifyPayload.serviceStatus}).`,
+    message: shouldRequestCustomerApproval
+      ? `${baseMessage} Extra payment approval request has been sent to customer portal.`
+      : baseMessage,
     requestStatus: nextStatus,
   });
 }

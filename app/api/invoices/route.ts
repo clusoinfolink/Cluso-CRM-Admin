@@ -276,6 +276,50 @@ function asBoolean(value: unknown, fallback = false) {
   return fallback;
 }
 
+type ExtraPaymentApprovalStatus =
+  | "not-requested"
+  | "pending"
+  | "approved"
+  | "rejected";
+
+function normalizeExtraPaymentApprovalStatus(
+  value: unknown,
+): ExtraPaymentApprovalStatus {
+  const normalized = normalizeWhitespace(asString(value)).toLowerCase();
+  if (
+    normalized === "not-requested" ||
+    normalized === "pending" ||
+    normalized === "approved" ||
+    normalized === "rejected"
+  ) {
+    return normalized;
+  }
+
+  return "not-requested";
+}
+
+function resolveBillableExtraPaymentAmount(attemptRecord: Record<string, unknown>) {
+  const amountRaw = Number(attemptRecord.extraPaymentAmount);
+  if (!Number.isFinite(amountRaw) || amountRaw <= 0) {
+    return 0;
+  }
+
+  const roundedAmount = roundMoney(amountRaw);
+  const approvalRequested = asBoolean(
+    attemptRecord.extraPaymentApprovalRequested,
+    false,
+  );
+
+  if (approvalRequested) {
+    const approvalStatus = normalizeExtraPaymentApprovalStatus(
+      attemptRecord.extraPaymentApprovalStatus,
+    );
+    return approvalStatus === "approved" ? roundedAmount : 0;
+  }
+
+  return asBoolean(attemptRecord.extraPaymentDone, false) ? roundedAmount : 0;
+}
+
 function normalizeGstRate(value: unknown, fallback = 18) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -579,16 +623,16 @@ function buildMonthlySummaryRows(
       let extraChargesSubtotal = 0;
       for (const attemptEntry of attempts) {
         const attemptRecord = asRecord(attemptEntry);
-        if (!asBoolean(attemptRecord.extraPaymentDone, false)) {
+        const billableExtraAmount = resolveBillableExtraPaymentAmount(
+          attemptRecord,
+        );
+        if (billableExtraAmount <= 0) {
           continue;
         }
 
-        const amountRaw = Number(attemptRecord.extraPaymentAmount);
-        if (!Number.isFinite(amountRaw) || amountRaw <= 0) {
-          continue;
-        }
-
-        extraChargesSubtotal = roundMoney(extraChargesSubtotal + amountRaw);
+        extraChargesSubtotal = roundMoney(
+          extraChargesSubtotal + billableExtraAmount,
+        );
       }
 
       if (extraChargesSubtotal <= 0) {
@@ -1264,16 +1308,14 @@ function buildMonthlyInvoiceLineItems(
       let extraAmount = 0;
       for (const attemptEntry of attempts) {
         const attemptRecord = asRecord(attemptEntry);
-        if (!asBoolean(attemptRecord.extraPaymentDone, false)) {
+        const billableExtraAmount = resolveBillableExtraPaymentAmount(
+          attemptRecord,
+        );
+        if (billableExtraAmount <= 0) {
           continue;
         }
 
-        const attemptAmount = Number(attemptRecord.extraPaymentAmount);
-        if (!Number.isFinite(attemptAmount) || attemptAmount <= 0) {
-          continue;
-        }
-
-        extraAmount = roundMoney(extraAmount + attemptAmount);
+        extraAmount = roundMoney(extraAmount + billableExtraAmount);
       }
 
       if (extraAmount <= 0) {
@@ -1664,7 +1706,7 @@ export async function GET(req: NextRequest) {
         buildBillableRequestFilter(companyId, monthStart, monthEnd),
       )
         .sort({ createdAt: 1 })
-        .select("candidateName status createdBy createdByDelegate selectedServices invoiceSnapshot serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.verifierName serviceVerifications.attempts.managerName serviceVerifications.attempts.attemptedAt serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount createdAt reportMetadata.customerSharedAt reportMetadata.generatedAt")
+        .select("candidateName status createdBy createdByDelegate selectedServices invoiceSnapshot serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.verifierName serviceVerifications.attempts.managerName serviceVerifications.attempts.attemptedAt serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount serviceVerifications.attempts.extraPaymentApprovalRequested serviceVerifications.attempts.extraPaymentApprovalStatus candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount createdAt reportMetadata.customerSharedAt reportMetadata.generatedAt")
         .populate({ path: "createdBy", select: "name" })
         .populate({ path: "createdByDelegate", select: "name" })
         .lean(),
@@ -1782,7 +1824,7 @@ export async function POST(req: NextRequest) {
   const monthlyRequests = await VerificationRequest.find(
     buildBillableRequestFilter(parsed.data.companyId, monthStart, monthEnd),
   )
-    .select("selectedServices invoiceSnapshot serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount")
+    .select("selectedServices invoiceSnapshot serviceVerifications.serviceId serviceVerifications.serviceName serviceVerifications.attempts.extraPaymentDone serviceVerifications.attempts.extraPaymentAmount serviceVerifications.attempts.extraPaymentApprovalRequested serviceVerifications.attempts.extraPaymentApprovalStatus candidateFormResponses.serviceId candidateFormResponses.serviceName candidateFormResponses.serviceEntryCount")
     .lean();
 
   const lineItems = buildMonthlyInvoiceLineItems(

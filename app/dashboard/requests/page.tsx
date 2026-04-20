@@ -62,7 +62,11 @@ type ServiceAttemptDraft = {
   verificationMode: string;
   comment: string;
   verifierNote: string;
+  respondentName: string;
+  respondentEmail: string;
+  respondentComment: string;
   extraPaymentDone: boolean;
+  requestCustomerApproval: boolean;
   extraPaymentAmount: number | null;
   screenshotFileName: string;
   screenshotMimeType: string;
@@ -82,6 +86,9 @@ type ReportPreviewAttempt = {
   comment: string;
   verifierName: string;
   managerName: string;
+  respondentName: string;
+  respondentEmail: string;
+  respondentComment: string;
 };
 
 type ReportPreviewCandidateAnswer = {
@@ -243,6 +250,37 @@ function getReportAttemptStatusColor(status: string) {
   return "#A16207";
 }
 
+function toExtraPaymentApprovalStatusLabel(value?: string) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "pending") {
+    return "Pending Customer Approval";
+  }
+
+  if (normalized === "approved") {
+    return "Approved by Customer";
+  }
+
+  if (normalized === "rejected") {
+    return "Rejected by Customer";
+  }
+
+  return "Not Requested";
+}
+
+function normalizeExtraPaymentApprovalStatus(value?: string) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (
+    normalized === "not-requested" ||
+    normalized === "pending" ||
+    normalized === "approved" ||
+    normalized === "rejected"
+  ) {
+    return normalized;
+  }
+
+  return "not-requested";
+}
+
 const PERSONAL_DETAILS_SERVICE_NAME = "personal details";
 const PERSONAL_DETAILS_QUESTION_SEQUENCE = [
   "Full name (as per government ID)",
@@ -278,11 +316,27 @@ function normalizePreviewAnswer(
 }
 
 function isPersonalDetailsServiceName(serviceName: string) {
-  return normalizeQuestionKey(serviceName) === PERSONAL_DETAILS_SERVICE_NAME;
+  const normalizedServiceName = normalizeQuestionKey(serviceName);
+  return (
+    normalizedServiceName === PERSONAL_DETAILS_SERVICE_NAME ||
+    normalizedServiceName.includes("personal detail")
+  );
 }
 
 function isLikelyPersonalDetailsQuestion(question: string) {
-  return PERSONAL_DETAILS_QUESTION_ORDER.has(normalizeQuestionKey(question));
+  const normalizedQuestion = normalizeQuestionKey(question);
+  if (!normalizedQuestion) {
+    return false;
+  }
+
+  if (PERSONAL_DETAILS_QUESTION_ORDER.has(normalizedQuestion)) {
+    return true;
+  }
+
+  const looseQuestion = normalizedQuestion.replace(/[^a-z0-9\s]/g, " ");
+  return /\b(date of birth|dob|nationality|gender|aadhar|aadhaar|pan|passport|government id|residential address)\b/.test(
+    looseQuestion,
+  );
 }
 
 function dedupePersonalDetailsAnswers(
@@ -334,8 +388,13 @@ function splitReportSections(
     const answers = (service.candidateAnswers ?? []).map((answer) =>
       normalizePreviewAnswer(answer),
     );
+    const personalDetailMatchCount = answers.filter((answer) =>
+      isLikelyPersonalDetailsQuestion(answer.question),
+    ).length;
     const looksLikePersonalDetails =
-      answers.length > 0 && answers.every((answer) => isLikelyPersonalDetailsQuestion(answer.question));
+      answers.length > 0 &&
+      personalDetailMatchCount >= 2 &&
+      personalDetailMatchCount / answers.length >= 0.6;
 
     if (isPersonalDetailsServiceName(service.serviceName) || looksLikePersonalDetails) {
       personalDetails.push(...answers);
@@ -458,6 +517,9 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
             comment: asString(attemptRecord.comment),
             verifierName: asString(attemptRecord.verifierName),
             managerName: asString(attemptRecord.managerName),
+            respondentName: asString(attemptRecord.respondentName),
+            respondentEmail: asString(attemptRecord.respondentEmail),
+            respondentComment: asString(attemptRecord.respondentComment),
           } satisfies ReportPreviewAttempt;
         })
         .filter((attempt): attempt is ReportPreviewAttempt => attempt !== null);
@@ -506,38 +568,68 @@ function parseStoredReportData(raw: unknown): Omit<ReportPreviewData, "createdBy
 function buildReportPreviewData(item: RequestItem, viewerName: string) {
   const stored = parseStoredReportData(item.reportData);
   const candidateAnswersByServiceInstance = buildCandidateAnswersByServiceInstance(item);
+  const personalDetailsFromCandidateResponses =
+    buildPersonalDetailsFromCandidateResponses(item);
 
   const fallbackServices: ReportPreviewService[] =
     item.serviceVerifications && item.serviceVerifications.length > 0
-      ? item.serviceVerifications.map((service) => {
-          const {
-            serviceEntryIndex,
-            serviceEntryCount,
-            serviceInstanceKey,
-            serviceDisplayName,
-          } = getServiceIdentity(service);
+      ? (() => {
+          const servicesByInstance = new Map<string, ReportPreviewService>();
+          const serviceOrder: string[] = [];
 
-          return {
-            serviceId: service.serviceId,
-            serviceEntryIndex,
-            serviceEntryCount,
-            serviceInstanceKey,
-            serviceName: serviceDisplayName,
-            status: service.status,
-            verificationMode: service.verificationMode,
-            comment: service.comment,
-            candidateAnswers:
-              candidateAnswersByServiceInstance.get(serviceInstanceKey) ?? [],
-            attempts: (service.attempts ?? []).map((attempt) => ({
+          for (const service of item.serviceVerifications) {
+            const {
+              serviceEntryIndex,
+              serviceEntryCount,
+              serviceInstanceKey,
+              serviceDisplayName,
+            } = getServiceIdentity(service);
+
+            const mappedAttempts = (service.attempts ?? []).map((attempt) => ({
               attemptedAt: attempt.attemptedAt,
               status: attempt.status,
               verificationMode: attempt.verificationMode,
               comment: attempt.comment,
               verifierName: attempt.verifierName ?? "",
               managerName: attempt.managerName ?? "",
-            })),
-          };
-        })
+              respondentName: attempt.respondentName ?? "",
+              respondentEmail: attempt.respondentEmail ?? "",
+              respondentComment: attempt.respondentComment ?? "",
+            }));
+
+            const existing = servicesByInstance.get(serviceInstanceKey);
+            if (existing) {
+              existing.status = service.status;
+              existing.verificationMode = service.verificationMode;
+              existing.comment = service.comment;
+              existing.attempts.push(...mappedAttempts);
+              if (existing.candidateAnswers.length === 0) {
+                existing.candidateAnswers =
+                  candidateAnswersByServiceInstance.get(serviceInstanceKey) ?? [];
+              }
+              continue;
+            }
+
+            serviceOrder.push(serviceInstanceKey);
+            servicesByInstance.set(serviceInstanceKey, {
+              serviceId: service.serviceId,
+              serviceEntryIndex,
+              serviceEntryCount,
+              serviceInstanceKey,
+              serviceName: serviceDisplayName,
+              status: service.status,
+              verificationMode: service.verificationMode,
+              comment: service.comment,
+              candidateAnswers:
+                candidateAnswersByServiceInstance.get(serviceInstanceKey) ?? [],
+              attempts: mappedAttempts,
+            });
+          }
+
+          return serviceOrder
+            .map((serviceInstanceKey) => servicesByInstance.get(serviceInstanceKey))
+            .filter((service): service is ReportPreviewService => Boolean(service));
+        })()
       : (() => {
           const selectedServices = (item.selectedServices ?? []).filter((service) =>
             Boolean(normalizeServiceId(service.serviceId)),
@@ -591,7 +683,10 @@ function buildReportPreviewData(item: RequestItem, viewerName: string) {
   const personalDetails =
     stored?.personalDetails && stored.personalDetails.length > 0
       ? dedupePersonalDetailsAnswers(stored.personalDetails)
-      : splitSections.personalDetails;
+      : dedupePersonalDetailsAnswers([
+          ...splitSections.personalDetails,
+          ...personalDetailsFromCandidateResponses,
+        ]);
   const services = splitSections.services;
   const latestAttempt = services
     .flatMap((service) => service.attempts)
@@ -683,6 +778,9 @@ function toShareReportPayload(report: ReportPreviewData) {
         comment: attempt.comment,
         verifierName: attempt.verifierName,
         managerName: attempt.managerName,
+        respondentName: attempt.respondentName,
+        respondentEmail: attempt.respondentEmail,
+        respondentComment: attempt.respondentComment,
       })),
     })),
   };
@@ -822,6 +920,33 @@ function getAnswerValueForEntry(answer: CandidateServiceAnswer, entryIndex: numb
   return repeatableValues[entryIndex] ?? "";
 }
 
+function resolveAnswerFileForEntry(answer: CandidateServiceAnswer, entryIndex: number) {
+  const serviceEntryNumber = entryIndex + 1;
+  const entryFile = (answer.entryFiles ?? [])
+    .map((candidateEntryFile) => ({
+      entryIndex: normalizePositiveInteger(candidateEntryFile.entryIndex, 1),
+      fileName: (candidateEntryFile.fileName ?? "").trim(),
+      fileData: (candidateEntryFile.fileData ?? "").trim(),
+    }))
+    .find(
+      (candidateEntryFile) =>
+        candidateEntryFile.entryIndex === serviceEntryNumber &&
+        Boolean(candidateEntryFile.fileData),
+    );
+
+  if (entryFile) {
+    return {
+      fileName: entryFile.fileName,
+      fileData: entryFile.fileData,
+    };
+  }
+
+  return {
+    fileName: (answer.fileName ?? "").trim(),
+    fileData: (answer.fileData ?? "").trim(),
+  };
+}
+
 function buildCandidateAnswersByServiceInstance(item: RequestItem) {
   const answersByServiceInstance = new Map<string, ReportPreviewCandidateAnswer[]>();
 
@@ -837,8 +962,9 @@ function buildCandidateAnswersByServiceInstance(item: RequestItem) {
       const serviceInstanceKey = buildServiceInstanceKey(serviceId, serviceEntryNumber);
       const answers = serviceResponse.answers.map((answer) => {
         const fieldType = answer.fieldType;
-        const fileName = answer.fileName ?? "";
-        const fileData = answer.fileData ?? "";
+        const resolvedFile = resolveAnswerFileForEntry(answer, entryIndex);
+        const fileName = resolvedFile.fileName;
+        const fileData = resolvedFile.fileData;
         const value =
           fieldType === "file" && fileData
             ? fileName || "Attachment"
@@ -858,6 +984,47 @@ function buildCandidateAnswersByServiceInstance(item: RequestItem) {
   }
 
   return answersByServiceInstance;
+}
+
+function buildPersonalDetailsFromCandidateResponses(item: RequestItem) {
+  const personalDetails: ReportPreviewCandidateAnswer[] = [];
+
+  for (const serviceResponse of item.candidateFormResponses ?? []) {
+    const isPersonalDetailsSection = isPersonalDetailsServiceName(
+      serviceResponse.serviceName ?? "",
+    );
+    const serviceEntryCount = resolveServiceResponseEntryCount(serviceResponse);
+
+    for (let entryIndex = 0; entryIndex < serviceEntryCount; entryIndex += 1) {
+      for (const answer of serviceResponse.answers) {
+        const fieldType = answer.fieldType;
+        const resolvedFile = resolveAnswerFileForEntry(answer, entryIndex);
+        const fileName = resolvedFile.fileName;
+        const fileData = resolvedFile.fileData;
+        const value =
+          fieldType === "file" && fileData
+            ? fileName || "Attachment"
+            : getAnswerValueForEntry(answer, entryIndex).trim() || "-";
+
+        const normalizedAnswer = {
+          question: answer.question || "Field",
+          value,
+          fieldType,
+          fileName,
+          fileData,
+        } satisfies ReportPreviewCandidateAnswer;
+
+        if (
+          isPersonalDetailsSection ||
+          isLikelyPersonalDetailsQuestion(normalizedAnswer.question)
+        ) {
+          personalDetails.push(normalizedAnswer);
+        }
+      }
+    }
+  }
+
+  return dedupePersonalDetailsAnswers(personalDetails);
 }
 
 function toAppealServiceLabel(appeal: RequestItem["reverificationAppeal"] | null | undefined) {
@@ -1200,7 +1367,11 @@ function RequestsPageContent() {
           verificationMode: service.verificationMode || "manual",
           comment: service.comment || "",
           verifierNote: latestAttempt?.verifierNote || "",
+          respondentName: latestAttempt?.respondentName || "",
+          respondentEmail: latestAttempt?.respondentEmail || "",
+          respondentComment: latestAttempt?.respondentComment || "",
           extraPaymentDone: false,
+          requestCustomerApproval: false,
           extraPaymentAmount: null,
           screenshotFileName: "",
           screenshotMimeType: "",
@@ -1225,17 +1396,25 @@ function RequestsPageContent() {
   ) {
     setServiceDraftsByRequest((prev) => {
       const requestDraft = prev[requestId] ?? {};
-      const existing = requestDraft[serviceInstanceKey] ?? {
+      const defaultDraft: ServiceAttemptDraft = {
         status: "in-progress" as const,
         verificationMode: "manual",
         comment: "",
         verifierNote: "",
+        respondentName: "",
+        respondentEmail: "",
+        respondentComment: "",
         extraPaymentDone: false,
+        requestCustomerApproval: false,
         extraPaymentAmount: null,
         screenshotFileName: "",
         screenshotMimeType: "",
         screenshotFileSize: null,
         screenshotData: "",
+      };
+      const existing = {
+        ...defaultDraft,
+        ...(requestDraft[serviceInstanceKey] ?? {}),
       };
 
       return {
@@ -1459,13 +1638,20 @@ function RequestsPageContent() {
       return;
     }
 
+    if (draft.extraPaymentDone && draft.requestCustomerApproval) {
+      setMessage("Choose either payment done or request customer approval for extra payment.");
+      return;
+    }
+
     if (
-      draft.extraPaymentDone &&
+      (draft.extraPaymentDone || draft.requestCustomerApproval) &&
       (typeof draft.extraPaymentAmount !== "number" ||
         !Number.isFinite(draft.extraPaymentAmount) ||
         draft.extraPaymentAmount <= 0)
     ) {
-      setMessage("Enter extra payment amount in service currency before logging attempt.");
+      setMessage(
+        "Enter extra payment amount in service currency before logging attempt.",
+      );
       return;
     }
 
@@ -1484,8 +1670,15 @@ function RequestsPageContent() {
         verificationMode: draft.verificationMode,
         comment: draft.comment,
         verifierNote: draft.verifierNote,
+        respondentName: draft.respondentName,
+        respondentEmail: draft.respondentEmail,
+        respondentComment: draft.respondentComment,
         extraPaymentDone: draft.extraPaymentDone,
-        extraPaymentAmount: draft.extraPaymentDone ? draft.extraPaymentAmount : null,
+        requestCustomerApproval: draft.requestCustomerApproval,
+        extraPaymentAmount:
+          draft.extraPaymentDone || draft.requestCustomerApproval
+            ? draft.extraPaymentAmount
+            : null,
         screenshotFileName: draft.screenshotFileName,
         screenshotMimeType: draft.screenshotMimeType,
         screenshotFileSize: draft.screenshotFileSize,
@@ -1505,6 +1698,7 @@ function RequestsPageContent() {
     clearAttemptScreenshot(requestId, serviceInstanceKey);
     updateServiceDraft(requestId, serviceInstanceKey, {
       extraPaymentDone: false,
+      requestCustomerApproval: false,
       extraPaymentAmount: null,
     });
     await loadRequests();
@@ -2020,8 +2214,11 @@ function RequestsPageContent() {
       return <p style={{ margin: 0, color: "#667892" }}>Candidate has not submitted form responses yet.</p>;
     }
 
+    const renderedVerificationServiceKeys = new Set<string>();
     const responseCards = item.candidateFormResponses.flatMap((serviceResponse) => {
       const serviceEntryCount = resolveServiceResponseEntryCount(serviceResponse);
+      const normalizedServiceId = normalizeServiceId(serviceResponse.serviceId);
+      const isPersonalDetailsService = isPersonalDetailsServiceName(serviceResponse.serviceName);
 
       return Array.from({ length: serviceEntryCount }, (_, entryIndex) => {
         const serviceEntryNumber = entryIndex + 1;
@@ -2030,197 +2227,259 @@ function RequestsPageContent() {
           serviceEntryNumber,
           serviceEntryCount,
         );
+        const serviceInstanceKey = normalizedServiceId
+          ? buildServiceInstanceKey(normalizedServiceId, serviceEntryNumber)
+          : "";
+        const inlineVerificationWorkspace =
+          !isPersonalDetailsService && serviceInstanceKey
+            ? renderServiceVerificationWorkspace(item, {
+                serviceInstanceKeys: [serviceInstanceKey],
+                compact: true,
+                hideWorkspaceHeader: true,
+                hideServiceHeader: true,
+                suppressEmptyState: true,
+              })
+            : null;
+
+        if (inlineVerificationWorkspace && serviceInstanceKey) {
+          renderedVerificationServiceKeys.add(serviceInstanceKey);
+        }
 
         return (
           <div
             key={`${item._id}-${serviceResponse.serviceId}-${serviceEntryNumber}`}
-            style={{
-              border: "1px solid #E2E8F0",
-              borderRadius: "12px",
-              padding: "1rem",
-              background: "#F8FAFC",
-            }}
+            style={{ display: "grid", gap: "0.75rem" }}
           >
-            <h4
+            <div
               style={{
-                margin: 0,
-                color: "#1E293B",
-                fontSize: "1.05rem",
-                fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
+                border: "1px solid #E2E8F0",
+                borderRadius: "12px",
+                padding: "1rem",
+                background: "#F8FAFC",
               }}
             >
-              <BadgeCheck size={18} color="#3B82F6" />
-              {serviceDisplayName}
-            </h4>
-            <div style={{ marginTop: "0.75rem" }}>
-              {serviceResponse.answers.length === 0 ? (
-                <span style={{ color: "#64748B", fontSize: "0.9rem" }}>No answers available.</span>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table
-                    style={{
-                      width: "100%",
-                      minWidth: "640px",
-                      borderCollapse: "collapse",
-                      background: "#FFFFFF",
-                      borderRadius: "8px",
-                      overflow: "hidden",
-                      border: "1px solid #E2E8F0",
-                    }}
-                  >
-                    <thead>
-                      <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
-                        <th
-                          style={{
-                            padding: "0.75rem 1rem",
-                            color: "#475569",
-                            fontWeight: 600,
-                            fontSize: "0.85rem",
-                            borderBottom: "1px solid #E2E8F0",
-                            width: "40%",
-                          }}
-                        >
-                          Information Required
-                        </th>
-                        <th
-                          style={{
-                            padding: "0.75rem 1rem",
-                            color: "#475569",
-                            fontWeight: 600,
-                            fontSize: "0.85rem",
-                            borderBottom: "1px solid #E2E8F0",
-                          }}
-                        >
-                          Provided Response
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {serviceResponse.answers.map((answer, answerIndex) => {
-                        const answerValue = getAnswerValueForEntry(answer, entryIndex);
-                        const showNotProvided = !answerValue;
+              <h4
+                style={{
+                  margin: 0,
+                  color: "#1E293B",
+                  fontSize: "1.05rem",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                <BadgeCheck size={18} color="#3B82F6" />
+                {serviceDisplayName}
+              </h4>
+              <div style={{ marginTop: "0.75rem" }}>
+                {serviceResponse.answers.length === 0 ? (
+                  <span style={{ color: "#64748B", fontSize: "0.9rem" }}>No answers available.</span>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table
+                      style={{
+                        width: "100%",
+                        minWidth: "640px",
+                        borderCollapse: "collapse",
+                        background: "#FFFFFF",
+                        borderRadius: "8px",
+                        overflow: "hidden",
+                        border: "1px solid #E2E8F0",
+                      }}
+                    >
+                      <thead>
+                        <tr style={{ background: "#F1F5F9", textAlign: "left" }}>
+                          <th
+                            style={{
+                              padding: "0.75rem 1rem",
+                              color: "#475569",
+                              fontWeight: 600,
+                              fontSize: "0.85rem",
+                              borderBottom: "1px solid #E2E8F0",
+                              width: "40%",
+                            }}
+                          >
+                            Information Required
+                          </th>
+                          <th
+                            style={{
+                              padding: "0.75rem 1rem",
+                              color: "#475569",
+                              fontWeight: 600,
+                              fontSize: "0.85rem",
+                              borderBottom: "1px solid #E2E8F0",
+                            }}
+                          >
+                            Provided Response
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {serviceResponse.answers.map((answer, answerIndex) => {
+                          const answerValue = getAnswerValueForEntry(answer, entryIndex);
+                          const resolvedFile = resolveAnswerFileForEntry(answer, entryIndex);
+                          const hasResolvedFile = Boolean(resolvedFile.fileData);
+                          const showNotProvided =
+                            answer.fieldType === "file" ? !hasResolvedFile : !answerValue;
 
-                        return (
-                          <tr key={`${serviceResponse.serviceId}-${serviceEntryNumber}-${answerIndex}`}>
-                            <td
-                              style={{
-                                padding: "0.75rem 1rem",
-                                color: "#334155",
-                                fontSize: "0.9rem",
-                                fontWeight: 500,
-                                borderBottom:
-                                  answerIndex === serviceResponse.answers.length - 1
-                                    ? "none"
-                                    : "1px solid #F1F5F9",
-                                verticalAlign: "top",
-                              }}
-                            >
-                              {answer.question}
-                            </td>
-                            <td
-                              style={{
-                                padding: "0.75rem 1rem",
-                                color: "#1E293B",
-                                fontSize: "0.9rem",
-                                borderBottom:
-                                  answerIndex === serviceResponse.answers.length - 1
-                                    ? "none"
-                                    : "1px solid #F1F5F9",
-                              }}
-                            >
-                              {answer.fieldType === "file" && answer.fileData ? (
-                                <span
-                                  style={{
-                                    display: "inline-flex",
-                                    gap: "0.75rem",
-                                    alignItems: "center",
-                                    flexWrap: "wrap",
-                                    background: "#EFF6FF",
-                                    padding: "0.25rem 0.75rem",
-                                    borderRadius: "8px",
-                                    border: "1px solid #BFDBFE",
-                                  }}
-                                >
+                          return (
+                            <tr key={`${serviceResponse.serviceId}-${serviceEntryNumber}-${answerIndex}`}>
+                              <td
+                                style={{
+                                  padding: "0.75rem 1rem",
+                                  color: "#334155",
+                                  fontSize: "0.9rem",
+                                  fontWeight: 500,
+                                  borderBottom:
+                                    answerIndex === serviceResponse.answers.length - 1
+                                      ? "none"
+                                      : "1px solid #F1F5F9",
+                                  verticalAlign: "top",
+                                }}
+                              >
+                                {answer.question}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "0.75rem 1rem",
+                                  color: "#1E293B",
+                                  fontSize: "0.9rem",
+                                  borderBottom:
+                                    answerIndex === serviceResponse.answers.length - 1
+                                      ? "none"
+                                      : "1px solid #F1F5F9",
+                                }}
+                              >
+                                {answer.fieldType === "file" && hasResolvedFile ? (
                                   <span
                                     style={{
-                                      fontWeight: 600,
-                                      color: "#1D4ED8",
-                                      fontSize: "0.85rem",
+                                      display: "inline-flex",
+                                      gap: "0.75rem",
+                                      alignItems: "center",
+                                      flexWrap: "wrap",
+                                      background: "#EFF6FF",
+                                      padding: "0.25rem 0.75rem",
+                                      borderRadius: "8px",
+                                      border: "1px solid #BFDBFE",
                                     }}
                                   >
-                                    {answer.fileName || "Attachment"}
+                                    <span
+                                      style={{
+                                        fontWeight: 600,
+                                        color: "#1D4ED8",
+                                        fontSize: "0.85rem",
+                                      }}
+                                    >
+                                      {resolvedFile.fileName || "Attachment"}
+                                    </span>
+                                    <div
+                                      style={{
+                                        width: "1px",
+                                        height: "14px",
+                                        background: "#93C5FD",
+                                      }}
+                                    />
+                                    <a
+                                      href={resolvedFile.fileData}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      style={{
+                                        color: "#2563EB",
+                                        textDecoration: "none",
+                                        fontSize: "0.85rem",
+                                        fontWeight: 500,
+                                      }}
+                                      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+                                      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+                                    >
+                                      View File
+                                    </a>
+                                    <a
+                                      href={resolvedFile.fileData}
+                                      download={resolvedFile.fileName || `attachment-${serviceEntryNumber}-${answerIndex}`}
+                                      style={{
+                                        color: "#2563EB",
+                                        textDecoration: "none",
+                                        fontSize: "0.85rem",
+                                        fontWeight: 500,
+                                      }}
+                                      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+                                      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+                                    >
+                                      Download
+                                    </a>
                                   </span>
-                                  <div
-                                    style={{
-                                      width: "1px",
-                                      height: "14px",
-                                      background: "#93C5FD",
-                                    }}
-                                  />
-                                  <a
-                                    href={answer.fileData}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    style={{
-                                      color: "#2563EB",
-                                      textDecoration: "none",
-                                      fontSize: "0.85rem",
-                                      fontWeight: 500,
-                                    }}
-                                    onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-                                    onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-                                  >
-                                    View File
-                                  </a>
-                                  <a
-                                    href={answer.fileData}
-                                    download={answer.fileName || `attachment-${serviceEntryNumber}-${answerIndex}`}
-                                    style={{
-                                      color: "#2563EB",
-                                      textDecoration: "none",
-                                      fontSize: "0.85rem",
-                                      fontWeight: 500,
-                                    }}
-                                    onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-                                    onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-                                  >
-                                    Download
-                                  </a>
-                                </span>
-                              ) : showNotProvided ? (
-                                <span style={{ color: "#94A3B8", fontStyle: "italic" }}>Not provided</span>
-                              ) : (
-                                answerValue
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                                ) : showNotProvided ? (
+                                  <span style={{ color: "#94A3B8", fontStyle: "italic" }}>Not provided</span>
+                                ) : (
+                                  answerValue
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
+
+            {inlineVerificationWorkspace}
           </div>
         );
       });
     });
 
+    const unmatchedServiceKeys = getServiceVerifications(item)
+      .map((service) => getServiceIdentity(service).serviceInstanceKey)
+      .filter((serviceInstanceKey) => !renderedVerificationServiceKeys.has(serviceInstanceKey));
+    const unmatchedVerifications =
+      unmatchedServiceKeys.length > 0
+        ? renderServiceVerificationWorkspace(item, {
+            serviceInstanceKeys: unmatchedServiceKeys,
+            compact: true,
+            hideWorkspaceHeader: true,
+            suppressEmptyState: true,
+          })
+        : null;
+
     return (
       <div style={{ display: "grid", gap: "1rem" }}>
         {responseCards}
+        {unmatchedVerifications}
       </div>
     );
   }
 
-  function renderServiceVerificationWorkspace(item: RequestItem) {
+  type RenderServiceVerificationWorkspaceOptions = {
+    serviceInstanceKeys?: string[];
+    compact?: boolean;
+    hideWorkspaceHeader?: boolean;
+    hideServiceHeader?: boolean;
+    suppressEmptyState?: boolean;
+  };
+
+  function renderServiceVerificationWorkspace(
+    item: RequestItem,
+    options: RenderServiceVerificationWorkspaceOptions = {},
+  ) {
     const services = getServiceVerifications(item);
+    const servicesToRender =
+      options.serviceInstanceKeys && options.serviceInstanceKeys.length > 0
+        ? services.filter((service) => {
+            const { serviceInstanceKey } = getServiceIdentity(service);
+            return options.serviceInstanceKeys?.includes(serviceInstanceKey);
+          })
+        : services;
     const requestDraft = serviceDraftsByRequest[item._id] ?? {};
 
-    if (services.length === 0) {
+    if (servicesToRender.length === 0) {
+      if (options.suppressEmptyState || options.compact) {
+        return null;
+      }
+
       return (
         <div className="glass-card" style={{ padding: "1rem", marginBottom: "1rem" }}>
           <p style={{ margin: 0, color: "#667892" }}>No services are attached to this request.</p>
@@ -2228,186 +2487,244 @@ function RequestsPageContent() {
       );
     }
 
-    return (
-      <div className="glass-card" style={{ padding: "1rem", marginBottom: "1rem", background: "#F8FAFC" }}>
-        <h4 style={{ margin: "0 0 0.4rem", color: "#1E293B" }}>Service Verification Workspace</h4>
-        <p style={{ margin: "0 0 0.85rem", color: "#64748B", fontSize: "0.85rem" }}>
-          Log verification attempts per service with result, mode, comments, and internal verifier notes.
-        </p>
-
-        <div style={{ display: "grid", gap: "0.95rem" }}>
-          {services.map((service) => {
-            const {
-              serviceEntryIndex,
-              serviceInstanceKey,
-              serviceDisplayName,
-            } = getServiceIdentity(service);
-            const latestAttempt = service.attempts?.[service.attempts.length - 1];
-            const draft = requestDraft[serviceInstanceKey] ?? {
-              status: normalizeAttemptDraftStatus(latestAttempt?.status || service.status),
-              verificationMode: service.verificationMode || "manual",
-              comment: service.comment || "",
-              verifierNote: latestAttempt?.verifierNote || "",
-              extraPaymentDone: false,
-              extraPaymentAmount: null,
-              screenshotFileName: "",
-              screenshotMimeType: "",
-              screenshotFileSize: null,
-              screenshotData: "",
-            };
-            const serviceKey = `${item._id}:${serviceInstanceKey}`;
-            const showCustomModeInput = Boolean(showCustomModeInputByService[serviceKey]);
-            const customModeInput = customModeInputByService[serviceKey] ?? "";
-            const hasDraftModeOption = verificationModeOptions.some(
-              (option) => option.value === draft.verificationMode,
+    const serviceCards = (
+      <div style={{ display: "grid", gap: "0.95rem" }}>
+        {servicesToRender.map((service) => {
+          const {
+            serviceEntryIndex,
+            serviceInstanceKey,
+            serviceDisplayName,
+          } = getServiceIdentity(service);
+          const latestAttempt = service.attempts?.[service.attempts.length - 1];
+          const defaultDraft: ServiceAttemptDraft = {
+            status: normalizeAttemptDraftStatus(latestAttempt?.status || service.status),
+            verificationMode: service.verificationMode || "manual",
+            comment: service.comment || "",
+            verifierNote: latestAttempt?.verifierNote || "",
+            respondentName: latestAttempt?.respondentName || "",
+            respondentEmail: latestAttempt?.respondentEmail || "",
+            respondentComment: latestAttempt?.respondentComment || "",
+            extraPaymentDone: false,
+            requestCustomerApproval: false,
+            extraPaymentAmount: null,
+            screenshotFileName: "",
+            screenshotMimeType: "",
+            screenshotFileSize: null,
+            screenshotData: "",
+          };
+          const draft = {
+            ...defaultDraft,
+            ...(requestDraft[serviceInstanceKey] ?? {}),
+          };
+          const serviceKey = `${item._id}:${serviceInstanceKey}`;
+          const showCustomModeInput = Boolean(showCustomModeInputByService[serviceKey]);
+          const customModeInput = customModeInputByService[serviceKey] ?? "";
+          const hasDraftModeOption = verificationModeOptions.some(
+            (option) => option.value === draft.verificationMode,
+          );
+          const canRemoveSelectedMode =
+            canEditVerificationModeList &&
+            Boolean(draft.verificationMode) &&
+            !isDefaultVerificationMode(draft.verificationMode) &&
+            customVerificationModes.some(
+              (mode) =>
+                mode.toLowerCase() ===
+                normalizeVerificationModeInput(draft.verificationMode).toLowerCase(),
             );
-            const canRemoveSelectedMode =
-              canEditVerificationModeList &&
-              Boolean(draft.verificationMode) &&
-              !isDefaultVerificationMode(draft.verificationMode) &&
-              customVerificationModes.some(
-                (mode) =>
-                  mode.toLowerCase() ===
-                  normalizeVerificationModeInput(draft.verificationMode).toLowerCase(),
-              );
-            const rowModeOptions = hasDraftModeOption
-              ? verificationModeOptions
-              : draft.verificationMode
-                ? [
-                    ...verificationModeOptions,
-                    {
-                      value: draft.verificationMode,
-                      label: draft.verificationMode,
-                    },
-                  ]
-                : verificationModeOptions;
-            const selectedServiceForCurrency =
-              (item.selectedServices ?? []).find(
-                (entry) =>
-                  entry.serviceId === service.serviceId ||
-                  entry.serviceName.toLowerCase() === service.serviceName.toLowerCase(),
-              ) ?? null;
-            const serviceCurrency =
-              selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
-            const canSubmitAttempt =
-              canVerifyWorkflow &&
-              item.candidateFormStatus === "submitted" &&
-              (item.status === "approved" || item.status === "verified");
+          const rowModeOptions = hasDraftModeOption
+            ? verificationModeOptions
+            : draft.verificationMode
+              ? [
+                  ...verificationModeOptions,
+                  {
+                    value: draft.verificationMode,
+                    label: draft.verificationMode,
+                  },
+                ]
+              : verificationModeOptions;
+          const selectedServiceForCurrency =
+            (item.selectedServices ?? []).find(
+              (entry) =>
+                entry.serviceId === service.serviceId ||
+                entry.serviceName.toLowerCase() === service.serviceName.toLowerCase(),
+            ) ?? null;
+          const serviceCurrency =
+            selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
+          const canSubmitAttempt =
+            canVerifyWorkflow &&
+            item.candidateFormStatus === "submitted" &&
+            (item.status === "approved" || item.status === "verified");
 
-            return (
-              <div key={`${item._id}-${serviceInstanceKey}`} style={{ border: "1px solid #E2E8F0", borderRadius: "10px", background: "#FFFFFF", padding: "0.85rem", display: "grid", gap: "0.75rem" }}>
+          return (
+            <div key={`${item._id}-${serviceInstanceKey}`} style={{ border: "1px solid #E2E8F0", borderRadius: "10px", background: "#FFFFFF", padding: "0.85rem", display: "grid", gap: "0.75rem" }}>
+              {options.hideServiceHeader ? null : (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
                   <div style={{ fontWeight: 700, color: "#1E293B" }}>{serviceDisplayName}</div>
                   <span className={`status-pill status-pill-${service.status === "unverified" ? "rejected" : service.status === "verified" ? "verified" : "pending"}`} style={{ textTransform: "capitalize" }}>
                     {service.status}
                   </span>
                 </div>
+              )}
 
-                <div style={{ display: "grid", gap: "0.7rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-                  <div style={{ display: "grid", gap: "0.3rem" }}>
-                    <label className="label" style={{ marginBottom: 0 }}>Verification Mode</label>
-                    <select
-                      className="input"
-                      style={{ padding: "0.35rem 0.45rem" }}
-                      value={draft.verificationMode}
-                      onChange={(e) => {
-                        const selectedMode = e.target.value;
-                        if (selectedMode === CUSTOM_VERIFICATION_MODE_SENTINEL) {
-                          if (!canEditVerificationModeList) {
-                            setMessage("Only Admin and Super Admin can edit the verification mode list.");
-                            return;
-                          }
-
-                          setShowCustomModeInputByService((prev) => ({
-                            ...prev,
-                            [serviceKey]: true,
-                          }));
-                          return;
-                        }
-
-                        if (selectedMode === CUSTOM_VERIFICATION_MODE_REMOVE_SENTINEL) {
-                          removeCustomModeForService(item._id, serviceInstanceKey);
+              <div style={{ display: "grid", gap: "0.7rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                <div style={{ display: "grid", gap: "0.3rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Verification Mode</label>
+                  <select
+                    className="input"
+                    style={{ padding: "0.35rem 0.45rem" }}
+                    value={draft.verificationMode ?? "manual"}
+                    onChange={(e) => {
+                      const selectedMode = e.target.value;
+                      if (selectedMode === CUSTOM_VERIFICATION_MODE_SENTINEL) {
+                        if (!canEditVerificationModeList) {
+                          setMessage("Only Admin and Super Admin can edit the verification mode list.");
                           return;
                         }
 
                         setShowCustomModeInputByService((prev) => ({
                           ...prev,
-                          [serviceKey]: false,
+                          [serviceKey]: true,
                         }));
-                        updateServiceDraft(item._id, serviceInstanceKey, {
-                          verificationMode: selectedMode,
-                        });
+                        return;
+                      }
+
+                      if (selectedMode === CUSTOM_VERIFICATION_MODE_REMOVE_SENTINEL) {
+                        removeCustomModeForService(item._id, serviceInstanceKey);
+                        return;
+                      }
+
+                      setShowCustomModeInputByService((prev) => ({
+                        ...prev,
+                        [serviceKey]: false,
+                      }));
+                      updateServiceDraft(item._id, serviceInstanceKey, {
+                        verificationMode: selectedMode,
+                      });
+                    }}
+                  >
+                    {rowModeOptions.map((option) => (
+                      <option key={`${serviceKey}-${option.value}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                    {canEditVerificationModeList ? (
+                      <option value={CUSTOM_VERIFICATION_MODE_SENTINEL}>+ Add custom mode</option>
+                    ) : null}
+                    {canRemoveSelectedMode ? (
+                      <option value={CUSTOM_VERIFICATION_MODE_REMOVE_SENTINEL}>
+                        - Remove selected custom mode
+                      </option>
+                    ) : null}
+                  </select>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.3rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Result</label>
+                  <select
+                    className="input"
+                    style={{ padding: "0.35rem 0.45rem" }}
+                    value={draft.status ?? "in-progress"}
+                    onChange={(e) =>
+                      updateServiceDraft(item._id, serviceInstanceKey, {
+                        status: e.target.value as "in-progress" | "verified" | "unverified",
+                      })
+                    }
+                  >
+                    <option value="in-progress">In Progress</option>
+                    <option value="verified">Verified</option>
+                    <option value="unverified">Unverified</option>
+                  </select>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.3rem", gridColumn: "1 / -1" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Comment</label>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
+                    value={draft.comment ?? ""}
+                    placeholder="Add attempt comment"
+                    onChange={(e) =>
+                      updateServiceDraft(item._id, serviceInstanceKey, {
+                        comment: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: "0.3rem", gridColumn: "1 / -1" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Verifier Note (Internal)</label>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
+                    value={draft.verifierNote ?? ""}
+                    placeholder="Internal note for verification method (not shown in report)"
+                    onChange={(e) =>
+                      updateServiceDraft(item._id, serviceInstanceKey, {
+                        verifierNote: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: "0.3rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Respondent Name</label>
+                  <input
+                    className="input"
+                    style={{ padding: "0.35rem 0.45rem" }}
+                    value={draft.respondentName ?? ""}
+                    placeholder="Enter respondent name"
+                    onChange={(e) =>
+                      updateServiceDraft(item._id, serviceInstanceKey, {
+                        respondentName: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: "0.3rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Respondent Email ID</label>
+                  <input
+                    type="email"
+                    className="input"
+                    style={{ padding: "0.35rem 0.45rem" }}
+                    value={draft.respondentEmail ?? ""}
+                    placeholder="Enter respondent email"
+                    onChange={(e) =>
+                      updateServiceDraft(item._id, serviceInstanceKey, {
+                        respondentEmail: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: "0.3rem", gridColumn: "1 / -1" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Respondent Comment</label>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
+                    value={draft.respondentComment ?? ""}
+                    placeholder="Add respondent comment"
+                    onChange={(e) =>
+                      updateServiceDraft(item._id, serviceInstanceKey, {
+                        respondentComment: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: "0.3rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Extra Payment</label>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                        gap: "0.35rem",
                       }}
                     >
-                      {rowModeOptions.map((option) => (
-                        <option key={`${serviceKey}-${option.value}`} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                      {canEditVerificationModeList ? (
-                        <option value={CUSTOM_VERIFICATION_MODE_SENTINEL}>+ Add custom mode</option>
-                      ) : null}
-                      {canRemoveSelectedMode ? (
-                        <option value={CUSTOM_VERIFICATION_MODE_REMOVE_SENTINEL}>
-                          - Remove selected custom mode
-                        </option>
-                      ) : null}
-                    </select>
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.3rem" }}>
-                    <label className="label" style={{ marginBottom: 0 }}>Result</label>
-                    <select
-                      className="input"
-                      style={{ padding: "0.35rem 0.45rem" }}
-                      value={draft.status}
-                      onChange={(e) =>
-                        updateServiceDraft(item._id, serviceInstanceKey, {
-                          status: e.target.value as "in-progress" | "verified" | "unverified",
-                        })
-                      }
-                    >
-                      <option value="in-progress">In Progress</option>
-                      <option value="verified">Verified</option>
-                      <option value="unverified">Unverified</option>
-                    </select>
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.3rem", gridColumn: "1 / -1" }}>
-                    <label className="label" style={{ marginBottom: 0 }}>Comment</label>
-                    <textarea
-                      className="input"
-                      rows={2}
-                      style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
-                      value={draft.comment}
-                      placeholder="Add attempt comment"
-                      onChange={(e) =>
-                        updateServiceDraft(item._id, serviceInstanceKey, {
-                          comment: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.3rem", gridColumn: "1 / -1" }}>
-                    <label className="label" style={{ marginBottom: 0 }}>Verifier Note (Internal)</label>
-                    <textarea
-                      className="input"
-                      rows={2}
-                      style={{ padding: "0.35rem 0.45rem", resize: "vertical" }}
-                      value={draft.verifierNote}
-                      placeholder="Internal note for verification method (not shown in report)"
-                      onChange={(e) =>
-                        updateServiceDraft(item._id, serviceInstanceKey, {
-                          verifierNote: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.3rem" }}>
-                    <label className="label" style={{ marginBottom: 0 }}>Extra Payment</label>
-                    <div style={{ display: "grid", gap: "0.35rem" }}>
                       <button
                         type="button"
                         className="btn btn-secondary"
@@ -2423,270 +2740,364 @@ function RequestsPageContent() {
                           const nextValue = !draft.extraPaymentDone;
                           updateServiceDraft(item._id, serviceInstanceKey, {
                             extraPaymentDone: nextValue,
-                            extraPaymentAmount: nextValue ? draft.extraPaymentAmount : null,
+                            requestCustomerApproval: nextValue
+                              ? false
+                              : draft.requestCustomerApproval,
+                            extraPaymentAmount: nextValue
+                              ? draft.extraPaymentAmount
+                              : draft.extraPaymentAmount,
                           });
                           if (nextValue) {
-                            setMessage("Extra payment marked as done. Enter amount and upload receipt.");
+                            setMessage(
+                              "Extra payment marked as done. Enter amount and upload receipt.",
+                            );
                           }
                         }}
                       >
-                        {draft.extraPaymentDone ? "Yes, Receipt Needed" : "No Extra Payment"}
+                        {draft.extraPaymentDone ? "Marked: Payment Done" : "Mark As Paid"}
                       </button>
 
-                      {draft.extraPaymentDone ? (
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          className="input"
-                          style={{ padding: "0.32rem 0.45rem" }}
-                          value={
-                            typeof draft.extraPaymentAmount === "number"
-                              ? String(draft.extraPaymentAmount)
-                              : ""
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{
+                          padding: "0.32rem 0.55rem",
+                          fontSize: "0.75rem",
+                          borderColor: draft.requestCustomerApproval
+                            ? "#0EA5E9"
+                            : "#CBD5E1",
+                          background: draft.requestCustomerApproval
+                            ? "#E0F2FE"
+                            : "#F8FAFC",
+                          color: draft.requestCustomerApproval ? "#0C4A6E" : "#334155",
+                          fontWeight: 700,
+                        }}
+                        onClick={() => {
+                          const nextValue = !draft.requestCustomerApproval;
+                          updateServiceDraft(item._id, serviceInstanceKey, {
+                            requestCustomerApproval: nextValue,
+                            extraPaymentDone: nextValue ? false : draft.extraPaymentDone,
+                            extraPaymentAmount: nextValue
+                              ? draft.extraPaymentAmount
+                              : draft.extraPaymentAmount,
+                          });
+                          if (nextValue) {
+                            setMessage(
+                              "Customer approval will be requested for extra payment after logging this attempt.",
+                            );
                           }
-                          placeholder={`Extra amount (${serviceCurrency})`}
-                          onChange={(event) => {
-                            const rawValue = event.target.value.trim();
-                            const parsedAmount = Number(rawValue);
-                            updateServiceDraft(item._id, serviceInstanceKey, {
-                              extraPaymentAmount:
-                                rawValue && Number.isFinite(parsedAmount) && parsedAmount > 0
-                                  ? Math.round(parsedAmount * 100) / 100
-                                  : null,
-                            });
-                          }}
-                        />
-                      ) : null}
+                        }}
+                      >
+                        {draft.requestCustomerApproval
+                          ? "Customer Approval: Requested"
+                          : "Ask Customer Approval"}
+                      </button>
                     </div>
-                  </div>
 
-                  <div style={{ display: "grid", gap: "0.3rem" }}>
-                    <label className="label" style={{ marginBottom: 0 }}>Screenshot / Receipt (Max 2MB)</label>
-                    <div style={{ display: "grid", gap: "0.35rem" }}>
+                    {draft.extraPaymentDone || draft.requestCustomerApproval ? (
                       <input
-                        type="file"
-                        accept=".png,.jpg,.jpeg,.webp,image/png,image/x-png,image/jpeg,image/jpg,image/pjpeg,image/webp"
+                        type="number"
+                        min="0"
+                        step="0.01"
                         className="input"
-                        style={{ padding: "0.35rem 0.45rem" }}
-                        onChange={(event) =>
-                          void selectAttemptScreenshot(item._id, serviceInstanceKey, event)
+                        style={{ padding: "0.32rem 0.45rem" }}
+                        value={
+                          typeof draft.extraPaymentAmount === "number"
+                            ? String(draft.extraPaymentAmount)
+                            : ""
                         }
+                        placeholder={`Extra amount (${serviceCurrency})`}
+                        onChange={(event) => {
+                          const rawValue = event.target.value.trim();
+                          const parsedAmount = Number(rawValue);
+                          updateServiceDraft(item._id, serviceInstanceKey, {
+                            extraPaymentAmount:
+                              rawValue && Number.isFinite(parsedAmount) && parsedAmount > 0
+                                ? Math.round(parsedAmount * 100) / 100
+                                : null,
+                          });
+                        }}
                       />
-                      {draft.screenshotData ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap", fontSize: "0.75rem", color: "#475569" }}>
-                          <span style={{ fontWeight: 600, color: "#1E293B" }}>
-                            {draft.screenshotFileName || (draft.extraPaymentDone ? "Selected receipt" : "Selected screenshot")}
-                          </span>
-                          {typeof draft.screenshotFileSize === "number" ? (
-                            <span>({formatFileSize(draft.screenshotFileSize)})</span>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            style={{ padding: "0.2rem 0.45rem", fontSize: "0.72rem" }}
-                            onClick={() => clearAttemptScreenshot(item._id, serviceInstanceKey)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ) : draft.extraPaymentDone ? (
-                        <span style={{ fontSize: "0.75rem", color: "#B45309", fontWeight: 600 }}>
-                          Receipt and amount are required when extra payment is marked done.
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: "0.75rem", color: "#94A3B8" }}>
-                          Optional: attach verification screenshot
-                        </span>
-                      )}
-                    </div>
+                    ) : null}
                   </div>
                 </div>
 
-                {showCustomModeInput ? (
-                  <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "grid", gap: "0.3rem" }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Screenshot / Receipt (Max 2MB)</label>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
                     <input
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.webp,image/png,image/x-png,image/jpeg,image/jpg,image/pjpeg,image/webp"
                       className="input"
-                      style={{ minWidth: "180px", padding: "0.32rem 0.45rem" }}
-                      value={customModeInput}
-                      placeholder="Type custom mode"
-                      onChange={(e) =>
-                        setCustomModeInputByService((prev) => ({
-                          ...prev,
-                          [serviceKey]: e.target.value,
-                        }))
+                      style={{ padding: "0.35rem 0.45rem" }}
+                      onChange={(event) =>
+                        void selectAttemptScreenshot(item._id, serviceInstanceKey, event)
                       }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          saveCustomModeForService(item._id, serviceInstanceKey);
-                        }
-                      }}
                     />
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
-                      onClick={() => saveCustomModeForService(item._id, serviceInstanceKey)}
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
-                      onClick={() => {
-                        setShowCustomModeInputByService((prev) => ({
-                          ...prev,
-                          [serviceKey]: false,
-                        }));
-                        setCustomModeInputByService((prev) => ({
-                          ...prev,
-                          [serviceKey]: "",
-                        }));
-                      }}
-                    >
-                      Cancel
-                    </button>
+                    {draft.screenshotData ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap", fontSize: "0.75rem", color: "#475569" }}>
+                        <span style={{ fontWeight: 600, color: "#1E293B" }}>
+                          {draft.screenshotFileName || (draft.extraPaymentDone ? "Selected receipt" : draft.requestCustomerApproval ? "Selected quote screenshot" : "Selected screenshot")}
+                        </span>
+                        {typeof draft.screenshotFileSize === "number" ? (
+                          <span>({formatFileSize(draft.screenshotFileSize)})</span>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: "0.2rem 0.45rem", fontSize: "0.72rem" }}
+                          onClick={() => clearAttemptScreenshot(item._id, serviceInstanceKey)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : draft.extraPaymentDone ? (
+                      <span style={{ fontSize: "0.75rem", color: "#B45309", fontWeight: 600 }}>
+                        Receipt and amount are required when extra payment is marked done.
+                      </span>
+                    ) : draft.requestCustomerApproval ? (
+                      <span style={{ fontSize: "0.75rem", color: "#0C4A6E", fontWeight: 600 }}>
+                        Optional: attach quote screenshot for customer approval.
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: "0.75rem", color: "#94A3B8" }}>
+                        Optional: attach verification screenshot
+                      </span>
+                    )}
                   </div>
-                ) : null}
+                </div>
+              </div>
 
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              {showCustomModeInput ? (
+                <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    className="input"
+                    style={{ minWidth: "180px", padding: "0.32rem 0.45rem" }}
+                    value={customModeInput}
+                    placeholder="Type custom mode"
+                    onChange={(e) =>
+                      setCustomModeInputByService((prev) => ({
+                        ...prev,
+                        [serviceKey]: e.target.value,
+                      }))
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        saveCustomModeForService(item._id, serviceInstanceKey);
+                      }
+                    }}
+                  />
                   <button
                     type="button"
                     className="btn btn-primary"
-                    style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem" }}
-                    disabled={
-                      !canSubmitAttempt ||
-                      verifyingServiceKey === serviceKey ||
-                      (draft.extraPaymentDone &&
-                        (!draft.screenshotData ||
-                          typeof draft.extraPaymentAmount !== "number" ||
-                          draft.extraPaymentAmount <= 0))
-                    }
-                    onClick={() =>
-                      logServiceAttempt(
-                        item._id,
-                        service.serviceId,
-                        serviceEntryIndex,
-                        serviceInstanceKey,
-                      )
-                    }
+                    style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
+                    onClick={() => saveCustomModeForService(item._id, serviceInstanceKey)}
                   >
-                    {verifyingServiceKey === serviceKey
-                      ? "Saving..."
-                      : draft.extraPaymentDone &&
-                          (!draft.screenshotData ||
-                            typeof draft.extraPaymentAmount !== "number" ||
-                            draft.extraPaymentAmount <= 0)
-                        ? "Add Amount & Receipt"
-                        : "Log Attempt"}
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ padding: "0.3rem 0.55rem", fontSize: "0.75rem" }}
+                    onClick={() => {
+                      setShowCustomModeInputByService((prev) => ({
+                        ...prev,
+                        [serviceKey]: false,
+                      }));
+                      setCustomModeInputByService((prev) => ({
+                        ...prev,
+                        [serviceKey]: "",
+                      }));
+                    }}
+                  >
+                    Cancel
                   </button>
                 </div>
+              ) : null}
 
-                <div style={{ borderTop: "1px solid #E2E8F0", paddingTop: "0.65rem", display: "grid", gap: "0.55rem" }}>
-                  <div style={{ fontWeight: 600, color: "#334155" }}>Attempts</div>
-                  {service.attempts.length === 0 ? (
-                    <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
-                  ) : (
-                    <div style={{ display: "grid", gap: "0.5rem" }}>
-                      {service.attempts
-                        .slice()
-                        .reverse()
-                        .map((attempt, attemptIndex) => {
-                          const originalAttemptIndex = service.attempts.length - 1 - attemptIndex;
-                          const attemptKey = `${item._id}:${serviceInstanceKey}:${originalAttemptIndex}`;
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem" }}
+                  disabled={
+                    !canSubmitAttempt ||
+                    verifyingServiceKey === serviceKey ||
+                    (draft.extraPaymentDone &&
+                      (!draft.screenshotData ||
+                        typeof draft.extraPaymentAmount !== "number" ||
+                        draft.extraPaymentAmount <= 0)) ||
+                    (draft.requestCustomerApproval &&
+                      (typeof draft.extraPaymentAmount !== "number" ||
+                        draft.extraPaymentAmount <= 0))
+                  }
+                  onClick={() =>
+                    logServiceAttempt(
+                      item._id,
+                      service.serviceId,
+                      serviceEntryIndex,
+                      serviceInstanceKey,
+                    )
+                  }
+                >
+                  {verifyingServiceKey === serviceKey
+                    ? "Saving..."
+                    : draft.extraPaymentDone &&
+                        (!draft.screenshotData ||
+                          typeof draft.extraPaymentAmount !== "number" ||
+                          draft.extraPaymentAmount <= 0)
+                      ? "Add Amount & Receipt"
+                      : draft.requestCustomerApproval &&
+                          (typeof draft.extraPaymentAmount !== "number" ||
+                            draft.extraPaymentAmount <= 0)
+                        ? "Add Amount"
+                      : "Log Attempt"}
+                </button>
+              </div>
 
-                          return (
-                            <div key={`${item._id}-${serviceInstanceKey}-attempt-${originalAttemptIndex}`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#F8FAFC", padding: "0.6rem", display: "grid", gap: "0.45rem" }}>
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", alignItems: "center" }}>
-                                <span style={{ fontSize: "0.78rem", color: "#334155", fontWeight: 600 }}>
-                                  {new Date(attempt.attemptedAt).toLocaleString()}
-                                </span>
-                                <span style={{ fontSize: "0.78rem", color: getReportAttemptStatusColor(attempt.status), fontWeight: 700 }}>
-                                  {toReportAttemptStatusLabel(attempt.status)}
-                                </span>
-                                <span style={{ fontSize: "0.78rem", color: "#334155" }}>
-                                  Mode: {attempt.verificationMode || "-"}
-                                </span>
+              <div style={{ borderTop: "1px solid #E2E8F0", paddingTop: "0.65rem", display: "grid", gap: "0.55rem" }}>
+                <div style={{ fontWeight: 600, color: "#334155" }}>Attempts</div>
+                {service.attempts.length === 0 ? (
+                  <span style={{ color: "#64748B", fontSize: "0.82rem" }}>No attempts logged yet.</span>
+                ) : (
+                  <div style={{ display: "grid", gap: "0.5rem" }}>
+                    {service.attempts
+                      .slice()
+                      .reverse()
+                      .map((attempt, attemptIndex) => {
+                        const originalAttemptIndex = service.attempts.length - 1 - attemptIndex;
+                        const attemptKey = `${item._id}:${serviceInstanceKey}:${originalAttemptIndex}`;
+                        const attemptApprovalStatus = normalizeExtraPaymentApprovalStatus(
+                          attempt.extraPaymentApprovalStatus,
+                        );
+                        const isExtraPaymentUnapproved =
+                          Boolean(attempt.extraPaymentApprovalRequested) &&
+                          attemptApprovalStatus !== "approved";
+
+                        return (
+                          <div key={`${item._id}-${serviceInstanceKey}-attempt-${originalAttemptIndex}`} style={{ border: "1px solid #E2E8F0", borderRadius: "8px", background: "#F8FAFC", padding: "0.6rem", display: "grid", gap: "0.45rem" }}>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem", alignItems: "center" }}>
+                              <span style={{ fontSize: "0.78rem", color: "#334155", fontWeight: 600 }}>
+                                {new Date(attempt.attemptedAt).toLocaleString()}
+                              </span>
+                              <span style={{ fontSize: "0.78rem", color: getReportAttemptStatusColor(attempt.status), fontWeight: 700 }}>
+                                {toReportAttemptStatusLabel(attempt.status)}
+                              </span>
+                              <span style={{ fontSize: "0.78rem", color: "#334155" }}>
+                                Mode: {attempt.verificationMode || "-"}
+                              </span>
+                            </div>
+
+                            <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Comment:</strong> {attempt.comment || "-"}</div>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Verifier Note:</strong> {attempt.verifierNote || "-"}</div>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Respondent Name:</strong> {attempt.respondentName || "-"}</div>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Respondent Email:</strong> {attempt.respondentEmail || "-"}</div>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Respondent Comment:</strong> {attempt.respondentComment || "-"}</div>
+                              <div style={{ fontSize: "0.8rem", color: isExtraPaymentUnapproved ? "#B91C1C" : "#334155", fontWeight: isExtraPaymentUnapproved ? 700 : 400 }}>
+                                <strong>Extra Payment:</strong>{" "}
+                                {attempt.extraPaymentDone
+                                  ? "Paid"
+                                  : attempt.extraPaymentApprovalRequested
+                                    ? isExtraPaymentUnapproved
+                                      ? "Approval Requested (Unapproved)"
+                                      : "Approved"
+                                    : "No"}
                               </div>
-
-                              <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Comment:</strong> {attempt.comment || "-"}</div>
-                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Verifier Note:</strong> {attempt.verifierNote || "-"}</div>
-                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Extra Payment:</strong> {attempt.extraPaymentDone ? "Yes" : "No"}</div>
-                                <div style={{ fontSize: "0.8rem", color: "#334155" }}>
-                                  <strong>Extra Amount:</strong> {attempt.extraPaymentDone && typeof attempt.extraPaymentAmount === "number" && attempt.extraPaymentAmount > 0 ? `${serviceCurrency} ${attempt.extraPaymentAmount.toFixed(2)}` : "-"}
-                                </div>
-                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Verifier:</strong> {attempt.verifierName || "-"}</div>
-                                <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Manager:</strong> {attempt.managerName || "-"}</div>
-                                <div style={{ fontSize: "0.8rem", color: "#334155" }}>
-                                  <strong>Screenshot:</strong>{" "}
-                                  {attempt.screenshotData ? (
-                                    <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
-                                      <a
-                                        href={attempt.screenshotData}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
-                                        onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
-                                        onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
-                                      >
-                                        View
-                                      </a>
-                                      <a
-                                        href={attempt.screenshotData}
-                                        download={attempt.screenshotFileName || `attempt-screenshot-${originalAttemptIndex + 1}`}
-                                        style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
-                                        onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
-                                        onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
-                                      >
-                                        Download
-                                      </a>
-                                    </span>
-                                  ) : (
-                                    "-"
-                                  )}
-                                </div>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}>
+                                <strong>Extra Amount:</strong> {typeof attempt.extraPaymentAmount === "number" && attempt.extraPaymentAmount > 0 ? `${serviceCurrency} ${attempt.extraPaymentAmount.toFixed(2)}` : "-"}
                               </div>
-
-                              {canDeleteVerificationLogs ? (
-                                <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary"
-                                    style={{
-                                      padding: "0.25rem 0.55rem",
-                                      fontSize: "0.74rem",
-                                      color: "#B91C1C",
-                                      borderColor: "#FCA5A5",
-                                      background: "#FEF2F2",
-                                    }}
-                                    disabled={deletingAttemptKey === attemptKey}
-                                    onClick={() =>
-                                      deleteServiceAttemptLog(
-                                        item._id,
-                                        service.serviceId,
-                                        serviceEntryIndex,
-                                        serviceInstanceKey,
-                                        originalAttemptIndex,
-                                      )
-                                    }
-                                  >
-                                    {deletingAttemptKey === attemptKey ? "Deleting..." : "Delete"}
-                                  </button>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}>
+                                <strong>Approval Status:</strong> {attempt.extraPaymentApprovalRequested ? toExtraPaymentApprovalStatusLabel(attempt.extraPaymentApprovalStatus) : "-"}
+                              </div>
+                              {attemptApprovalStatus === "rejected" && attempt.extraPaymentApprovalRejectionNote?.trim() ? (
+                                <div style={{ fontSize: "0.8rem", color: "#991B1B" }}>
+                                  <strong>Approval Rejection Note:</strong> {attempt.extraPaymentApprovalRejectionNote}
                                 </div>
                               ) : null}
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Verifier:</strong> {attempt.verifierName || "-"}</div>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}><strong>Manager:</strong> {attempt.managerName || "-"}</div>
+                              <div style={{ fontSize: "0.8rem", color: "#334155" }}>
+                                <strong>Screenshot:</strong>{" "}
+                                {attempt.screenshotData ? (
+                                  <span style={{ display: "inline-flex", gap: "0.45rem", alignItems: "center", flexWrap: "wrap" }}>
+                                    <a
+                                      href={attempt.screenshotData}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
+                                      onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
+                                      onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
+                                    >
+                                      View
+                                    </a>
+                                    <a
+                                      href={attempt.screenshotData}
+                                      download={attempt.screenshotFileName || `attempt-screenshot-${originalAttemptIndex + 1}`}
+                                      style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}
+                                      onMouseEnter={(event) => event.currentTarget.style.textDecoration = "underline"}
+                                      onMouseLeave={(event) => event.currentTarget.style.textDecoration = "none"}
+                                    >
+                                      Download
+                                    </a>
+                                  </span>
+                                ) : (
+                                  "-"
+                                )}
+                              </div>
                             </div>
-                          );
-                        })}
-                    </div>
-                  )}
-                </div>
+
+                            {canDeleteVerificationLogs ? (
+                              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  style={{
+                                    padding: "0.25rem 0.55rem",
+                                    fontSize: "0.74rem",
+                                    color: "#B91C1C",
+                                    borderColor: "#FCA5A5",
+                                    background: "#FEF2F2",
+                                  }}
+                                  disabled={deletingAttemptKey === attemptKey}
+                                  onClick={() =>
+                                    deleteServiceAttemptLog(
+                                      item._id,
+                                      service.serviceId,
+                                      serviceEntryIndex,
+                                      serviceInstanceKey,
+                                      originalAttemptIndex,
+                                    )
+                                  }
+                                >
+                                  {deletingAttemptKey === attemptKey ? "Deleting..." : "Delete"}
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+
+    if (options.compact || options.hideWorkspaceHeader) {
+      return serviceCards;
+    }
+
+    return (
+      <div className="glass-card" style={{ padding: "1rem", marginBottom: "1rem", background: "#F8FAFC" }}>
+        <h4 style={{ margin: "0 0 0.4rem", color: "#1E293B" }}>Service Verification Workspace</h4>
+        <p style={{ margin: "0 0 0.85rem", color: "#64748B", fontSize: "0.85rem" }}>
+          Log verification attempts per service with result, mode, comments, and internal verifier notes.
+        </p>
+        {serviceCards}
 
       </div>
     );
@@ -2822,8 +3233,6 @@ function RequestsPageContent() {
               </div>
             </section>
 
-            <div style={{ borderTop: "1px solid #717171", marginTop: "1.1rem" }} />
-
             {report.personalDetails.length > 0 ? (
               <section style={{ marginTop: "1.05rem" }}>
                 <h3 style={{ margin: 0, color: "#1F4597", fontSize: "1.52rem", fontWeight: 700 }}>
@@ -2895,6 +3304,8 @@ function RequestsPageContent() {
                 </div>
               </section>
             ) : null}
+
+            <div style={{ borderTop: "1px solid #717171", marginTop: "1.1rem" }} />
 
             <section style={{ marginTop: "1.35rem" }}>
               <h3 style={{ margin: 0, color: "#1F4597", fontSize: "2.05rem", fontWeight: 700 }}>
@@ -3020,9 +3431,24 @@ function RequestsPageContent() {
                                   </td>
                                   <td style={{ padding: "0.35rem 0.2rem" }}>{toReportModeLabel(attempt.verificationMode)}</td>
                                   <td style={{ padding: "0.35rem 0.2rem", lineHeight: 1.35 }}>
-                                    <div><strong>Verifier:</strong> {attempt.verifierName || "-"}</div>
-                                    <div><strong>Manager:</strong> {attempt.managerName || "-"}</div>
-                                    {attempt.comment ? <div><strong>Note:</strong> {attempt.comment}</div> : null}
+                                    {attempt.verifierName?.trim() ? (
+                                      <div><strong>Verifier:</strong> {attempt.verifierName}</div>
+                                    ) : null}
+                                    {attempt.managerName?.trim() ? (
+                                      <div><strong>Manager:</strong> {attempt.managerName}</div>
+                                    ) : null}
+                                    {attempt.respondentName?.trim() ? (
+                                      <div><strong>Respondent Name:</strong> {attempt.respondentName}</div>
+                                    ) : null}
+                                    {attempt.respondentEmail?.trim() ? (
+                                      <div><strong>Respondent Email:</strong> {attempt.respondentEmail}</div>
+                                    ) : null}
+                                    {attempt.respondentComment?.trim() ? (
+                                      <div><strong>Respondent Comment:</strong> {attempt.respondentComment}</div>
+                                    ) : null}
+                                    {attempt.comment?.trim() ? (
+                                      <div><strong>Note:</strong> {attempt.comment}</div>
+                                    ) : null}
                                   </td>
                                 </tr>
                               ))
@@ -3777,9 +4203,11 @@ function RequestsPageContent() {
               </section>
             ) : null}
 
-            {renderServiceVerificationWorkspace(activeResponseRequest)}
-
             {renderResponseContent(activeResponseRequest)}
+
+            {(!activeResponseRequest.candidateFormResponses ||
+              activeResponseRequest.candidateFormResponses.length === 0) &&
+            renderServiceVerificationWorkspace(activeResponseRequest)}
           </div>
         </div>
       ) : null}
@@ -4119,7 +4547,7 @@ function RequestsPageContent() {
                           <label className="label">Service Name</label>
                           <input
                             className="input"
-                            value={service.serviceName}
+                            value={service.serviceName ?? ""}
                             onChange={(event) =>
                               updateReportServiceField(
                                 activeReportPreviewRequest._id,
@@ -4135,7 +4563,7 @@ function RequestsPageContent() {
                           <label className="label">Service Status</label>
                           <select
                             className="input"
-                            value={service.status}
+                            value={service.status ?? "pending"}
                             onChange={(event) =>
                               updateReportServiceField(
                                 activeReportPreviewRequest._id,
@@ -4157,7 +4585,7 @@ function RequestsPageContent() {
                           <label className="label">Verification Mode</label>
                           <input
                             className="input"
-                            value={service.verificationMode}
+                            value={service.verificationMode ?? ""}
                             onChange={(event) =>
                               updateReportServiceField(
                                 activeReportPreviewRequest._id,
@@ -4175,7 +4603,7 @@ function RequestsPageContent() {
                         <textarea
                           className="input"
                           rows={2}
-                          value={service.comment}
+                          value={service.comment ?? ""}
                           onChange={(event) =>
                             updateReportServiceField(
                               activeReportPreviewRequest._id,
@@ -4210,7 +4638,7 @@ function RequestsPageContent() {
                                   <label className="label">Attempted At</label>
                                   <input
                                     className="input"
-                                    value={attempt.attemptedAt}
+                                    value={attempt.attemptedAt ?? ""}
                                     onChange={(event) =>
                                       updateReportAttemptField(
                                         activeReportPreviewRequest._id,
@@ -4227,7 +4655,7 @@ function RequestsPageContent() {
                                   <label className="label">Attempt Status</label>
                                   <select
                                     className="input"
-                                    value={attempt.status}
+                                    value={attempt.status ?? "pending"}
                                     onChange={(event) =>
                                       updateReportAttemptField(
                                         activeReportPreviewRequest._id,
@@ -4248,7 +4676,7 @@ function RequestsPageContent() {
                                   <label className="label">Attempt Mode</label>
                                   <input
                                     className="input"
-                                    value={attempt.verificationMode}
+                                    value={attempt.verificationMode ?? ""}
                                     onChange={(event) =>
                                       updateReportAttemptField(
                                         activeReportPreviewRequest._id,
@@ -4265,7 +4693,7 @@ function RequestsPageContent() {
                                   <label className="label">Verifier</label>
                                   <input
                                     className="input"
-                                    value={attempt.verifierName}
+                                    value={attempt.verifierName ?? ""}
                                     onChange={(event) =>
                                       updateReportAttemptField(
                                         activeReportPreviewRequest._id,
@@ -4282,13 +4710,47 @@ function RequestsPageContent() {
                                   <label className="label">Manager</label>
                                   <input
                                     className="input"
-                                    value={attempt.managerName}
+                                    value={attempt.managerName ?? ""}
                                     onChange={(event) =>
                                       updateReportAttemptField(
                                         activeReportPreviewRequest._id,
                                         serviceIndex,
                                         attemptIndex,
                                         { managerName: event.target.value },
+                                        activeReportPreviewRequest,
+                                      )
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="label">Respondent Name</label>
+                                  <input
+                                    className="input"
+                                    value={attempt.respondentName ?? ""}
+                                    onChange={(event) =>
+                                      updateReportAttemptField(
+                                        activeReportPreviewRequest._id,
+                                        serviceIndex,
+                                        attemptIndex,
+                                        { respondentName: event.target.value },
+                                        activeReportPreviewRequest,
+                                      )
+                                    }
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="label">Respondent Email</label>
+                                  <input
+                                    className="input"
+                                    value={attempt.respondentEmail ?? ""}
+                                    onChange={(event) =>
+                                      updateReportAttemptField(
+                                        activeReportPreviewRequest._id,
+                                        serviceIndex,
+                                        attemptIndex,
+                                        { respondentEmail: event.target.value },
                                         activeReportPreviewRequest,
                                       )
                                     }
@@ -4301,13 +4763,31 @@ function RequestsPageContent() {
                                 <textarea
                                   className="input"
                                   rows={2}
-                                  value={attempt.comment}
+                                  value={attempt.comment ?? ""}
                                   onChange={(event) =>
                                     updateReportAttemptField(
                                       activeReportPreviewRequest._id,
                                       serviceIndex,
                                       attemptIndex,
                                       { comment: event.target.value },
+                                      activeReportPreviewRequest,
+                                    )
+                                  }
+                                />
+                              </div>
+
+                              <div style={{ marginTop: "0.55rem" }}>
+                                <label className="label">Respondent Comment</label>
+                                <textarea
+                                  className="input"
+                                  rows={2}
+                                  value={attempt.respondentComment ?? ""}
+                                  onChange={(event) =>
+                                    updateReportAttemptField(
+                                      activeReportPreviewRequest._id,
+                                      serviceIndex,
+                                      attemptIndex,
+                                      { respondentComment: event.target.value },
                                       activeReportPreviewRequest,
                                     )
                                   }
