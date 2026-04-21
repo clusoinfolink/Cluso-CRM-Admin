@@ -1250,6 +1250,7 @@ body {
   gap: 0;
   align-items: stretch;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 .admin-sidebar {
@@ -1316,6 +1317,7 @@ body {
 
 .admin-main {
   flex: 1;
+  width: calc(100% - 260px);
   margin-left: 260px;
   padding-left: 0;
   padding-right: 0;
@@ -1324,6 +1326,8 @@ body {
   flex-direction: column;
   align-items: stretch;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .admin-topbar {
@@ -1379,6 +1383,10 @@ body {
   max-width: none;
   margin: 0;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .glass-card,
@@ -1740,6 +1748,7 @@ body {
   }
 
   .admin-main {
+    width: 100%;
     margin-left: 0;
   }
 
