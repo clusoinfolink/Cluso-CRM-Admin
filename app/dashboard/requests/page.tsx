@@ -828,6 +828,27 @@ function parseRepeatableAnswerValues(rawValue: string, repeatable?: boolean) {
 type CandidateServiceResponse = NonNullable<RequestItem["candidateFormResponses"]>[number];
 type CandidateServiceAnswer = CandidateServiceResponse["answers"][number];
 
+function sortCandidateResponsesForDisplay(
+  responses: CandidateServiceResponse[],
+) {
+  return responses
+    .map((serviceResponse, index) => ({
+      serviceResponse,
+      index,
+      isPersonalDetailsService: isPersonalDetailsServiceName(
+        serviceResponse.serviceName,
+      ),
+    }))
+    .sort((left, right) => {
+      if (left.isPersonalDetailsService === right.isPersonalDetailsService) {
+        return left.index - right.index;
+      }
+
+      return left.isPersonalDetailsService ? -1 : 1;
+    })
+    .map((entry) => entry.serviceResponse);
+}
+
 function normalizePositiveInteger(value: unknown, fallback = 1) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -2215,7 +2236,9 @@ function RequestsPageContent() {
     }
 
     const renderedVerificationServiceKeys = new Set<string>();
-    const responseCards = item.candidateFormResponses.flatMap((serviceResponse) => {
+    const responseCards = sortCandidateResponsesForDisplay(
+      item.candidateFormResponses,
+    ).flatMap((serviceResponse) => {
       const serviceEntryCount = resolveServiceResponseEntryCount(serviceResponse);
       const normalizedServiceId = normalizeServiceId(serviceResponse.serviceId);
       const isPersonalDetailsService = isPersonalDetailsServiceName(serviceResponse.serviceName);
