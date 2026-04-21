@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { ChangeEvent, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
+  CheckCheck,
   ChevronDown,
   ChevronUp,
   FileText,
@@ -1235,6 +1236,7 @@ function RequestsPageContent() {
   const [deletingAttemptKey, setDeletingAttemptKey] = useState("");
   const [reportingRequestId, setReportingRequestId] = useState("");
   const [sharingReportRequestId, setSharingReportRequestId] = useState("");
+  const [transferringRequestId, setTransferringRequestId] = useState("");
   const [savingReportDraftRequestId, setSavingReportDraftRequestId] = useState("");
   const [activeReportPreviewRequestId, setActiveReportPreviewRequestId] = useState("");
   const [reportDraftsByRequest, setReportDraftsByRequest] = useState<
@@ -1858,6 +1860,31 @@ function RequestsPageContent() {
     }
 
     setMessage(data.message ?? "Report shared with customer portal.");
+    await loadRequests();
+  }
+
+  async function transferRequestToCompleted(requestId: string) {
+    setMessage("");
+    setTransferringRequestId(requestId);
+
+    const res = await fetch("/api/requests", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "transfer-to-completed",
+        requestId,
+      }),
+    });
+
+    const data = (await res.json()) as { error?: string; success?: boolean; status?: string };
+    setTransferringRequestId("");
+
+    if (!res.ok) {
+      setMessage(data.error ?? "Could not transfer request to completed.");
+      return;
+    }
+
+    setMessage("Request moved to Completed Requests.");
     await loadRequests();
   }
 
@@ -3625,6 +3652,10 @@ if (item.status === "completed" && statusFilter !== "completed") {
                     Boolean(item.reportData);
                   const hasSharedReportWithCustomer =
                     Boolean(item.reportMetadata?.customerSharedAt);
+                  const canTransferItemToCompleted =
+                    Boolean(canGenerateReport) &&
+                    item.status === "verified" &&
+                    hasSharedReportWithCustomer;
                   const hasOpenAppeal = item.reverificationAppeal?.status === "open";
                   const appealServiceLabel = toAppealServiceLabel(item.reverificationAppeal);
                   const canPreviewItemReport =
@@ -3823,6 +3854,26 @@ if (item.status === "completed" && statusFilter !== "completed") {
                                 : hasSharedReportWithCustomer
                                   ? "Sent To Customer"
                                   : "Send To Customer"}
+                            </button>
+                          ) : null}
+
+                          {canGenerateReport && item.status !== "completed" ? (
+                            <button
+                              type="button"
+                              onClick={() => transferRequestToCompleted(item._id)}
+                              disabled={!canTransferItemToCompleted || transferringRequestId === item._id}
+                              title={
+                                canTransferItemToCompleted
+                                  ? "Move this request to Completed Requests"
+                                  : "Send report to customer before transferring to completed"
+                              }
+                              style={{
+                                display: "inline-flex", alignItems: "center", gap: "0.3rem", fontWeight: 500, fontSize: "0.85rem",
+                                background: canTransferItemToCompleted ? "#ECFDF3" : "transparent", border: canTransferItemToCompleted ? "1px solid #86EFAC" : "1px solid transparent", borderRadius: "6px", cursor: canTransferItemToCompleted ? "pointer" : "not-allowed",
+                                color: canTransferItemToCompleted ? "#166534" : "#CBD5E1", padding: "0.3rem 0.6rem", transition: "all 0.2s"
+                              }}
+                            >
+                              <CheckCheck size={16} /> {transferringRequestId === item._id ? "Transferring..." : "Transfer To Completed"}
                             </button>
                           ) : null}
 
