@@ -47,11 +47,17 @@ const deleteServiceAttemptLogPatchSchema = z.object({
   attemptIndex: z.number().int().nonnegative(),
 });
 
+const transferToCompletedPatchSchema = z.object({
+  action: z.literal("transfer-to-completed"),
+  requestId: z.string().min(1),
+});
+
 const patchSchema = z.discriminatedUnion("action", [
   verifyServicePatchSchema,
   saveReportDraftPatchSchema,
   shareReportPatchSchema,
   deleteServiceAttemptLogPatchSchema,
+    transferToCompletedPatchSchema,
 ]);
 
 type SelectedServiceLike = {
@@ -1856,7 +1862,18 @@ export async function PATCH(req: NextRequest) {
     });
   }
 
-  const verifyPayload = parsed.data;
+    if (parsed.data.action === "transfer-to-completed") {
+    if (auth.role === "verifier") {
+      return NextResponse.json({ error: "Verifiers cannot transfer requests to completed." }, { status: 403 });
+    }
+    const doc = await VerificationRequest.findById(parsed.data.requestId);
+    if (!doc) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+    doc.status = "completed";
+    await doc.save();
+    return NextResponse.json({ success: true, status: "completed" });
+  }
+
+const verifyPayload = parsed.data;
   const normalizedScreenshot = normalizeAttemptScreenshot(verifyPayload);
   if (!normalizedScreenshot.ok) {
     return NextResponse.json({ error: normalizedScreenshot.error }, { status: 400 });

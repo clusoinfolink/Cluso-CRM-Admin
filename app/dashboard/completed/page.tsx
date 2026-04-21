@@ -1242,7 +1242,7 @@ function RequestsPageContent() {
   >({});
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [companyFilter, setCompanyFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | RequestItem["status"]>("all");
+  const [statusFilter, setStatusFilter] = useState("completed");
   const [formStatusFilter, setFormStatusFilter] = useState<"all" | "submitted" | "pending">("all");
   const [customerDeliveryFilter, setCustomerDeliveryFilter] = useState<"all" | "sent" | "not-sent">("all");
   const [appealQuickFilter, setAppealQuickFilter] = useState(false);
@@ -1999,7 +1999,7 @@ function RequestsPageContent() {
 
   function clearFilters() {
     setCompanyFilter("");
-    setStatusFilter("all");
+    setStatusFilter("completed");
     setFormStatusFilter("all");
     setCustomerDeliveryFilter("all");
     setAppealQuickFilter(false);
@@ -2009,7 +2009,7 @@ function RequestsPageContent() {
     setAppealQuickFilter((prev) => !prev);
     setSearchText("");
     setCompanyFilter("");
-    setStatusFilter("all");
+    setStatusFilter("completed");
     setFormStatusFilter("all");
     setCustomerDeliveryFilter("all");
   }
@@ -2186,7 +2186,7 @@ if (item.status === "completed" && statusFilter !== "completed") {
     const stateUpdateTimer = window.setTimeout(() => {
       setSearchText("");
       setCompanyFilter(targetRequest.customerName || "");
-      setStatusFilter("all");
+      setStatusFilter("completed");
       setFormStatusFilter("all");
       setAppealQuickFilter(false);
       setIsFilterOpen(true);
@@ -4844,7 +4844,7 @@ if (item.status === "completed" && statusFilter !== "completed") {
   );
 }
 
-export default function RequestsPage() {
+export default function CompletedRequestsPage() {
   return (
     <Suspense fallback={<main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>}>
       <RequestsPageContent />

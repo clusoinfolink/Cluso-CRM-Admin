@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
@@ -39,6 +39,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, roles: ["admin", "superadmin", "manager", "verifier"] },
+  { href: "/dashboard/completed", label: "Completed Requests", icon: CheckCheck, roles: ["admin", "superadmin", "manager", "verifier"] },
   { href: "/dashboard/requests", label: "Requests", icon: ShieldCheck, roles: ["admin", "superadmin", "manager", "verifier"] },
   { href: "/dashboard/companies", label: "Companies", icon: Building2, roles: ["admin", "superadmin"] },
   { href: "/dashboard/services", label: "Services", icon: BriefcaseBusiness, roles: ["admin", "superadmin", "verifier"] },

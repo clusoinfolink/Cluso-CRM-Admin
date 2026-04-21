@@ -13,7 +13,7 @@ export type MeResponse = {
   user: AdminUser;
 };
 
-export type RequestStatus = "pending" | "approved" | "rejected" | "verified";
+export type RequestStatus = "pending" | "approved" | "rejected" | "verified" | "completed";
 
 export type ServiceVerificationStatus = "pending" | "in-progress" | "verified" | "unverified";
 export type ExtraPaymentApprovalStatus =
