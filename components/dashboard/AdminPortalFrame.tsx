@@ -12,11 +12,21 @@ import {
   FileText,
   LayoutDashboard,
   LogOut,
-  MoreHorizontal,
+  Menu,
   Settings,
   ShieldCheck,
   User,
   Users,
+  PieChart,
+  Activity,
+  Briefcase,
+  Search,
+  ScanEye,
+  Wallet,
+  CreditCard,
+  Shield,
+  Sliders,
+  BellRing,
   type LucideIcon,
 } from "lucide-react";
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,22 +40,145 @@ type AdminPortalFrameProps = {
   children: ReactNode;
 };
 
+type NavItemTheme = {
+  bg: string;
+  border: string;
+  text: string;
+  iconColor: string;
+  gradient: string;
+};
+
 type NavItem = {
   href: string;
   label: string;
   icon: LucideIcon;
   roles: AdminUser["role"][];
+  description: string;
+  subIcons: LucideIcon[];
+  theme: NavItemTheme;
 };
 
 const navItems: NavItem[] = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard, roles: ["admin", "superadmin", "manager", "verifier"] },
-  { href: "/dashboard/completed", label: "Completed Requests", icon: CheckCheck, roles: ["admin", "superadmin", "manager", "verifier"] },
-  { href: "/dashboard/requests", label: "Requests", icon: ShieldCheck, roles: ["admin", "superadmin", "manager", "verifier"] },
-  { href: "/dashboard/companies", label: "Companies", icon: Building2, roles: ["admin", "superadmin"] },
-  { href: "/dashboard/services", label: "Services", icon: BriefcaseBusiness, roles: ["admin", "superadmin", "verifier"] },
-  { href: "/dashboard/invoices", label: "Invoices", icon: FileText, roles: ["admin", "superadmin"] },
-  { href: "/dashboard/team", label: "Team", icon: Users, roles: ["admin", "superadmin", "manager"] },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings, roles: ["admin", "superadmin", "manager", "verifier"] },
+  { 
+    href: "/dashboard", 
+    label: "Overview", 
+    icon: LayoutDashboard, 
+    roles: ["admin", "superadmin", "manager", "verifier"],
+    description: "Get a bird's-eye view of your enterprise metrics, recent activity, and platform health.",
+    subIcons: [PieChart, Activity],
+    theme: {
+      bg: "bg-blue-50 dark:bg-blue-900/40",
+      border: "border-blue-200 dark:border-blue-800",
+      text: "text-blue-800 dark:text-blue-300",
+      iconColor: "text-blue-600 dark:text-blue-400",
+      gradient: "from-blue-500 to-cyan-400",
+    }
+  },
+  { 
+    href: "/dashboard/completed", 
+    label: "Completed Requests", 
+    icon: CheckCheck, 
+    roles: ["admin", "superadmin", "manager", "verifier"],
+    description: "View finished verifications and track historically completed requests.",
+    subIcons: [ShieldCheck, FileText],
+    theme: {
+      bg: "bg-emerald-50 dark:bg-emerald-900/40",
+      border: "border-emerald-200 dark:border-emerald-800",
+      text: "text-emerald-800 dark:text-emerald-300",
+      iconColor: "text-emerald-600 dark:text-emerald-400",
+      gradient: "from-emerald-500 to-teal-400",
+    }
+  },
+  { 
+    href: "/dashboard/requests", 
+    label: "Requests", 
+    icon: ShieldCheck, 
+    roles: ["admin", "superadmin", "manager", "verifier"],
+    description: "Review detailed candidate form submissions, evaluate enterprise decisions, and track verifications.",
+    subIcons: [Search, ScanEye],
+    theme: {
+      bg: "bg-violet-50 dark:bg-violet-900/40",
+      border: "border-violet-200 dark:border-violet-800",
+      text: "text-violet-800 dark:text-violet-300",
+      iconColor: "text-violet-600 dark:text-violet-400",
+      gradient: "from-violet-500 to-fuchsia-400",
+    }
+  },
+  { 
+    href: "/dashboard/companies", 
+    label: "Companies", 
+    icon: Building2, 
+    roles: ["admin", "superadmin"],
+    description: "Manage client organizations, their sub-accounts, and view active enterprise relationships.",
+    subIcons: [BriefcaseBusiness, Users],
+    theme: {
+      bg: "bg-indigo-50 dark:bg-indigo-900/40",
+      border: "border-indigo-200 dark:border-indigo-800",
+      text: "text-indigo-800 dark:text-indigo-300",
+      iconColor: "text-indigo-600 dark:text-indigo-400",
+      gradient: "from-indigo-500 to-purple-400",
+    }
+  },
+  { 
+    href: "/dashboard/services", 
+    label: "Services", 
+    icon: BriefcaseBusiness, 
+    roles: ["admin", "superadmin", "verifier"],
+    description: "Configure verification service offerings, custom checks, and specific client integrations.",
+    subIcons: [Settings, Shield],
+    theme: {
+      bg: "bg-orange-50 dark:bg-orange-900/40",
+      border: "border-orange-200 dark:border-orange-800",
+      text: "text-orange-800 dark:text-orange-300",
+      iconColor: "text-orange-600 dark:text-orange-400",
+      gradient: "from-orange-500 to-amber-400",
+    }
+  },
+  { 
+    href: "/dashboard/invoices", 
+    label: "Invoices", 
+    icon: FileText, 
+    roles: ["admin", "superadmin"],
+    description: "Access billing history, download comprehensive invoices, and manage receipts safely.",
+    subIcons: [Wallet, CreditCard],
+    theme: {
+      bg: "bg-rose-50 dark:bg-rose-900/40",
+      border: "border-rose-200 dark:border-rose-800",
+      text: "text-rose-800 dark:text-rose-300",
+      iconColor: "text-rose-600 dark:text-rose-400",
+      gradient: "from-rose-500 to-pink-400",
+    }
+  },
+  { 
+    href: "/dashboard/team", 
+    label: "Team", 
+    icon: Users, 
+    roles: ["admin", "superadmin", "manager"],
+    description: "Manage admin users, configure member permission levels, and secure platform access.",
+    subIcons: [User, ShieldCheck],
+    theme: {
+      bg: "bg-cyan-50 dark:bg-cyan-900/40",
+      border: "border-cyan-200 dark:border-cyan-800",
+      text: "text-cyan-800 dark:text-cyan-300",
+      iconColor: "text-cyan-600 dark:text-cyan-400",
+      gradient: "from-cyan-500 to-sky-400",
+    }
+  },
+  { 
+    href: "/dashboard/settings", 
+    label: "Settings", 
+    icon: Settings, 
+    roles: ["admin", "superadmin", "manager", "verifier"],
+    description: "Adjust system preferences, authentication parameters, and core profile details.",
+    subIcons: [Sliders, BellRing],
+    theme: {
+      bg: "bg-slate-100 dark:bg-slate-800",
+      border: "border-slate-200 dark:border-slate-700",
+      text: "text-slate-800 dark:text-slate-300",
+      iconColor: "text-slate-600 dark:text-slate-400",
+      gradient: "from-slate-400 to-slate-300",
+    }
+  },
 ];
 
 const REQUESTS_QUERY_KEY = ["admin-requests"];
@@ -300,15 +433,45 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
           {visibleNav.map((item) => {
             const Icon = item.icon;
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setIsMobileNavOpen(false)}
-                className={`portal-nav-link ${isNavActive(pathname, item.href) ? "active" : ""}`}
-              >
-                <Icon size={18} />
-                {item.label}
-              </Link>
+              <div key={item.href} className="relative group z-0 flex items-stretch lg:group-hover:z-[1600]">
+                <Link
+                  href={item.href}
+                  onClick={() => setIsMobileNavOpen(false)}
+                  className={`portal-nav-link w-full ${isNavActive(pathname, item.href) ? "active" : ""}`}
+                >
+                  <Icon size={18} />
+                  {item.label}
+                </Link>
+
+                <div 
+                  className="absolute left-full ml-[0.35rem] top-1/2 w-[270px] -translate-y-1/2 hidden lg:group-hover:flex flex-col z-[1700] pointer-events-none scale-95 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-200 origin-left"
+                >
+                  <div className={`absolute top-1/2 -left-1.5 -translate-y-1/2 w-3 h-3 rotate-45 border-l border-b bg-white dark:bg-slate-900 ${item.theme.border} z-[1] drop-shadow-sm`}></div>
+                  
+                  <div className={`relative px-4 py-4 pb-5 rounded-2xl shadow-xl bg-white dark:bg-slate-900 border ${item.theme.border} z-[2] overflow-hidden`}>
+                    <div className={`absolute top-0 inset-x-0 h-1 bg-gradient-to-r ${item.theme.gradient}`} />
+
+                    <div className="flex items-center gap-3 mb-2 pt-1">
+                      <div className={`p-1.5 rounded-lg flex items-center justify-center ${item.theme.bg} ${item.theme.text}`}>
+                        <Icon size={16} strokeWidth={2.5} className="drop-shadow-sm" />
+                      </div>
+                      <strong className="text-[14.5px] font-bold tracking-tight text-slate-800 dark:text-slate-100">{item.label}</strong>
+                    </div>
+                    
+                    <p className="text-[13px] leading-relaxed text-slate-500 dark:text-slate-400 mt-2 mb-4 font-medium px-0.5">
+                      {item.description}
+                    </p>
+                    
+                    <div className="flex items-center gap-2 mt-auto px-0.5">
+                      {item.subIcons?.map((SubIcon, idx) => (
+                         <div key={idx} className={`p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700/80 ${item.theme.iconColor}`}>
+                           <SubIcon size={16} strokeWidth={2} />
+                         </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
             );
           })}
         </nav>
@@ -330,11 +493,11 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
               type="button"
               className="portal-nav-overflow-trigger"
               onClick={() => setIsMobileNavOpen((prev) => !prev)}
-              aria-label="More options"
+              aria-label="Open menu"
               aria-expanded={isMobileNavOpen}
               aria-controls="admin-mobile-nav"
             >
-              <MoreHorizontal size={18} />
+              <Menu size={18} />
             </button>
             <div style={{ display: "grid", gap: "0.15rem" }}>
               <h1 className="admin-topbar-title">{title || "Admin Panel"}</h1>
