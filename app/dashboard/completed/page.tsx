@@ -1841,7 +1841,7 @@ function RequestsPageContent() {
     requestId: string,
     draftOverride?: ReportPreviewData,
   ) {
-    const requestItem = items.find((item) => item._id === requestId) ?? null;
+    const requestItem = requests.find((item) => item._id === requestId) ?? null;
     if (requestItem?.reportMetadata?.customerSharedAt) {
       setMessage("Report already shared with customer.");
       return;
