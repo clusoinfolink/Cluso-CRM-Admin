@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import { RequestItem, ServiceItem } from "@/lib/types";
 import { useEffect, useState } from "react";
@@ -127,7 +128,12 @@ export default function AdminDashboardOverviewPage() {
   }, [me]);
 
   if (loading || !me || loadingOverview) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading admin overview..."
+        subtitle="Crunching request and team metrics"
+      />
+    );
   }
 
   const archivedCount = requests.filter((item) => {

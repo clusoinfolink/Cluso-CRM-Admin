@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { getAlertTone } from "@/lib/alerts";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import { RequestItem, ServiceVerification } from "@/lib/types";
@@ -3977,7 +3978,12 @@ if (item.status === "completed" && statusFilter !== "completed") {
   }
 
   if (loading || !me || requestsQuery.isLoading) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading completed verifications..."
+        subtitle="Preparing completed queue and report actions"
+      />
+    );
   }
 
   return (
@@ -4325,7 +4331,7 @@ if (item.status === "completed" && statusFilter !== "completed") {
             position: "fixed",
             inset: 0,
             background: "rgba(15, 23, 42, 0.56)",
-            zIndex: 1300,
+            zIndex: 11000,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -4923,7 +4929,14 @@ if (item.status === "completed" && statusFilter !== "completed") {
 
 export default function CompletedRequestsPage() {
   return (
-    <Suspense fallback={<main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>}>
+    <Suspense
+      fallback={
+        <LoadingScreen
+          title="Loading completed verifications..."
+          subtitle="Preparing completed queue and report actions"
+        />
+      }
+    >
       <RequestsPageContent />
     </Suspense>
   );

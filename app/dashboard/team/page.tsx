@@ -3,13 +3,19 @@
 import AdminManagement from "@/components/AdminManagement";
 import VerifierManagement from "@/components/VerifierManagement";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 
 export default function TeamPage() {
   const { me, loading, logout } = useAdminSession();
 
   if (loading || !me) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading team workspace..."
+        subtitle="Preparing admin and verifier management"
+      />
+    );
   }
 
   if (me.role === "verifier") {

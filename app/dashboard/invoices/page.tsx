@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { MonthPicker } from "@/components/MonthPicker";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { getAlertTone } from "@/lib/alerts";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import type {
@@ -1430,7 +1431,12 @@ export default function InvoicesPage() {
   }
 
   if (loading || !me || loadingWorkspace) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading invoice workspace..."
+        subtitle="Syncing companies, invoices, and billing defaults"
+      />
+    );
   }
 
   if (!canAccess) {

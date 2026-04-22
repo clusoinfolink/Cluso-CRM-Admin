@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { getAlertTone } from "@/lib/alerts";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import { RequestItem, ServiceVerification } from "@/lib/types";
@@ -3960,7 +3961,12 @@ function RequestsPageContent() {
   }
 
   if (loading || !me || requestsQuery.isLoading) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading verification requests..."
+        subtitle="Preparing queues, statuses, and actions"
+      />
+    );
   }
 
   return (
@@ -4312,7 +4318,7 @@ function RequestsPageContent() {
             position: "fixed",
             inset: 0,
             background: "rgba(15, 23, 42, 0.56)",
-            zIndex: 1300,
+            zIndex: 11000,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -4909,7 +4915,14 @@ function RequestsPageContent() {
 
 export default function RequestsPage() {
   return (
-    <Suspense fallback={<main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>}>
+    <Suspense
+      fallback={
+        <LoadingScreen
+          title="Loading verification requests..."
+          subtitle="Preparing queues, statuses, and actions"
+        />
+      }
+    >
       <RequestsPageContent />
     </Suspense>
   );

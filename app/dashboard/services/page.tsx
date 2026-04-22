@@ -16,6 +16,7 @@ import { Package, Plus, Trash, Tag, FileText, LayoutList } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import ServiceFormBuilder from "@/components/ServiceFormBuilder";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { SUPPORTED_CURRENCIES, SupportedCurrency } from "@/lib/currencies";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import { ServiceItem } from "@/lib/types";
@@ -227,7 +228,12 @@ function ServicesPageContent() {
   }
 
   if (loading || servicesQuery.isLoading || !me) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading service workspace..."
+        subtitle="Preparing catalog and form builders"
+      />
+    );
   }
 
   const isAdmin = me.role === "admin" || me.role === "superadmin";
@@ -562,7 +568,14 @@ function ServicesPageContent() {
 
 export default function ServicesPage() {
   return (
-    <Suspense fallback={<main className="flex items-center justify-center p-16 text-slate-500">Loading...</main>}>
+    <Suspense
+      fallback={
+        <LoadingScreen
+          title="Loading service workspace..."
+          subtitle="Preparing catalog and form builders"
+        />
+      }
+    >
       <ServicesPageContent />
     </Suspense>
   );

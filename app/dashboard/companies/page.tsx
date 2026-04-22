@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { SearchableSelect } from "@/components/SearchableSelect";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { getAlertTone } from "@/lib/alerts";
 import { SUPPORTED_CURRENCIES, SupportedCurrency } from "@/lib/currencies";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
@@ -866,7 +867,12 @@ export default function CompaniesPage() {
   }
 
   if (loading || !me) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading company workspace..."
+        subtitle="Fetching companies, services, and profile access"
+      />
+    );
   }
 
   if (me.role !== "admin" && me.role !== "superadmin") {

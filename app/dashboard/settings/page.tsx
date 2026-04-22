@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { Building2, FileText, KeyRound, Save, ShieldCheck } from "lucide-react";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { getAlertTone } from "@/lib/alerts";
 import { useAdminSession } from "@/lib/hooks/useAdminSession";
 import type { ClusoDetailsResponse, CompanyPartnerProfile } from "@/lib/types";
@@ -449,7 +450,12 @@ export default function SettingsPage() {
   }
 
   if (loading || !me) {
-    return <main className="shell" style={{ padding: "4rem 0" }}>Loading...</main>;
+    return (
+      <LoadingScreen
+        title="Loading admin settings..."
+        subtitle="Preparing account and Cluso profile controls"
+      />
+    );
   }
 
   return (
