@@ -4,6 +4,8 @@ import { connectMongo } from "@/lib/mongodb";
 import VerificationRequest from "@/lib/models/VerificationRequest";
 import User from "@/lib/models/User";
 
+export const runtime = "nodejs";
+
 type SelectedServiceLike = {
   serviceId: unknown;
   serviceName: string;
@@ -2466,7 +2468,7 @@ export async function POST(
     return NextResponse.json({ error: scoped.error || "Request not found." }, { status: scoped.status || 404 });
   }
 
-  if (scoped.item.status !== "verified") {
+  if (scoped.item.status !== "verified" && scoped.item.status !== "completed") {
     return NextResponse.json(
       { error: "Report generation is available only after request verification is complete." },
       { status: 400 },
@@ -2636,11 +2638,14 @@ export async function GET(
 
     const pdfBuffer = await buildPdfBuffer(reportData);
     const pdfBytes = Uint8Array.from(pdfBuffer);
+    const safeFilename = (reportData.reportNumber || "verification-report")
+      .replace(/[^a-zA-Z0-9_-]+/g, "_")
+      .slice(0, 80);
 
     return new NextResponse(pdfBytes, {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${reportData.reportNumber || "verification-report"}.pdf"`,
+        "Content-Disposition": `attachment; filename="${safeFilename}.pdf"`,
         "Cache-Control": "no-store",
       },
     });

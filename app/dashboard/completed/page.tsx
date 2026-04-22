@@ -1065,6 +1065,14 @@ function toAppealServiceLabel(appeal: RequestItem["reverificationAppeal"] | null
   return fallbackName || "-";
 }
 
+function hasValidOpenAppeal(appeal: RequestItem["reverificationAppeal"] | null | undefined) {
+  return Boolean(
+    appeal &&
+      appeal.status === "open" &&
+      String(appeal.submittedAt || "").trim().length > 0,
+  );
+}
+
 function formatFileSize(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -1833,6 +1841,12 @@ function RequestsPageContent() {
     requestId: string,
     draftOverride?: ReportPreviewData,
   ) {
+    const requestItem = items.find((item) => item._id === requestId) ?? null;
+    if (requestItem?.reportMetadata?.customerSharedAt) {
+      setMessage("Report already shared with customer.");
+      return;
+    }
+
     setMessage("");
     setSharingReportRequestId(requestId);
 
@@ -1927,7 +1941,7 @@ function RequestsPageContent() {
   }
 
   function openReportPreview(item: RequestItem) {
-    if (item.status !== "verified") {
+    if (item.status !== "verified" && item.status !== "completed") {
       setMessage("Report preview is available after verification is complete.");
       return;
     }
@@ -2605,10 +2619,14 @@ if (item.status === "completed" && statusFilter !== "completed") {
             ) ?? null;
           const serviceCurrency =
             selectedServiceForCurrency?.currency?.toString().toUpperCase() || "INR";
+          const hasOpenAppeal = hasValidOpenAppeal(item.reverificationAppeal);
+          const isCompletedAppealPending = item.status === "completed" && hasOpenAppeal;
           const canSubmitAttempt =
             canVerifyWorkflow &&
-            item.candidateFormStatus === "submitted" &&
-            (item.status === "approved" || item.status === "verified");
+            (item.candidateFormStatus === "submitted" || isCompletedAppealPending) &&
+            (item.status === "approved" ||
+              item.status === "verified" ||
+              isCompletedAppealPending);
 
           return (
             <div key={`${item._id}-${serviceInstanceKey}`} style={{ border: "1px solid #E2E8F0", borderRadius: "10px", background: "#FFFFFF", padding: "0.85rem", display: "grid", gap: "0.75rem" }}>
@@ -3640,26 +3658,32 @@ if (item.status === "completed" && statusFilter !== "completed") {
                 {pagedItems.map((item, index) => {
                   const formSubmitted = item.candidateFormStatus === "submitted";
                   const canViewStatus = canVerifyWorkflow;
+                  const hasOpenAppeal = hasValidOpenAppeal(item.reverificationAppeal);
+                  const isCompletedAppealPending = item.status === "completed" && hasOpenAppeal;
                   const canVerifyNow =
                     canVerifyWorkflow &&
-                    formSubmitted &&
-                    (item.status === "approved" || item.status === "verified");
+                    (formSubmitted || isCompletedAppealPending) &&
+                    (item.status === "approved" ||
+                      item.status === "verified" ||
+                      isCompletedAppealPending);
                   const canGenerateItemReport =
-                    Boolean(canGenerateReport) && item.status === "verified";
-                  const canShareItemReport =
                     Boolean(canGenerateReport) &&
-                    item.status === "verified" &&
-                    Boolean(item.reportData);
+                    (item.status === "verified" || item.status === "completed");
                   const hasSharedReportWithCustomer =
                     Boolean(item.reportMetadata?.customerSharedAt);
+                  const canShareItemReport =
+                    Boolean(canGenerateReport) &&
+                    (item.status === "verified" || item.status === "completed") &&
+                    (Boolean(item.reportData) || isCompletedAppealPending) &&
+                    !hasSharedReportWithCustomer;
                   const canTransferItemToCompleted =
                     Boolean(canGenerateReport) &&
                     item.status === "verified" &&
                     hasSharedReportWithCustomer;
-                  const hasOpenAppeal = item.reverificationAppeal?.status === "open";
                   const appealServiceLabel = toAppealServiceLabel(item.reverificationAppeal);
                   const canPreviewItemReport =
-                    Boolean(canViewStatus) && item.status === "verified";
+                    Boolean(canViewStatus) &&
+                    (item.status === "verified" || item.status === "completed");
                   const verifierActivity =
                     item.verifierNames && item.verifierNames.length > 0
                       ? item.verifierNames.join(", ")
@@ -4187,8 +4211,9 @@ if (item.status === "completed" && statusFilter !== "completed") {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(16, 24, 40, 0.45)",
-            zIndex: 1200,
+            background: "rgba(15, 23, 42, 0.62)",
+            backdropFilter: "blur(2px)",
+            zIndex: 10000,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -4198,8 +4223,8 @@ if (item.status === "completed" && statusFilter !== "completed") {
           <div
             className="glass-card"
             style={{
-              width: "min(1780px, calc(100vw - 0.35rem))",
-              maxWidth: "calc(100vw - 0.35rem)",
+              width: "min(1280px, calc(100vw - 2rem))",
+              maxWidth: "calc(100vw - 2rem)",
               height: "97vh",
               maxHeight: "97vh",
               overflowY: "auto",
@@ -4374,7 +4399,8 @@ if (item.status === "completed" && statusFilter !== "completed") {
                     disabled={
                       sharingReportRequestId === activeReportPreviewRequest._id ||
                       savingReportDraftRequestId === activeReportPreviewRequest._id ||
-                      !activeReportPreviewDraft
+                      !activeReportPreviewDraft ||
+                      Boolean(activeReportPreviewRequest.reportMetadata?.customerSharedAt)
                     }
                     onClick={() => {
                       if (!activeReportPreviewDraft) {
@@ -4391,7 +4417,7 @@ if (item.status === "completed" && statusFilter !== "completed") {
                     {sharingReportRequestId === activeReportPreviewRequest._id
                       ? "Sending..."
                       : activeReportPreviewRequest.reportMetadata?.customerSharedAt
-                        ? "Resend To Customer"
+                        ? "Already Sent"
                         : "Send To Customer"}
                   </button>
                 ) : null}

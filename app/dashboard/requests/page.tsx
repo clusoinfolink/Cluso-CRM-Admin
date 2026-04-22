@@ -1935,7 +1935,7 @@ function RequestsPageContent() {
   }
 
   function openReportPreview(item: RequestItem) {
-    if (item.status !== "verified") {
+    if (item.status !== "verified" && item.status !== "completed") {
       setMessage("Report preview is available after verification is complete.");
       return;
     }
@@ -4198,8 +4198,9 @@ function RequestsPageContent() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(16, 24, 40, 0.45)",
-            zIndex: 1200,
+            background: "rgba(15, 23, 42, 0.62)",
+            backdropFilter: "blur(2px)",
+            zIndex: 10000,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -4209,8 +4210,8 @@ function RequestsPageContent() {
           <div
             className="glass-card"
             style={{
-              width: "min(1780px, calc(100vw - 0.35rem))",
-              maxWidth: "calc(100vw - 0.35rem)",
+              width: "min(1280px, calc(100vw - 2rem))",
+              maxWidth: "calc(100vw - 2rem)",
               height: "97vh",
               maxHeight: "97vh",
               overflowY: "auto",

@@ -387,6 +387,10 @@ function getPaymentProofSummaryText(invoice: InvoiceRecord) {
     return "";
   }
 
+  if (invoice.paymentStatus === "paid") {
+    return "";
+  }
+
   if (hasCustomerRelatedFiles(invoice)) {
     const relatedFilesCount = invoice.paymentProof.relatedFiles.length;
     return `Payment in process + ${relatedFilesCount} related file${relatedFilesCount === 1 ? "" : "s"}`;
@@ -1632,6 +1636,7 @@ export default function InvoicesPage() {
                 {historyInvoices.map((invoice) => {
                   const isActive = invoice.id === selectedInvoiceId;
                   const paymentStatusMeta = getPaymentStatusMeta(invoice.paymentStatus);
+                  const paymentProofSummaryText = getPaymentProofSummaryText(invoice);
                   return (
                     <tr key={`history-invoice-${invoice.id}`} style={{ borderBottom: "1px solid #F1F5F9" }}>
                       <td style={{ padding: "0.55rem", color: "#1E293B", fontWeight: 700 }}>
@@ -1670,7 +1675,7 @@ export default function InvoicesPage() {
                         >
                           {paymentStatusMeta.label}
                         </span>
-                        {invoice.paymentProof ? (
+                        {paymentProofSummaryText ? (
                           <div
                             style={{
                               color: hasAdminUploadedProof(invoice) ? "#1D4ED8" : "#0F766E",
@@ -1679,7 +1684,7 @@ export default function InvoicesPage() {
                               fontWeight: 600,
                             }}
                           >
-                            {getPaymentProofSummaryText(invoice)}
+                            {paymentProofSummaryText}
                           </div>
                         ) : null}
                       </td>
@@ -2882,20 +2887,6 @@ export default function InvoicesPage() {
                     style={{ width: "170px", height: "auto", objectFit: "contain" }}
                   />
                 </header>
-
-                <p
-                  style={{
-                    margin: "0.8rem 0 0",
-                    color: "#92400E",
-                    fontSize: "0.9rem",
-                    background: "#FEF3C7",
-                    border: "1px solid #FDE68A",
-                    borderRadius: "6px",
-                    padding: "0.55rem 0.7rem",
-                  }}
-                >
-                  This summary includes only billable requests: reports that were generated and shared to customer in this billing month.
-                </p>
 
                 <section
                   style={{

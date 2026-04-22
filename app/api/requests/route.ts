@@ -230,6 +230,17 @@ function normalizeExtraPaymentApprovalStatus(
   return null;
 }
 
+function hasValidOpenAppeal(appeal: unknown) {
+  const appealRecord = asRecord(appeal);
+  if (!appealRecord) {
+    return false;
+  }
+
+  const status = asString(appealRecord.status).trim().toLowerCase();
+  const submittedAt = asString(appealRecord.submittedAt).trim();
+  return status === "open" && submittedAt.length > 0;
+}
+
 function normalizeAttemptScreenshotMimeType(rawMimeType: string) {
   const normalizedMimeType = rawMimeType.trim().toLowerCase();
   if (!normalizedMimeType) {
@@ -1546,7 +1557,7 @@ export async function PATCH(req: NextRequest) {
     const deletePayload = parsed.data;
     const requestDoc = await VerificationRequest.findById(deletePayload.requestId)
       .select(
-        "candidateFormStatus status selectedServices serviceVerifications candidateFormResponses reportData reportMetadata invoiceSnapshot",
+        "candidateFormStatus status selectedServices serviceVerifications candidateFormResponses reportData reportMetadata invoiceSnapshot reverificationAppeal",
       )
       .lean();
 
@@ -1561,7 +1572,12 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    if (requestDoc.status !== "approved" && requestDoc.status !== "verified") {
+    const hasOpenAppeal = hasValidOpenAppeal(requestDoc.reverificationAppeal);
+    if (
+      requestDoc.status !== "approved" &&
+      requestDoc.status !== "verified" &&
+      !(requestDoc.status === "completed" && hasOpenAppeal)
+    ) {
       return NextResponse.json(
         {
           error:
@@ -1681,14 +1697,22 @@ export async function PATCH(req: NextRequest) {
     }
 
     const shareTarget = await VerificationRequest.findById(parsed.data.requestId)
-      .select("status reportData candidateName customer serviceVerifications reverificationAppeal")
+      .select("status reportData reportMetadata candidateName customer serviceVerifications reverificationAppeal")
       .lean();
 
     if (!shareTarget) {
       return NextResponse.json({ error: "Request not found." }, { status: 404 });
     }
 
-    if (shareTarget.status !== "verified") {
+    if (isShareAction && shareTarget.reportMetadata?.customerSharedAt) {
+      return NextResponse.json(
+        { error: "Report already shared with customer." },
+        { status: 400 },
+      );
+    }
+
+    const shareHasOpenAppeal = hasValidOpenAppeal(shareTarget.reverificationAppeal);
+    if (shareTarget.status !== "verified" && !(shareTarget.status === "completed" && shareHasOpenAppeal)) {
       return NextResponse.json(
         {
           error: isShareAction
@@ -1923,7 +1947,7 @@ const verifyPayload = parsed.data;
 
   const requestDoc = await VerificationRequest.findById(verifyPayload.requestId)
     .select(
-      "candidateFormStatus status selectedServices serviceVerifications candidateFormResponses reportData reportMetadata invoiceSnapshot",
+      "candidateFormStatus status selectedServices serviceVerifications candidateFormResponses reportData reportMetadata invoiceSnapshot reverificationAppeal",
     )
     .lean();
 
@@ -1938,7 +1962,12 @@ const verifyPayload = parsed.data;
     );
   }
 
-  if (requestDoc.status !== "approved" && requestDoc.status !== "verified") {
+  const verifyHasOpenAppeal = hasValidOpenAppeal(requestDoc.reverificationAppeal);
+  if (
+    requestDoc.status !== "approved" &&
+    requestDoc.status !== "verified" &&
+    !(requestDoc.status === "completed" && verifyHasOpenAppeal)
+  ) {
     return NextResponse.json(
       {
         error:
@@ -2039,7 +2068,9 @@ const verifyPayload = parsed.data;
     Boolean(requestDoc.reportData) || Boolean(reportMetadata?.generatedAt);
   const hadSharedWithCustomer = Boolean(reportMetadata?.customerSharedAt);
   const shouldResetReportArtifacts =
-    requestDoc.status === "verified" && (hadGeneratedReport || hadSharedWithCustomer);
+    (requestDoc.status === "verified" ||
+      (requestDoc.status === "completed" && verifyHasOpenAppeal)) &&
+    (hadGeneratedReport || hadSharedWithCustomer);
 
   const updatePayload: Record<string, unknown> = {
     status: nextStatus,
