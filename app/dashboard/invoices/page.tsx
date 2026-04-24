@@ -35,6 +35,7 @@ type MonthlySummaryRow = {
   verifierName: string;
   requestStatus: string;
   serviceName: string;
+  verificationOrigin: string;
   currency: string;
   subtotal: number;
   gstAmount: number;
@@ -67,6 +68,25 @@ type MonthlySummaryData = {
     total: number;
   }>;
 };
+
+function buildSummaryGroupSpans(rows: MonthlySummaryRow[]) {
+  const spans = new Array(rows.length).fill(0);
+  let start = 0;
+
+  while (start < rows.length) {
+    const currentSrNo = rows[start]?.srNo;
+    let end = start + 1;
+
+    while (end < rows.length && rows[end]?.srNo === currentSrNo) {
+      end += 1;
+    }
+
+    spans[start] = end - start;
+    start = end;
+  }
+
+  return spans;
+}
 
 function createEmptyPartyDetails(): InvoicePartyDetails {
   return {
@@ -444,6 +464,10 @@ export default function InvoicesPage() {
   const [historySearchText, setHistorySearchText] = useState("");
   const [loadingMonthlySummary, setLoadingMonthlySummary] = useState(false);
   const [monthlySummary, setMonthlySummary] = useState<MonthlySummaryData | null>(null);
+  const monthlySummaryGroupSpans = useMemo(
+    () => buildSummaryGroupSpans(monthlySummary?.rows ?? []),
+    [monthlySummary],
+  );
   const monthlySummaryPrintRef = useRef<HTMLDivElement | null>(null);
 
   const canAccess = me?.role === "admin" || me?.role === "superadmin";
@@ -2956,7 +2980,7 @@ export default function InvoicesPage() {
                     </p>
                   ) : (
                     <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", minWidth: "1360px", borderCollapse: "collapse", fontSize: "0.92rem" }}>
+                      <table style={{ width: "100%", minWidth: "1500px", borderCollapse: "collapse", fontSize: "0.92rem" }}>
                         <thead>
                           <tr style={{ borderTop: "1px solid #232323", borderBottom: "1px solid #666666", textAlign: "left" }}>
                             <th style={{ padding: "0.35rem 0.2rem", width: "6%" }}>Sr No.</th>
@@ -2966,6 +2990,7 @@ export default function InvoicesPage() {
                             <th style={{ padding: "0.35rem 0.2rem", width: "12%" }}>Verifier Name</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "10%" }} title="Only requests with generated and customer-shared reports are included.">Status</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "16%" }}>Service</th>
+                            <th style={{ padding: "0.35rem 0.2rem", width: "12%" }}>Verification Origin</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "8%" }}>Currency</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "9%" }}>Price (Excl. GST)</th>
                             <th style={{ padding: "0.35rem 0.2rem", width: "7%" }}>
@@ -2977,29 +3002,55 @@ export default function InvoicesPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {monthlySummary.rows.map((row, index) => (
-                            <tr key={`summary-row-${row.srNo}-${index}`} style={{ borderBottom: "1px solid #D1D5DB" }}>
-                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.srNo}</td>
-                              <td style={{ padding: "0.35rem 0.2rem" }}>{formatSummaryDate(row.requestedAt)}</td>
-                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.candidateName}</td>
-                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.userName || "-"}</td>
-                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.verifierName || "-"}</td>
-                              <td style={{ padding: "0.35rem 0.2rem", textTransform: "capitalize" }}>{row.requestStatus}</td>
-                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.serviceName}</td>
-                              <td style={{ padding: "0.35rem 0.2rem" }}>{row.currency}</td>
-                              <td style={{ padding: "0.35rem 0.2rem", fontWeight: 700 }}>
-                                {formatMoney(row.subtotal, row.currency)}
-                              </td>
-                              <td style={{ padding: "0.35rem 0.2rem", fontWeight: 700 }}>
-                                {monthlySummary.gstEnabled
-                                  ? formatMoney(row.gstAmount, row.currency)
-                                  : "-"}
-                              </td>
-                              <td style={{ padding: "0.35rem 0.2rem", fontWeight: 700 }}>
-                                {formatMoney(row.total, row.currency)}
-                              </td>
-                            </tr>
-                          ))}
+                          {monthlySummary.rows.map((row, index) => {
+                            const rowSpan = monthlySummaryGroupSpans[index] ?? 0;
+                            const showMergedCells = rowSpan > 0;
+
+                            return (
+                              <tr key={`summary-row-${row.srNo}-${index}`} style={{ borderBottom: "1px solid #D1D5DB" }}>
+                                {showMergedCells ? (
+                                  <td rowSpan={rowSpan} style={{ padding: "0.35rem 0.2rem", verticalAlign: "top" }}>
+                                    {row.srNo}
+                                  </td>
+                                ) : null}
+                                {showMergedCells ? (
+                                  <td rowSpan={rowSpan} style={{ padding: "0.35rem 0.2rem", verticalAlign: "top" }}>
+                                    {formatSummaryDate(row.requestedAt)}
+                                  </td>
+                                ) : null}
+                                {showMergedCells ? (
+                                  <td rowSpan={rowSpan} style={{ padding: "0.35rem 0.2rem", verticalAlign: "top" }}>
+                                    {row.candidateName}
+                                  </td>
+                                ) : null}
+                                {showMergedCells ? (
+                                  <td rowSpan={rowSpan} style={{ padding: "0.35rem 0.2rem", verticalAlign: "top" }}>
+                                    {row.userName || "-"}
+                                  </td>
+                                ) : null}
+                                {showMergedCells ? (
+                                  <td rowSpan={rowSpan} style={{ padding: "0.35rem 0.2rem", verticalAlign: "top" }}>
+                                    {row.verifierName || "-"}
+                                  </td>
+                                ) : null}
+                                <td style={{ padding: "0.35rem 0.2rem", textTransform: "capitalize" }}>{row.requestStatus}</td>
+                                <td style={{ padding: "0.35rem 0.2rem" }}>{row.serviceName}</td>
+                                <td style={{ padding: "0.35rem 0.2rem" }}>{row.verificationOrigin}</td>
+                                <td style={{ padding: "0.35rem 0.2rem" }}>{row.currency}</td>
+                                <td style={{ padding: "0.35rem 0.2rem", fontWeight: 700 }}>
+                                  {formatMoney(row.subtotal, row.currency)}
+                                </td>
+                                <td style={{ padding: "0.35rem 0.2rem", fontWeight: 700 }}>
+                                  {monthlySummary.gstEnabled
+                                    ? formatMoney(row.gstAmount, row.currency)
+                                    : "-"}
+                                </td>
+                                <td style={{ padding: "0.35rem 0.2rem", fontWeight: 700 }}>
+                                  {formatMoney(row.total, row.currency)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
