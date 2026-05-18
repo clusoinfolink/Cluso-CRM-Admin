@@ -138,11 +138,11 @@ export async function sendCustomerInvoiceEmail(
   `;
 
   try {
-    const attachments = payload.invoicePdfs.map((pdf) => ({
-      filename: pdf.filename,
-      content: pdf.content,
+    const attachments = [{
+      filename: payload.invoicePdf.filename,
+      content: payload.invoicePdf.content,
       contentType: "application/pdf",
-    }));
+    }];
 
     if (process.env.MS_GRAPH_TENANT_ID) {
       return await sendMsGraphEmail(
