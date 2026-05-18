@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { sendMsGraphEmail } from "./graphMail";
 
 type CustomerReportMailPayload = {
   customerName: string;
@@ -145,6 +146,16 @@ export async function sendCustomerReportSharedEmail(
         contentType: attachment.contentType || "application/octet-stream",
       }))),
     ];
+
+    if (process.env.MS_GRAPH_TENANT_ID) {
+      return await sendMsGraphEmail(
+         payload.customerEmail,
+         subject,
+         html,
+         text,
+         attachments
+      );
+    }
 
     await transporter.sendMail({
       from: fromAddress,

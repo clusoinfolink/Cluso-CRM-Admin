@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { sendMsGraphEmail } from "./graphMail";
 
 type CustomerInvoiceMailPayload = {
   customerName: string;
@@ -137,6 +138,22 @@ export async function sendCustomerInvoiceEmail(
   `;
 
   try {
+    const attachments = payload.invoicePdfs.map((pdf) => ({
+      filename: pdf.filename,
+      content: pdf.content,
+      contentType: "application/pdf",
+    }));
+
+    if (process.env.MS_GRAPH_TENANT_ID) {
+      return await sendMsGraphEmail(
+         payload.customerEmail,
+         subject,
+         html,
+         text,
+         attachments
+      );
+    }
+
     await transporter.sendMail({
       from: fromAddress,
       to: payload.customerEmail,

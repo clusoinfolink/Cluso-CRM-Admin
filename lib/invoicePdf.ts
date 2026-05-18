@@ -489,7 +489,7 @@ export async function buildInvoicePdf(payload: InvoicePdfPayload): Promise<Buffe
     if (includeClusoTaxCodes) {
       rows.splice(4, 0,
         { label: "SAC Code", value: details.sacCode || "-" },
-        { label: "LTU Code", value: details.ltuCode || "-" },
+        { label: "LUT Code", value: details.ltuCode || "-" },
       );
     }
 

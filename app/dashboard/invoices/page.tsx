@@ -2023,7 +2023,7 @@ export default function InvoicesPage() {
             </div>
 
             <div>
-              <label className="label" htmlFor="cluso-ltu-code">LTU Code</label>
+              <label className="label" htmlFor="cluso-ltu-code">LUT Code</label>
               <input
                 id="cluso-ltu-code"
                 className="input"
@@ -2958,7 +2958,7 @@ export default function InvoicesPage() {
                     <div><strong>GSTIN:</strong> {monthlySummary.clusoDetails.gstin || "-"}</div>
                     <div><strong>CIN / Registration:</strong> {monthlySummary.clusoDetails.cinRegistrationNumber || "-"}</div>
                     <div><strong>SAC Code:</strong> {monthlySummary.clusoDetails.sacCode || "-"}</div>
-                    <div><strong>LTU Code:</strong> {monthlySummary.clusoDetails.ltuCode || "-"}</div>
+                    <div><strong>LUT Code:</strong> {monthlySummary.clusoDetails.ltuCode || "-"}</div>
                     <div><strong>Address:</strong> {monthlySummary.clusoDetails.address || "-"}</div>
                     <div><strong>Invoice Email:</strong> {monthlySummary.clusoDetails.invoiceEmail || "-"}</div>
                     <div>
@@ -3201,7 +3201,7 @@ export default function InvoicesPage() {
                     <div><strong>GSTIN:</strong> {selectedInvoice.clusoDetails.gstin || "-"}</div>
                     <div><strong>CIN / Registration:</strong> {selectedInvoice.clusoDetails.cinRegistrationNumber || "-"}</div>
                     <div><strong>SAC Code:</strong> {selectedInvoice.clusoDetails.sacCode || "-"}</div>
-                    <div><strong>LTU Code:</strong> {selectedInvoice.clusoDetails.ltuCode || "-"}</div>
+                    <div><strong>LUT Code:</strong> {selectedInvoice.clusoDetails.ltuCode || "-"}</div>
                     <div><strong>Address:</strong> {selectedInvoice.clusoDetails.address || "-"}</div>
                     <div><strong>Invoice Email:</strong> {selectedInvoice.clusoDetails.invoiceEmail || "-"}</div>
                     <div>

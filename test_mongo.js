@@ -1,0 +1,1 @@
+require('dotenv').config({ path: '.env.local' }); console.log('URI:', process.env.MONGODB_URI); const mongoose = require('mongoose'); mongoose.connect(process.env.MONGODB_URI).then(() => { console.log('Connected'); process.exit(0); }).catch(e => { console.error('Error:', e); process.exit(1); });

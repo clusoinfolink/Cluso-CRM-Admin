@@ -10,11 +10,13 @@ import {
   ChevronUp,
   FileText,
   ListFilter,
+  Mail,
   RotateCw,
   Search,
   SlidersHorizontal,
   X,
 } from "lucide-react";
+import { VerificationEmailModal } from "@/components/dashboard/VerificationEmailModal";
 import { AdminPortalFrame } from "@/components/dashboard/AdminPortalFrame";
 import { LoadingScreen } from "@/components/ui/LoadingScreen";
 import { getAlertTone } from "@/lib/alerts";
@@ -1254,6 +1256,11 @@ function RequestsPageContent() {
   const [expandedCompanyGroups, setExpandedCompanyGroups] = useState<Record<string, boolean>>({});
   const [companyGroupPageByKey, setCompanyGroupPageByKey] = useState<Record<string, number>>({});
   const [manualRefreshInProgress, setManualRefreshInProgress] = useState(false);
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailModalContext, setEmailModalContext] = useState<{
+    requestId: string; candidateName: string; candidateEmail: string;
+    serviceName: string; serviceInstanceKey: string;
+  }>({ requestId: "", candidateName: "", candidateEmail: "", serviceName: "", serviceInstanceKey: "" });
 
   const focusRequestId = searchParams.get("requestId")?.trim() ?? "";
 
@@ -2979,7 +2986,17 @@ function RequestsPageContent() {
                 </div>
               ) : null}
 
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem", background: "#2563EB", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "0.3rem" }}
+                  onClick={() => {
+                    setEmailModalContext({ requestId: item._id, candidateName: item.candidateName || "", candidateEmail: item.candidateEmail || "", serviceName: serviceDisplayName || "", serviceInstanceKey });
+                    setEmailModalOpen(true);
+                  }}
+                >
+                  <Mail size={14} /> Email
+                </button>
                 <button
                   type="button"
                   className="btn btn-primary"
@@ -4909,6 +4926,15 @@ function RequestsPageContent() {
           </div>
         </div>
       ) : null}
+      <VerificationEmailModal
+        open={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        requestId={emailModalContext.requestId}
+        candidateName={emailModalContext.candidateName}
+        candidateEmail={emailModalContext.candidateEmail}
+        serviceName={emailModalContext.serviceName}
+        serviceInstanceKey={emailModalContext.serviceInstanceKey}
+      />
     </AdminPortalFrame>
   );
 }
