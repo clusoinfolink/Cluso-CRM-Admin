@@ -202,7 +202,7 @@ export async function GET(req: NextRequest) {
         const bodyObj = msg.body as Record<string, string> | undefined;
 
         return {
-          id: msg.id,
+          id: String(msg.id ?? ""),
           subject: String(msg.subject ?? ""),
           from: {
             name: fromAddr?.name ?? "",
@@ -241,7 +241,7 @@ export async function GET(req: NextRequest) {
     >();
 
     for (const message of messages) {
-      const convId = message.conversationId || message.id;
+      const convId: string = message.conversationId || message.id;
       const existing = conversationMap.get(convId);
 
       if (existing) {
