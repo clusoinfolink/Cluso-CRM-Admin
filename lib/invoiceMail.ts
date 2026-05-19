@@ -91,7 +91,7 @@ export async function sendCustomerInvoiceEmail(
   const fromAddress =
     process.env.CUSTOMER_REPORT_MAIL_FROM?.trim() ||
     process.env.VERIFICATION_MAIL_FROM?.trim() ||
-    `Cluso Infolink Team <${smtpUser}>`;
+    `Cluso Infolink Team <indiaops@cluso.in>`;
 
   const subject = `Invoice ${payload.invoiceNumber} from Cluso Infolink`;
 

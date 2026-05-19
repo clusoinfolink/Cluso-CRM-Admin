@@ -79,7 +79,7 @@ export async function sendCustomerReportSharedEmail(
   const fromAddress =
     process.env.CUSTOMER_REPORT_MAIL_FROM?.trim() ||
     process.env.VERIFICATION_MAIL_FROM?.trim() ||
-    `Cluso Infolink Team <${smtpUser}>`;
+    `Cluso Infolink Team <indiaops@cluso.in>`;
 
   const subject = `Verification report shared for ${payload.candidateName}`;
   const supplementalAttachmentCount = payload.supplementalAttachments?.length ?? 0;
