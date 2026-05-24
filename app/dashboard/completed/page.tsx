@@ -79,8 +79,9 @@ type ServiceAttemptDraft = {
 };
 
 const REPORT_NOTICE_PARAGRAPHS = [
-  "The Cluso Report is provided by CLUSO INFOLINK, LLC. CLUSO INFOLINK, LLC does not warrant the completeness or correctness of this report or any of the information contained herein. CLUSO INFOLINK, LLC is not liable for any loss, damage or injury caused by negligence or other act or failure of CLUSO INFOLINK, LLC in procuring, collecting or communicating any such information. Reliance on any information contained herein shall be solely at the users risk and shall not constitute a waiver of any claim against, and a release of, CLUSO INFOLINK, LLC.",
-  "This report is furnished in strict confidence for your exclusive use of legitimate business purposes and for no other purpose, and shall not be reproduced in whole or in part in any manner whatsoever. CLUSO INFOLINK is a private investigation company licensed by the Texas Private Security Bureau (TX License Number A16821). Contact the Texas PSB for regulatory information or complaints: TX Private Security, MSC 0241, PO Box 4087, Austin TX 78773-0001 Tel: 512-424-7298 Fax: 512-424-7728.",
+  "This report is provided by CLUSO INFOLINK PRIVATE LIMITED on a strictly confidential basis, solely for the exclusive use of the recipient for legitimate corporate and business purposes. It may not be reproduced, redistributed, or disclosed, in whole or in part, in any manner whatsoever without prior written consent.",
+  "While CLUSO INFOLINK PRIVATE LIMITED endeavors to ensure the highest level of accuracy and diligence in procuring, collecting, and compiling this data, it does not warrant or guarantee the absolute completeness, correctness, or timeliness of the information contained herein. Consequently, CLUSO INFOLINK PRIVATE LIMITED shall not be held liable for any direct, indirect, or consequential loss, damage, or injury resulting from any errors, omissions, or negligence in the procurement or communication of this information. Reliance upon this report is strictly at the user\u2019s sole risk.",
+  "The recipient acknowledges that the handling and utilization of this data must strictly align with all prevailing Indian regulatory frameworks, including but not limited to the Digital Personal Data Protection Act, 2023 (DPDP Act) and the Information Technology Act, 2000, along with all subsequent amendments and rules.",
 ] as const;
 
 type ReportPreviewAttempt = {
@@ -3574,7 +3575,7 @@ if (item.status === "completed" && statusFilter !== "completed") {
               }}
             >
               <p style={{ margin: 0, fontWeight: 700 }}>--END OF REPORT--</p>
-              <p style={{ margin: "0.25rem 0 0", fontWeight: 700 }}>IMPORTANT NOTICE</p>
+              <p style={{ margin: "0.25rem 0 0", fontWeight: 700 }}>IMPORTANT NOTICE & DISCLAIMER</p>
               {REPORT_NOTICE_PARAGRAPHS.map((paragraph) => (
                 <p key={`${requestId}-${paragraph.slice(0, 20)}`} style={{ margin: "0.38rem 0 0" }}>
                   {paragraph}
@@ -3587,7 +3588,7 @@ if (item.status === "completed" && statusFilter !== "completed") {
                   If you have any questions about this report, please feel free to contact us:
                 </p>
                 <p style={{ margin: "0.2rem 0 0" }}>
-                  Toll Free: 866-685-5177&nbsp;&nbsp;&nbsp;&nbsp;Tel: 817-945-2289&nbsp;&nbsp;&nbsp;&nbsp;Fax: 817-945-2297&nbsp;&nbsp;&nbsp;&nbsp;Email: support@cluso.in
+                  Email: support@cluso.in
                 </p>
               </div>
 
