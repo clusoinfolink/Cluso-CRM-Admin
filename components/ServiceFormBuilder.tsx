@@ -42,6 +42,8 @@ import {
   Building2,
   Globe,
   ShieldCheck,
+  Link2,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import type { SupportedCurrency } from "@/lib/currencies";
@@ -78,6 +80,16 @@ const DEFAULT_QUESTION_ICON: ServiceQuestionIconKey = "diary";
 const SYSTEM_LOCATION_FIELD_TYPES = ["country", "state", "city"] as const;
 type SystemLocationFieldType = (typeof SYSTEM_LOCATION_FIELD_TYPES)[number];
 const SYSTEM_SERVICE_COUNTRY_DEFAULT_OPTIONS = getAllCountryOptions();
+
+const EMAIL_TEMPLATE_VARIABLE_OPTIONS = [
+  { key: "respondentName", label: "Respondent Name", emoji: "👤" },
+  { key: "respondentDesignation", label: "Respondent Designation", emoji: "🏷️" },
+  { key: "candidateDesignation", label: "Candidate Designation", emoji: "💼" },
+  { key: "organisationName", label: "Organisation Name", emoji: "🏢" },
+  { key: "employmentPeriod", label: "Employment Period", emoji: "📅" },
+] as const;
+
+type EmailTemplateVariableKey = typeof EMAIL_TEMPLATE_VARIABLE_OPTIONS[number]["key"];
 
 const PREVIEW_MOBILE_CODE_OPTIONS = [
   "+1",
@@ -162,6 +174,7 @@ export type ServiceFormField = {
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: string;
   previewWidth?: "full" | "half" | "third";
+  templateVariableMapping?: string;
 };
 
 export type ServiceItemForForm = {
@@ -310,6 +323,7 @@ function createEmptyField(
     allowNotApplicable: false,
     notApplicableText: "Not Applicable",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   };
 }
 
@@ -739,6 +753,10 @@ export default function ServiceFormBuilder({
           ? ""
           : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
       previewWidth: normalizePreviewWidth(field.previewWidth, field.fieldType),
+      templateVariableMapping:
+        field.fieldType === "file" || field.fieldType === "composite"
+          ? ""
+          : String(field.templateVariableMapping ?? "").trim(),
     })),
   );
 
@@ -1263,6 +1281,29 @@ export default function ServiceFormBuilder({
     }));
   }
 
+  function updateFieldTemplateVariable(index: number, variableKey: string) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx === index) {
+          if (isSystemServiceLocationField(item)) {
+            return { ...item, templateVariableMapping: "" };
+          }
+          return { ...item, templateVariableMapping: variableKey };
+        }
+        // Clear same variable from other fields (uniqueness)
+        if (variableKey && item.templateVariableMapping === variableKey) {
+          return { ...item, templateVariableMapping: "" };
+        }
+        return item;
+      }),
+    }));
+  }
+
   function updateFieldNotApplicableText(index: number, notApplicableText: string) {
     if (!activeServiceId) {
       return;
@@ -1400,6 +1441,10 @@ export default function ServiceFormBuilder({
             ? ""
             : String(item.copyFromPersonalDetailsFieldKey ?? "").trim(),
         previewWidth,
+        templateVariableMapping:
+          item.fieldType === "file" || item.fieldType === "composite"
+            ? ""
+            : String(item.templateVariableMapping ?? "").trim(),
       };
     });
 
@@ -1768,6 +1813,125 @@ export default function ServiceFormBuilder({
                         </p>
                       ) : null}
                     </div>
+
+                    {/* Template Variable Mapping */}
+                    {!isSystemLocationField && field.fieldType !== "file" && field.fieldType !== "composite" ? (
+                      <div
+                        style={{
+                          gridColumn: "1 / -1",
+                          border: field.templateVariableMapping
+                            ? "1px solid #C4B5FD"
+                            : "1px solid #E2E8F0",
+                          borderRadius: "8px",
+                          background: field.templateVariableMapping
+                            ? "#F5F3FF"
+                            : "#FAFBFC",
+                          padding: "0.7rem 1rem",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.75rem",
+                          flexWrap: "wrap",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.4rem",
+                            fontSize: "0.84rem",
+                            fontWeight: 600,
+                            color: field.templateVariableMapping ? "#6D28D9" : "#64748B",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          <Link2 size={14} />
+                          Email Template Variable
+                        </span>
+
+                        {field.templateVariableMapping ? (
+                          (() => {
+                            const matched = EMAIL_TEMPLATE_VARIABLE_OPTIONS.find(
+                              (opt) => opt.key === field.templateVariableMapping,
+                            );
+                            return (
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "0.4rem",
+                                  background: "#EDE9FE",
+                                  border: "1px solid #C4B5FD",
+                                  borderRadius: "999px",
+                                  padding: "0.3rem 0.55rem 0.3rem 0.65rem",
+                                  fontSize: "0.8rem",
+                                  fontWeight: 700,
+                                  color: "#5B21B6",
+                                }}
+                              >
+                                <span>{matched?.emoji ?? "📧"}</span>
+                                <span>{matched?.label ?? field.templateVariableMapping}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => updateFieldTemplateVariable(index, "")}
+                                  style={{
+                                    background: "none",
+                                    border: "none",
+                                    padding: "0.1rem",
+                                    cursor: "pointer",
+                                    color: "#7C3AED",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    borderRadius: "999px",
+                                    transition: "color 0.15s",
+                                  }}
+                                  title="Remove template mapping"
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
+                            );
+                          })()
+                        ) : (
+                          <select
+                            value=""
+                            onChange={(e) => updateFieldTemplateVariable(index, e.target.value)}
+                            style={{
+                              padding: "0.38rem 0.6rem",
+                              border: "1px solid #CBD5E1",
+                              borderRadius: "6px",
+                              fontSize: "0.82rem",
+                              background: "#fff",
+                              color: "#475569",
+                              cursor: "pointer",
+                              minWidth: "180px",
+                            }}
+                          >
+                            <option value="">Select variable…</option>
+                            {EMAIL_TEMPLATE_VARIABLE_OPTIONS.map((opt) => {
+                              const alreadyUsed = fields.some(
+                                (f, fIdx) =>
+                                  fIdx !== index && f.templateVariableMapping === opt.key,
+                              );
+                              return (
+                                <option
+                                  key={opt.key}
+                                  value={opt.key}
+                                  disabled={alreadyUsed}
+                                >
+                                  {opt.emoji} {opt.label}
+                                  {alreadyUsed ? " (already mapped)" : ""}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        )}
+
+                        <span style={{ fontSize: "0.75rem", color: "#94A3B8", marginLeft: "auto" }}>
+                          Auto-fills email template when composing
+                        </span>
+                      </div>
+                    ) : null}
 
                     <div
                       style={{

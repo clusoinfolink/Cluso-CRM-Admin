@@ -1397,6 +1397,7 @@ export async function GET(req: NextRequest) {
             ? Math.floor(serviceResponse.serviceEntryCount)
             : 1,
         answers: (serviceResponse.answers ?? []).map((answer) => ({
+          fieldKey: answer.fieldKey ?? "",
           question: answer.question,
           fieldType: answer.fieldType,
           required: Boolean(answer.required),

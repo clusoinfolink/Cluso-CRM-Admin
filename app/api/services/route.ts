@@ -142,6 +142,12 @@ const formFieldSchema = z
       .optional()
       .default(""),
     previewWidth: z.enum(PREVIEW_FIELD_WIDTHS).optional(),
+    templateVariableMapping: z
+      .string()
+      .trim()
+      .max(60)
+      .optional()
+      .default(""),
   })
   .superRefine((field, ctx) => {
     const supportsLengthConstraints =
@@ -239,6 +245,7 @@ function buildSystemLocationField(locationType: ServiceLocationFieldType): Parse
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
     previewWidth: config.previewWidth,
+    templateVariableMapping: "",
   };
 }
 
@@ -374,6 +381,10 @@ function normalizeFormField(field: ParsedFormField) {
         ? ""
         : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
     previewWidth,
+    templateVariableMapping:
+      field.fieldType === "file" || field.fieldType === "composite"
+        ? ""
+        : String(field.templateVariableMapping ?? "").trim(),
   };
 }
 
@@ -399,6 +410,7 @@ function serializeFormField(field: {
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: unknown;
   previewWidth?: unknown;
+  templateVariableMapping?: unknown;
 }) {
   const supportsLengthConstraints =
     field.fieldType === "text" ||
@@ -452,6 +464,10 @@ function serializeFormField(field: {
         ? ""
         : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
     previewWidth,
+    templateVariableMapping:
+      field.fieldType === "file" || field.fieldType === "composite"
+        ? ""
+        : String(field.templateVariableMapping ?? "").trim(),
   };
 }
 
@@ -715,6 +731,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
   {
     fieldKey: "personal_date_of_birth",
@@ -731,6 +748,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
   {
     fieldKey: "personal_mobile_number",
@@ -747,6 +765,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
   {
     fieldKey: "personal_email_address",
@@ -763,6 +782,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
   {
     fieldKey: "personal_nationality",
@@ -779,6 +799,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
   {
     fieldKey: "personal_residential_address",
@@ -795,6 +816,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
   {
     fieldKey: "personal_gender",
@@ -811,6 +833,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
   {
     fieldKey: "personal_primary_id_number",
@@ -827,6 +850,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    templateVariableMapping: "",
   },
 ];
 
@@ -1032,6 +1056,7 @@ export async function GET(req: NextRequest) {
               notApplicableText: field.notApplicableText,
               copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
               previewWidth: field.previewWidth,
+              templateVariableMapping: field.templateVariableMapping,
             }),
           ),
         };
@@ -1157,6 +1182,7 @@ export async function POST(req: NextRequest) {
               notApplicableText: field.notApplicableText,
               copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
               previewWidth: field.previewWidth,
+              templateVariableMapping: field.templateVariableMapping,
             }),
           ),
         },
@@ -1276,6 +1302,7 @@ export async function PATCH(req: NextRequest) {
             notApplicableText: field.notApplicableText,
             copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
             previewWidth: field.previewWidth,
+            templateVariableMapping: field.templateVariableMapping,
           }),
         ),
       },

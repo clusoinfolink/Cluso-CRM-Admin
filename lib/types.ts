@@ -204,6 +204,7 @@ export type ServiceFormField = {
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: string;
   previewWidth?: "full" | "half" | "third";
+  templateVariableMapping?: string;
 };
 
 export type ServiceItem = {

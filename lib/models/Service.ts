@@ -36,6 +36,7 @@ export type ServiceFormField = {
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: string;
   previewWidth?: "full" | "half" | "third";
+  templateVariableMapping?: string;
 };
 
 export type CandidateLayoutSnapshotField = {
@@ -121,6 +122,7 @@ const serviceSchema = new Schema<IService>(
           enum: ["full", "half", "third"],
           required: false,
         },
+        templateVariableMapping: { type: String, default: "" },
       },
     ],
     candidateLayoutSnapshot: [
@@ -167,6 +169,7 @@ const hasEnhancedServiceFields = Boolean(
     mongoose.models.Service?.schema.path("formFields.notApplicableText") &&
     mongoose.models.Service?.schema.path("formFields.copyFromPersonalDetailsFieldKey") &&
     mongoose.models.Service?.schema.path("formFields.previewWidth") &&
+    mongoose.models.Service?.schema.path("formFields.templateVariableMapping") &&
     mongoose.models.Service?.schema.path("candidateLayoutSnapshot") &&
     mongoose.models.Service?.schema.path("candidateLayoutSnapshot.fieldType") &&
     mongoose.models.Service?.schema.path("candidateLayoutSnapshot.previewWidth"),

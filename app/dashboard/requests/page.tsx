@@ -1261,7 +1261,10 @@ function RequestsPageContent() {
   const [emailModalContext, setEmailModalContext] = useState<{
     requestId: string; candidateName: string; candidateEmail: string;
     serviceName: string; serviceInstanceKey: string;
-  }>({ requestId: "", candidateName: "", candidateEmail: "", serviceName: "", serviceInstanceKey: "" });
+    respondentName?: string; respondentEmail?: string;
+    serviceId?: string;
+    candidateFormAnswers?: Array<{ fieldKey?: string; question: string; value: string }>;
+  }>({ requestId: "", candidateName: "", candidateEmail: "", serviceName: "", serviceInstanceKey: "", respondentName: "", respondentEmail: "", serviceId: "", candidateFormAnswers: [] });
 
   const focusRequestId = searchParams.get("requestId")?.trim() ?? "";
 
@@ -2992,7 +2995,27 @@ function RequestsPageContent() {
                   type="button"
                   style={{ padding: "0.35rem 0.6rem", fontSize: "0.78rem", background: "#2563EB", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "0.3rem" }}
                   onClick={() => {
-                    setEmailModalContext({ requestId: item._id, candidateName: item.candidateName || "", candidateEmail: item.candidateEmail || "", serviceName: serviceDisplayName || "", serviceInstanceKey });
+                    // Extract candidate form answers for this service
+                    const serviceFormResponse = (item.candidateFormResponses || []).find(
+                      (r) => r.serviceId === service.serviceId,
+                    );
+                    const formAnswers = (serviceFormResponse?.answers || []).map((a) => ({
+                      fieldKey: a.fieldKey,
+                      question: a.question,
+                      value: a.value || "",
+                    }));
+
+                    setEmailModalContext({
+                      requestId: item._id,
+                      candidateName: item.candidateName || "",
+                      candidateEmail: item.candidateEmail || "",
+                      serviceName: serviceDisplayName || "",
+                      serviceInstanceKey,
+                      respondentName: draft.respondentName || "",
+                      respondentEmail: draft.respondentEmail || "",
+                      serviceId: service.serviceId || "",
+                      candidateFormAnswers: formAnswers,
+                    });
                     setEmailModalOpen(true);
                   }}
                 >
@@ -4935,6 +4958,10 @@ function RequestsPageContent() {
         candidateEmail={emailModalContext.candidateEmail}
         serviceName={emailModalContext.serviceName}
         serviceInstanceKey={emailModalContext.serviceInstanceKey}
+        respondentName={emailModalContext.respondentName}
+        respondentEmail={emailModalContext.respondentEmail}
+        serviceId={emailModalContext.serviceId}
+        candidateFormAnswers={emailModalContext.candidateFormAnswers}
       />
     </AdminPortalFrame>
   );
