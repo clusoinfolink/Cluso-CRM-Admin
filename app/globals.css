@@ -9,6 +9,11 @@
 
 * {
   box-sizing: border-box;
+  caret-color: transparent;
+}
+
+input, textarea, [contenteditable="true"] {
+  caret-color: auto;
 }
 
 body {

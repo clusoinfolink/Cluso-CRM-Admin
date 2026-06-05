@@ -17,6 +17,8 @@ import {
   ShieldCheck,
   User,
   Users,
+  UserCheck,
+  UserRound,
   PieChart,
   Activity,
   Briefcase,
@@ -147,6 +149,21 @@ const navItems: NavItem[] = [
       text: "text-rose-800 dark:text-rose-300",
       iconColor: "text-rose-600 dark:text-rose-400",
       gradient: "from-rose-500 to-pink-400",
+    }
+  },
+  { 
+    href: "/dashboard/candidates", 
+    label: "Candidates", 
+    icon: UserCheck, 
+    roles: ["admin", "superadmin", "manager", "verifier"],
+    description: "Browse candidate roster, view personal details, and check DigiLocker verification statuses.",
+    subIcons: [UserRound, Search],
+    theme: {
+      bg: "bg-teal-50 dark:bg-teal-900/40",
+      border: "border-teal-200 dark:border-teal-800",
+      text: "text-teal-800 dark:text-teal-300",
+      iconColor: "text-teal-600 dark:text-teal-400",
+      gradient: "from-teal-500 to-emerald-400",
     }
   },
   { 

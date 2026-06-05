@@ -141,6 +141,12 @@ const formFieldSchema = z
       .max(120)
       .optional()
       .default(""),
+    copyFromDigiLockerFieldKey: z
+      .string()
+      .trim()
+      .max(120)
+      .optional()
+      .default(""),
     previewWidth: z.enum(PREVIEW_FIELD_WIDTHS).optional(),
     templateVariableMapping: z
       .string()
@@ -244,6 +250,7 @@ function buildSystemLocationField(locationType: ServiceLocationFieldType): Parse
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     previewWidth: config.previewWidth,
     templateVariableMapping: "",
   };
@@ -380,6 +387,10 @@ function normalizeFormField(field: ParsedFormField) {
       field.fieldType === "file" || field.fieldType === "composite"
         ? ""
         : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
+    copyFromDigiLockerFieldKey:
+      field.fieldType === "file" || field.fieldType === "composite"
+        ? ""
+        : normalizePersonalDetailsSourceFieldKey(field.copyFromDigiLockerFieldKey),
     previewWidth,
     templateVariableMapping:
       field.fieldType === "file" || field.fieldType === "composite"
@@ -409,6 +420,7 @@ function serializeFormField(field: {
   allowNotApplicable?: boolean;
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: unknown;
+  copyFromDigiLockerFieldKey?: unknown;
   previewWidth?: unknown;
   templateVariableMapping?: unknown;
 }) {
@@ -463,6 +475,10 @@ function serializeFormField(field: {
       field.fieldType === "file" || field.fieldType === "composite"
         ? ""
         : normalizePersonalDetailsSourceFieldKey(field.copyFromPersonalDetailsFieldKey),
+    copyFromDigiLockerFieldKey:
+      field.fieldType === "file" || field.fieldType === "composite"
+        ? ""
+        : normalizePersonalDetailsSourceFieldKey(field.copyFromDigiLockerFieldKey),
     previewWidth,
     templateVariableMapping:
       field.fieldType === "file" || field.fieldType === "composite"
@@ -495,6 +511,7 @@ type CandidateLayoutSnapshotField = {
   allowNotApplicable: boolean;
   notApplicableText: string;
   copyFromPersonalDetailsFieldKey: string;
+  copyFromDigiLockerFieldKey: string;
   previewWidth: PreviewFieldWidth;
 };
 
@@ -556,6 +573,7 @@ function buildCandidateLayoutSystemLocationField(
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     previewWidth: config.previewWidth,
   };
 }
@@ -601,6 +619,7 @@ function ensureCandidateLayoutSnapshotSystemFields(
       allowNotApplicable: false,
       notApplicableText: "",
       copyFromPersonalDetailsFieldKey: "",
+      copyFromDigiLockerFieldKey: "",
       previewWidth: config.previewWidth,
       dropdownOptions:
         systemFieldType === "country"
@@ -670,6 +689,7 @@ function buildCandidateLayoutSnapshotFromFormFields(
           allowNotApplicable: Boolean(field.allowNotApplicable),
           notApplicableText: field.notApplicableText || "",
           copyFromPersonalDetailsFieldKey: "",
+          copyFromDigiLockerFieldKey: "",
           previewWidth,
         });
       }
@@ -708,6 +728,12 @@ function buildCandidateLayoutSnapshotFromFormFields(
           : normalizePersonalDetailsSourceFieldKey(
               field.copyFromPersonalDetailsFieldKey,
             ),
+      copyFromDigiLockerFieldKey:
+        fieldType === "file"
+          ? ""
+          : normalizePersonalDetailsSourceFieldKey(
+              field.copyFromDigiLockerFieldKey,
+            ),
       previewWidth,
     });
   }
@@ -731,6 +757,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
   {
@@ -748,6 +775,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
   {
@@ -765,6 +793,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
   {
@@ -782,6 +811,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
   {
@@ -799,6 +829,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
   {
@@ -816,6 +847,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
   {
@@ -833,6 +865,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
   {
@@ -850,6 +883,7 @@ const DEFAULT_PERSONAL_DETAILS_FORM_FIELDS: ParsedFormField[] = [
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   },
 ];
@@ -1055,6 +1089,7 @@ export async function GET(req: NextRequest) {
               allowNotApplicable: field.allowNotApplicable,
               notApplicableText: field.notApplicableText,
               copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
+              copyFromDigiLockerFieldKey: field.copyFromDigiLockerFieldKey,
               previewWidth: field.previewWidth,
               templateVariableMapping: field.templateVariableMapping,
             }),
@@ -1181,6 +1216,7 @@ export async function POST(req: NextRequest) {
               allowNotApplicable: field.allowNotApplicable,
               notApplicableText: field.notApplicableText,
               copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
+              copyFromDigiLockerFieldKey: field.copyFromDigiLockerFieldKey,
               previewWidth: field.previewWidth,
               templateVariableMapping: field.templateVariableMapping,
             }),
@@ -1301,6 +1337,7 @@ export async function PATCH(req: NextRequest) {
             allowNotApplicable: field.allowNotApplicable,
             notApplicableText: field.notApplicableText,
             copyFromPersonalDetailsFieldKey: field.copyFromPersonalDetailsFieldKey,
+            copyFromDigiLockerFieldKey: field.copyFromDigiLockerFieldKey,
             previewWidth: field.previewWidth,
             templateVariableMapping: field.templateVariableMapping,
           }),

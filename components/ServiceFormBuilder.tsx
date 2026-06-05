@@ -91,6 +91,17 @@ const EMAIL_TEMPLATE_VARIABLE_OPTIONS = [
 
 type EmailTemplateVariableKey = typeof EMAIL_TEMPLATE_VARIABLE_OPTIONS[number]["key"];
 
+const DIGILOCKER_FIELD_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "name", label: "Full Name" },
+  { value: "dob", label: "Date of Birth" },
+  { value: "gender", label: "Gender" },
+  { value: "email", label: "Email" },
+  { value: "mobile", label: "Mobile" },
+  { value: "maskedAadhaar", label: "Aadhaar" },
+  { value: "panNumber", label: "PAN" },
+  { value: "drivingLicence", label: "Driving Licence" },
+];
+
 const PREVIEW_MOBILE_CODE_OPTIONS = [
   "+1",
   "+44",
@@ -173,6 +184,7 @@ export type ServiceFormField = {
   allowNotApplicable?: boolean;
   notApplicableText?: string;
   copyFromPersonalDetailsFieldKey?: string;
+  copyFromDigiLockerFieldKey?: string;
   previewWidth?: "full" | "half" | "third";
   templateVariableMapping?: string;
 };
@@ -323,6 +335,7 @@ function createEmptyField(
     allowNotApplicable: false,
     notApplicableText: "Not Applicable",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     templateVariableMapping: "",
   };
 }
@@ -372,6 +385,7 @@ function buildSystemServiceLocationField(
     allowNotApplicable: false,
     notApplicableText: "",
     copyFromPersonalDetailsFieldKey: "",
+    copyFromDigiLockerFieldKey: "",
     previewWidth: config.previewWidth,
   };
 }
@@ -423,6 +437,7 @@ type CandidatePreviewField = {
   allowNotApplicable: boolean;
   notApplicableText: string;
   copyFromPersonalDetailsFieldKey: string;
+  copyFromDigiLockerFieldKey: string;
 };
 
 type PreviewFieldWidth = "full" | "half" | "third";
@@ -553,6 +568,7 @@ function expandFieldsForCandidatePreview(rawFields: ServiceFormField[]) {
           allowNotApplicable,
           notApplicableText,
           copyFromPersonalDetailsFieldKey: "",
+          copyFromDigiLockerFieldKey: "",
         });
 
         hasPrimaryRowForSource = true;
@@ -587,6 +603,10 @@ function expandFieldsForCandidatePreview(rawFields: ServiceFormField[]) {
         fieldType === "file"
           ? ""
           : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
+      copyFromDigiLockerFieldKey:
+        fieldType === "file"
+          ? ""
+          : String(field.copyFromDigiLockerFieldKey ?? "").trim(),
     });
   });
 
@@ -752,6 +772,10 @@ export default function ServiceFormBuilder({
         field.fieldType === "file" || field.fieldType === "composite"
           ? ""
           : String(field.copyFromPersonalDetailsFieldKey ?? "").trim(),
+      copyFromDigiLockerFieldKey:
+        field.fieldType === "file" || field.fieldType === "composite"
+          ? ""
+          : String(field.copyFromDigiLockerFieldKey ?? "").trim(),
       previewWidth: normalizePreviewWidth(field.previewWidth, field.fieldType),
       templateVariableMapping:
         field.fieldType === "file" || field.fieldType === "composite"
@@ -1023,6 +1047,10 @@ export default function ServiceFormBuilder({
                 fieldType === "file" || fieldType === "composite"
                   ? ""
                   : String(item.copyFromPersonalDetailsFieldKey ?? "").trim(),
+              copyFromDigiLockerFieldKey:
+                fieldType === "file" || fieldType === "composite"
+                  ? ""
+                  : String(item.copyFromDigiLockerFieldKey ?? "").trim(),
               }),
             }
           : item,
@@ -1281,6 +1309,37 @@ export default function ServiceFormBuilder({
     }));
   }
 
+  function updateFieldCopyFromDigiLocker(index: number, sourceFieldKey: string) {
+    if (!activeServiceId) {
+      return;
+    }
+
+    setDrafts((prev) => ({
+      ...prev,
+      [activeServiceId]: fields.map((item, idx) => {
+        if (idx !== index) {
+          return item;
+        }
+
+        if (
+          isSystemServiceLocationField(item) ||
+          item.fieldType === "file" ||
+          item.fieldType === "composite"
+        ) {
+          return {
+            ...item,
+            copyFromDigiLockerFieldKey: "",
+          };
+        }
+
+        return {
+          ...item,
+          copyFromDigiLockerFieldKey: sourceFieldKey.trim(),
+        };
+      }),
+    }));
+  }
+
   function updateFieldTemplateVariable(index: number, variableKey: string) {
     if (!activeServiceId) {
       return;
@@ -1390,6 +1449,7 @@ export default function ServiceFormBuilder({
           allowNotApplicable: false,
           notApplicableText: "",
           copyFromPersonalDetailsFieldKey: "",
+          copyFromDigiLockerFieldKey: "",
           previewWidth,
         };
       }
@@ -1440,6 +1500,10 @@ export default function ServiceFormBuilder({
           item.fieldType === "file" || item.fieldType === "composite"
             ? ""
             : String(item.copyFromPersonalDetailsFieldKey ?? "").trim(),
+        copyFromDigiLockerFieldKey:
+          item.fieldType === "file" || item.fieldType === "composite"
+            ? ""
+            : String(item.copyFromDigiLockerFieldKey ?? "").trim(),
         previewWidth,
         templateVariableMapping:
           item.fieldType === "file" || item.fieldType === "composite"
@@ -2157,6 +2221,87 @@ export default function ServiceFormBuilder({
                               Personal Details fields are not available right now.
                             </p>
                           )
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {/* DigiLocker Copy Checkbox */}
+                    {!isSystemLocationField &&
+                    field.fieldType !== "file" &&
+                    field.fieldType !== "composite" ? (
+                      <div
+                        style={{
+                          gridColumn: "1 / -1",
+                          border: field.copyFromDigiLockerFieldKey
+                            ? "1px solid #6EE7B7"
+                            : "1px solid #E2E8F0",
+                          borderRadius: "8px",
+                          background: field.copyFromDigiLockerFieldKey
+                            ? "#ECFDF5"
+                            : "#F8FAFC",
+                          padding: "0.85rem 1rem",
+                          display: "grid",
+                          gap: "0.65rem",
+                        }}
+                      >
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                            color: "#334155",
+                            fontSize: "0.86rem",
+                            fontWeight: 600,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(field.copyFromDigiLockerFieldKey)}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              const fallbackSourceFieldKey =
+                                DIGILOCKER_FIELD_OPTIONS[0]?.value ?? "";
+                              updateFieldCopyFromDigiLocker(
+                                index,
+                                checked ? fallbackSourceFieldKey : "",
+                              );
+                            }}
+                            style={{ width: "1rem", height: "1rem", accentColor: "#059669" }}
+                          />
+                          Allow candidate to copy this field from DigiLocker verified data
+                        </label>
+
+                        {Boolean(field.copyFromDigiLockerFieldKey) ? (
+                          <div style={{ display: "grid", gap: "0.35rem" }}>
+                            <span
+                              style={{ fontSize: "0.8rem", color: "#047857", fontWeight: 600 }}
+                            >
+                              DigiLocker source field
+                            </span>
+                            <select
+                              value={field.copyFromDigiLockerFieldKey ?? ""}
+                              onChange={(e) =>
+                                updateFieldCopyFromDigiLocker(index, e.target.value)
+                              }
+                              style={{
+                                maxWidth: "460px",
+                                padding: "0.5rem 0.7rem",
+                                border: "1px solid #A7F3D0",
+                                borderRadius: "6px",
+                                background: "#FFFFFF",
+                                fontSize: "0.9rem",
+                              }}
+                            >
+                              {DIGILOCKER_FIELD_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                            <p style={{ margin: 0, fontSize: "0.78rem", color: "#6B7280" }}>
+                              Only shown to candidates who have linked their DigiLocker account.
+                            </p>
+                          </div>
                         ) : null}
                       </div>
                     ) : null}
@@ -2880,6 +3025,14 @@ export default function ServiceFormBuilder({
                                 {field.copyFromPersonalDetailsFieldKey ? (
                                   <p style={{ margin: 0, color: "#64748B", fontSize: "0.79rem" }}>
                                     Copy option from Personal Details: {personalDetailsSourceLabel}
+                                  </p>
+                                ) : null}
+
+                                {field.copyFromDigiLockerFieldKey ? (
+                                  <p style={{ margin: 0, color: "#047857", fontSize: "0.79rem" }}>
+                                    Copy option from DigiLocker: {DIGILOCKER_FIELD_OPTIONS.find(
+                                      (opt) => opt.value === field.copyFromDigiLockerFieldKey,
+                                    )?.label || field.copyFromDigiLockerFieldKey}
                                   </p>
                                 ) : null}
 
