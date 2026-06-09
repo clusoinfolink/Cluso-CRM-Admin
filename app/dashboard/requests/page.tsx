@@ -59,6 +59,7 @@ const DEFAULT_VERIFICATION_MODE_OPTIONS = [
   { value: "document", label: "Document Check" },
   { value: "database", label: "Database Check" },
   { value: "field", label: "Field Verification" },
+  { value: "digilocker", label: "Verified via DigiLocker" },
 ] as const;
 
 type ServiceAttemptDraft = {
@@ -2671,8 +2672,10 @@ function RequestsPageContent() {
                         ...prev,
                         [serviceKey]: false,
                       }));
+                      const isDigilockerMode = selectedMode.trim().toLowerCase() === "digilocker";
                       updateServiceDraft(item._id, serviceInstanceKey, {
                         verificationMode: selectedMode,
+                        ...(isDigilockerMode ? { respondentName: "DigiLocker", respondentEmail: "NA" } : {}),
                       });
                     }}
                   >
@@ -2743,12 +2746,21 @@ function RequestsPageContent() {
                 </div>
 
                 <div style={{ display: "grid", gap: "0.3rem" }}>
-                  <label className="label" style={{ marginBottom: 0 }}>Respondent Name</label>
+                  <label className="label" style={{ marginBottom: 0, display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    Respondent Name
+                    {draft.verificationMode?.trim().toLowerCase() === "digilocker" && (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: "4px", padding: "0.1rem 0.4rem", fontSize: "0.68rem", fontWeight: 700, color: "#1D4ED8" }}>
+                        <img src="/images/digilocker-logo.png" alt="DigiLocker" style={{ height: "12px", objectFit: "contain" }} />
+                        Auto-filled
+                      </span>
+                    )}
+                  </label>
                   <input
                     className="input"
-                    style={{ padding: "0.35rem 0.45rem" }}
+                    style={{ padding: "0.35rem 0.45rem", background: draft.verificationMode?.trim().toLowerCase() === "digilocker" ? "#F0F9FF" : undefined, color: draft.verificationMode?.trim().toLowerCase() === "digilocker" ? "#1D4ED8" : undefined, fontWeight: draft.verificationMode?.trim().toLowerCase() === "digilocker" ? 600 : undefined }}
                     value={draft.respondentName ?? ""}
                     placeholder="Enter respondent name"
+                    readOnly={draft.verificationMode?.trim().toLowerCase() === "digilocker"}
                     onChange={(e) =>
                       updateServiceDraft(item._id, serviceInstanceKey, {
                         respondentName: e.target.value,
@@ -2758,13 +2770,22 @@ function RequestsPageContent() {
                 </div>
 
                 <div style={{ display: "grid", gap: "0.3rem" }}>
-                  <label className="label" style={{ marginBottom: 0 }}>Respondent Email ID</label>
+                  <label className="label" style={{ marginBottom: 0, display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    Respondent Email ID
+                    {draft.verificationMode?.trim().toLowerCase() === "digilocker" && (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: "4px", padding: "0.1rem 0.4rem", fontSize: "0.68rem", fontWeight: 700, color: "#1D4ED8" }}>
+                        <img src="/images/digilocker-logo.png" alt="DigiLocker" style={{ height: "12px", objectFit: "contain" }} />
+                        Auto-filled
+                      </span>
+                    )}
+                  </label>
                   <input
-                    type="email"
+                    type={draft.verificationMode?.trim().toLowerCase() === "digilocker" ? "text" : "email"}
                     className="input"
-                    style={{ padding: "0.35rem 0.45rem" }}
+                    style={{ padding: "0.35rem 0.45rem", background: draft.verificationMode?.trim().toLowerCase() === "digilocker" ? "#F0F9FF" : undefined, color: draft.verificationMode?.trim().toLowerCase() === "digilocker" ? "#1D4ED8" : undefined, fontWeight: draft.verificationMode?.trim().toLowerCase() === "digilocker" ? 600 : undefined }}
                     value={draft.respondentEmail ?? ""}
                     placeholder="Enter respondent email"
+                    readOnly={draft.verificationMode?.trim().toLowerCase() === "digilocker"}
                     onChange={(e) =>
                       updateServiceDraft(item._id, serviceInstanceKey, {
                         respondentEmail: e.target.value,
@@ -3436,8 +3457,14 @@ function RequestsPageContent() {
                         <span style={{ color: getReportStatusColor(service.status), fontWeight: 700 }}>
                           {toReportStatusLabel(service.status)}
                         </span>
-                        <span style={{ marginLeft: "1.7rem" }}>
+                        <span style={{ marginLeft: "1.7rem", display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
                           <strong>Mode:</strong> {toReportModeLabel(service.verificationMode)}
+                          {service.verificationMode?.trim().toLowerCase() === "digilocker" && (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: "4px", padding: "0.1rem 0.45rem", fontSize: "0.75rem", fontWeight: 700, color: "#1D4ED8", verticalAlign: "middle" }}>
+                              <img src="/images/digilocker-logo.png" alt="DigiLocker" style={{ height: "14px", objectFit: "contain" }} />
+                              Verified via DigiLocker
+                            </span>
+                          )}
                         </span>
                       </p>
                       {service.comment?.trim() ? (

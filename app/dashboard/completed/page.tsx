@@ -59,6 +59,7 @@ const DEFAULT_VERIFICATION_MODE_OPTIONS = [
   { value: "document", label: "Document Check" },
   { value: "database", label: "Database Check" },
   { value: "field", label: "Field Verification" },
+  { value: "digilocker", label: "Verified via DigiLocker" },
 ] as const;
 
 type ServiceAttemptDraft = {

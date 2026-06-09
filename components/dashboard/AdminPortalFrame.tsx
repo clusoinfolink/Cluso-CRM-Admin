@@ -29,6 +29,8 @@ import {
   Shield,
   Sliders,
   BellRing,
+  ChevronLeft,
+  ChevronRight,
   type LucideIcon,
 } from "lucide-react";
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -283,6 +285,16 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [clearedNotificationIds, setClearedNotificationIds] = useState<string[]>([]);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+    const stored = localStorage.getItem("cluso-sidebar-collapsed");
+    if (stored === "true") {
+      setIsCollapsed(true);
+    }
+  }, []);
 
   const requestsQuery = useQuery<RequestItem[]>({
     queryKey: REQUESTS_QUERY_KEY,
@@ -428,20 +440,22 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
     [router, setIsNotificationOpen],
   );
 
+  const sidebarCollapsed = isMounted && isCollapsed;
+
   return (
     <div className="admin-layout">
       <aside
         id="admin-mobile-nav"
-        className={`admin-sidebar ${isMobileNavOpen ? "mobile-open" : ""}`}
+        className={`admin-sidebar ${sidebarCollapsed ? "collapsed" : ""} ${isMobileNavOpen ? "mobile-open" : ""}`}
         aria-label="Admin navigation menu"
       >
         <div className="sidebar-brand flex items-center justify-center p-4">
           <Image
-            src="/images/cluso-infolink-logo.png"
+            src={sidebarCollapsed ? "/images/cluso-logo.png" : "/images/cluso-infolink-logo.png"}
             alt="Cluso Infolink"
-            width={220}
-            height={40}
-            className="h-10 w-auto object-contain"
+            width={sidebarCollapsed ? 36 : 220}
+            height={sidebarCollapsed ? 36 : 40}
+            className="h-10 w-auto object-contain transition-all duration-300"
             priority
           />
         </div>
@@ -457,7 +471,7 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
                   className={`portal-nav-link w-full ${isNavActive(pathname, item.href) ? "active" : ""}`}
                 >
                   <Icon size={18} />
-                  {item.label}
+                  <span className="sidebar-link-text">{item.label}</span>
                 </Link>
 
                 <div 
@@ -492,6 +506,22 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
             );
           })}
         </nav>
+
+        <button
+          type="button"
+          onClick={() => {
+            setIsCollapsed((prev) => {
+              const next = !prev;
+              localStorage.setItem("cluso-sidebar-collapsed", String(next));
+              return next;
+            });
+          }}
+          className="sidebar-toggle-btn-bottom"
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {sidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          <span className="sidebar-link-text">Collapse Menu</span>
+        </button>
       </aside>
 
       {isMobileNavOpen ? (
@@ -503,7 +533,7 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
         />
       ) : null}
 
-      <main className="admin-main">
+      <main className={`admin-main ${sidebarCollapsed ? "collapsed" : ""}`}>
         <header className="admin-topbar">
           <div className="portal-topbar-leading" style={{ display: "flex", alignItems: "center", gap: "0.65rem" }}>
             <button

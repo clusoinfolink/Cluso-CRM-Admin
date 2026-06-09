@@ -734,6 +734,10 @@ function toDisplayMode(value: string) {
     return "Manual";
   }
 
+  if (normalized.toLowerCase() === "digilocker") {
+    return "Verified via DigiLocker";
+  }
+
   if (normalized === normalized.toLowerCase()) {
     return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
   }
@@ -1332,6 +1336,15 @@ async function buildPdfBuffer(report: ReportPayload) {
     logoImage = await pdfDoc.embedPng(logoBytes);
   } catch {
     logoImage = null;
+  }
+
+  let digilockerImage: import("pdf-lib").PDFImage | null = null;
+  try {
+    const dlPath = path.join(process.cwd(), "public", "images", "digilocker-logo.png");
+    const dlBytes = await readFile(dlPath);
+    digilockerImage = await pdfDoc.embedPng(dlBytes);
+  } catch {
+    digilockerImage = null;
   }
 
   let page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -2055,6 +2068,7 @@ async function buildPdfBuffer(report: ReportPayload) {
     const finalStatus = toDisplayStatus(service.status);
     const finalMode = toDisplayMode(service.verificationMode);
     const modeLines = wrapText(`Mode: ${finalMode}`, 11.5, contentRight - (contentLeft + 170), true, "-");
+    const isDigiLocker = service.verificationMode?.trim().toLowerCase() === "digilocker";
 
     drawLabelValue(
       contentLeft,
@@ -2065,7 +2079,18 @@ async function buildPdfBuffer(report: ReportPayload) {
       11.5,
     );
 
-    drawWrappedLines(modeLines, contentLeft + 170, y, 11.5, palette.ink, true, 14);
+    if (isDigiLocker && digilockerImage) {
+      const iconSize = 13;
+      page.drawImage(digilockerImage, {
+        x: contentLeft + 170,
+        y: y - iconSize + 2,
+        width: iconSize,
+        height: iconSize,
+      });
+      drawWrappedLines(modeLines, contentLeft + 170 + 16, y, 11.5, palette.ink, true, 14);
+    } else {
+      drawWrappedLines(modeLines, contentLeft + 170, y, 11.5, palette.ink, true, 14);
+    }
     y -= Math.max(14, modeLines.length * 14);
 
     if (service.comment?.trim()) {
@@ -2211,15 +2236,35 @@ async function buildPdfBuffer(report: ReportPayload) {
         false,
         attemptRow.rowLineHeight,
       );
-      drawWrappedLines(
-        attemptRow.modeLines,
-        tableColumns.mode.x,
-        rowTop,
-        10.8,
-        palette.ink,
-        false,
-        attemptRow.rowLineHeight,
-      );
+      const isAttemptDigiLocker = (attemptRow.attempt.verificationMode || service.verificationMode)?.trim().toLowerCase() === "digilocker";
+      if (isAttemptDigiLocker && digilockerImage) {
+        const iconSize = 10;
+        page.drawImage(digilockerImage, {
+          x: tableColumns.mode.x,
+          y: rowTop - iconSize + 1,
+          width: iconSize,
+          height: iconSize,
+        });
+        drawWrappedLines(
+          attemptRow.modeLines,
+          tableColumns.mode.x + 12,
+          rowTop,
+          10.8,
+          palette.ink,
+          false,
+          attemptRow.rowLineHeight,
+        );
+      } else {
+        drawWrappedLines(
+          attemptRow.modeLines,
+          tableColumns.mode.x,
+          rowTop,
+          10.8,
+          palette.ink,
+          false,
+          attemptRow.rowLineHeight,
+        );
+      }
       drawWrappedLines(
         attemptRow.detailsLines,
         tableColumns.details.x,
