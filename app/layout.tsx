@@ -4,8 +4,8 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "Cluso Admin CRM",
-  description: "Admin CRM for candidate verification requests",
+  title: "Cluso Admin Workspace",
+  description: "Admin workspace for candidate verification requests",
   icons: {
     icon: "/images/cluso-logo.png",
     shortcut: "/images/cluso-logo.png",

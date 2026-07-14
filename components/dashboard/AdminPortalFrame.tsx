@@ -547,7 +547,7 @@ export function AdminPortalFrame({ me, onLogout, title, subtitle, children }: Ad
               <Menu size={18} />
             </button>
             <div style={{ display: "grid", gap: "0.15rem" }}>
-              <h1 className="admin-topbar-title">{title || "Admin Panel"}</h1>
+              <h1 className="admin-topbar-title">{title || "Cluso Admin Workspace"}</h1>
               {subtitle ? (
                 <p style={{ margin: 0, color: "#6B7A90", fontSize: "0.85rem" }}>{subtitle}</p>
               ) : null}
