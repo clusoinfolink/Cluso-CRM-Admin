@@ -318,6 +318,20 @@ const VerificationRequestSchema = new Schema(
       type: Schema.Types.Mixed,
       default: null,
     },
+    fillingMode: {
+      type: String,
+      enum: ["candidate", "client", "document"],
+      default: "candidate",
+    },
+    clientUploadedDocument: {
+      type: {
+        fileName: { type: String, required: true },
+        fileMimeType: { type: String, required: true },
+        fileSize: { type: Number, default: null },
+        fileData: { type: String, required: true },
+      },
+      default: null,
+    },
   },
   { timestamps: true },
 );
@@ -369,7 +383,9 @@ if (
     !models.VerificationRequest.schema.path("reverificationAppeal") ||
     !models.VerificationRequest.schema.path("reverificationAppeal.status") ||
     !models.VerificationRequest.schema.path("reverificationAppeal.services") ||
-    !models.VerificationRequest.schema.path("invoiceSnapshot"))
+    !models.VerificationRequest.schema.path("invoiceSnapshot") ||
+    !models.VerificationRequest.schema.path("fillingMode") ||
+    !models.VerificationRequest.schema.path("clientUploadedDocument"))
 ) {
   delete models.VerificationRequest;
 }

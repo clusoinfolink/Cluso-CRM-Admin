@@ -123,6 +123,13 @@ export type RequestItem = {
   reportData?: Record<string, unknown> | null;
   reverificationAppeal?: ReverificationAppeal | null;
   invoiceSnapshot?: InvoiceSnapshot | null;
+  fillingMode?: "candidate" | "client" | "document";
+  clientUploadedDocument?: {
+    fileName: string;
+    fileMimeType: string;
+    fileSize?: number | null;
+    fileData: string;
+  } | null;
   candidateFormResponses?: Array<{
     serviceId: string;
     serviceName: string;
@@ -219,6 +226,7 @@ export type ServiceItem = {
   multipleEntriesLabel?: string;
   hiddenFromCustomerPortal?: boolean;
   isDefaultPersonalDetails?: boolean;
+  clientFillable?: boolean;
   includedServiceIds: string[];
   formFields: ServiceFormField[];
 };

@@ -1452,6 +1452,8 @@ export async function GET(req: NextRequest) {
       reverificationAppeal: item.reverificationAppeal ?? null,
       invoiceSnapshot: item.invoiceSnapshot ?? null,
       candidateFormResponses,
+      fillingMode: item.fillingMode ?? "candidate",
+      clientUploadedDocument: item.clientUploadedDocument ?? null,
       createdAt: item.createdAt,
       createdByName: creator?.name ?? "Unknown",
       customerName: customer?.name ?? "Unknown",

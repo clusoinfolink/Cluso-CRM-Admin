@@ -1032,6 +1032,7 @@ const updateServiceFormSchema = z.object({
   serviceId: z.string().min(1),
   allowMultipleEntries: z.boolean().optional(),
   multipleEntriesLabel: z.string().optional().nullable(),
+  clientFillable: z.boolean().optional(),
   saveCandidateLayoutSnapshot: z.boolean().optional().default(true),
   formFields: z.array(formFieldSchema),
 });
@@ -1072,6 +1073,7 @@ export async function GET(req: NextRequest) {
           multipleEntriesLabel: item.multipleEntriesLabel ?? undefined,
           hiddenFromCustomerPortal: Boolean(item.hiddenFromCustomerPortal),
           isDefaultPersonalDetails: Boolean(item.isDefaultPersonalDetails),
+          clientFillable: Boolean(item.clientFillable ?? true),
           includedServiceIds: (item.includedServiceIds ?? []).map((id) => String(id)),
           formFields: normalizedOutputFields.map((field) =>
             serializeFormField({
@@ -1199,6 +1201,7 @@ export async function POST(req: NextRequest) {
             multipleEntriesLabel: service.multipleEntriesLabel ?? undefined,
           hiddenFromCustomerPortal: Boolean(service.hiddenFromCustomerPortal),
           isDefaultPersonalDetails: Boolean(service.isDefaultPersonalDetails),
+          clientFillable: Boolean(service.clientFillable ?? true),
           includedServiceIds: (service.includedServiceIds ?? []).map((id) => String(id)),
           formFields: (service.formFields ?? []).map((field) =>
             serializeFormField({
@@ -1275,6 +1278,7 @@ export async function PATCH(req: NextRequest) {
       candidateLayoutSnapshot?: CandidateLayoutSnapshotField[];
       allowMultipleEntries?: boolean;
       multipleEntriesLabel?: string | null;
+      clientFillable?: boolean;
     } = {
       formFields: normalizedFormFields,
     };
@@ -1295,6 +1299,10 @@ export async function PATCH(req: NextRequest) {
 
     if ("multipleEntriesLabel" in parsed.data) {
       updatePayload.multipleEntriesLabel = parsed.data.multipleEntriesLabel;
+    }
+
+    if (typeof parsed.data.clientFillable === "boolean") {
+      updatePayload.clientFillable = parsed.data.clientFillable;
     }
 
     const updated = await Service.findByIdAndUpdate(
@@ -1320,6 +1328,7 @@ export async function PATCH(req: NextRequest) {
           multipleEntriesLabel: updated.multipleEntriesLabel ?? undefined,
         hiddenFromCustomerPortal: Boolean(updated.hiddenFromCustomerPortal),
         isDefaultPersonalDetails: Boolean(updated.isDefaultPersonalDetails),
+        clientFillable: Boolean(updated.clientFillable ?? true),
         includedServiceIds: (updated.includedServiceIds ?? []).map((id) => String(id)),
         formFields: (updated.formFields ?? []).map((field) =>
           serializeFormField({

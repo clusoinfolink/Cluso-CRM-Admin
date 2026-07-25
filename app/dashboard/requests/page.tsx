@@ -2283,6 +2283,28 @@ function RequestsPageContent() {
   }, [activeReportPreviewRequest, reportDraftsByRequest, me?.name]);
 
   function renderResponseContent(item: RequestItem) {
+    if (item.fillingMode === "document" && item.clientUploadedDocument) {
+      const doc = item.clientUploadedDocument;
+      return (
+        <div style={{ padding: "1rem", background: "#FAF5FF", borderRadius: "12px", border: "1px solid #E9D5FF" }}>
+          <h4 style={{ margin: "0 0 0.5rem", color: "#6B21A8", fontSize: "1rem", fontWeight: 600 }}>
+            📄 Uploaded Pre-filled Document: {doc.fileName}
+          </h4>
+          {doc.fileMimeType === "application/pdf" ? (
+            <iframe
+              src={doc.fileData}
+              style={{ width: "100%", height: "450px", border: "1px solid #CBD5E1", borderRadius: "8px" }}
+              title="Uploaded PDF Preview"
+            />
+          ) : (
+            <p style={{ margin: 0, fontSize: "0.88rem", color: "#64748B" }}>
+              Spreadsheet document attached: <strong>{doc.fileName}</strong> ({Math.round((doc.fileSize || 0) / 1024)} KB)
+            </p>
+          )}
+        </div>
+      );
+    }
+
     if (!item.candidateFormResponses || item.candidateFormResponses.length === 0) {
       return <p style={{ margin: 0, color: "#667892" }}>Candidate has not submitted form responses yet.</p>;
     }
@@ -3713,7 +3735,7 @@ function RequestsPageContent() {
                 </tr>
               </thead>
               <tbody>
-                {pagedItems.map((item, index) => {
+                {pagedItems.map((item, itemIndex) => {
                   const formSubmitted = item.candidateFormStatus === "submitted";
                   const canViewStatus = canVerifyWorkflow;
                   const canVerifyNow =
@@ -3740,33 +3762,34 @@ function RequestsPageContent() {
                     item.verifierNames && item.verifierNames.length > 0
                       ? item.verifierNames.join(", ")
                       : "No verifier assigned";
-                  const baseRowBackground = hasOpenAppeal
-                    ? index % 2 === 1
-                      ? "#FEF2F2"
-                      : "#FFF1F2"
-                    : hasSharedReportWithCustomer
-                      ? index % 2 === 1
-                        ? "#ECFDF3"
-                        : "#F0FDF4"
-                      : index % 2 === 1
-                        ? "#F8FAFC"
-                        : "#FFFFFF";
-                  const hoverRowBackground = hasOpenAppeal
-                    ? "#FEE2E2"
-                    : hasSharedReportWithCustomer
-                      ? "#DCFCE7"
-                      : "#F1F5F9";
+                  const mode = item.fillingMode || "candidate";
+                  const isClientDraft = mode === "client" && !formSubmitted;
+
+                  const baseRowBackground =
+                    highlightedRequestId === item._id
+                      ? "#EFF6FF"
+                      : isClientDraft
+                        ? "#FEFCE8"
+                        : itemIndex % 2 === 1
+                          ? "#F8FAFC"
+                          : "#FFFFFF";
+                  const hoverRowBackground =
+                    highlightedRequestId === item._id
+                      ? "#DBEAFE"
+                      : isClientDraft
+                        ? "#FEF08A"
+                        : "#F1F5F9";
 
                   return (
                     <tr
                       key={`${group.key}-${item._id}`}
                       id={`request-${item._id}`}
                       style={{
-                        background: highlightedRequestId === item._id ? "#EFF6FF" : baseRowBackground,
+                        background: baseRowBackground,
                         transition: "background-color 0.2s ease"
                       }}
-                      onMouseEnter={(e) => { if (highlightedRequestId !== item._id) e.currentTarget.style.background = hoverRowBackground; }}
-                      onMouseLeave={(e) => { if (highlightedRequestId !== item._id) e.currentTarget.style.background = baseRowBackground; }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = hoverRowBackground; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = baseRowBackground; }}
                     >
                       <td style={{ padding: "1rem", fontWeight: 600, color: "#1E293B", borderBottom: "1px solid #F1F5F9" }}>
                         {item.candidateName}
@@ -3801,8 +3824,23 @@ function RequestsPageContent() {
                         </div>
                       </td>
                       <td style={{ padding: "1rem", borderBottom: "1px solid #F1F5F9" }}>
-                        <div style={{ fontWeight: 600, color: formSubmitted ? "#059669" : "#D97706", fontSize: "0.9rem" }}>
-                          {formSubmitted ? "Submitted" : "Pending"}
+                        <div style={{ fontWeight: 700, fontSize: "0.85rem", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                          {mode === "client" ? (
+                            <span style={{ padding: "0.15rem 0.5rem", borderRadius: "6px", background: formSubmitted ? "#DCFCE7" : "#FEF3C7", color: formSubmitted ? "#15803D" : "#B45309", border: formSubmitted ? "1px solid #86EFAC" : "1px solid #FDE68A" }}>
+                              {formSubmitted ? "Submitted (Client)" : "Saved for Later (Client)"}
+                            </span>
+                          ) : mode === "document" ? (
+                            <span style={{ padding: "0.15rem 0.5rem", borderRadius: "6px", background: "#F3E8FF", color: "#6B21A8", border: "1px solid #E9D5FF" }}>
+                              Document Uploaded
+                            </span>
+                          ) : (
+                            <>
+                              <span style={{ width: "8px", height: "8px", borderRadius: "999px", background: formSubmitted ? "#10B981" : "#F97316" }}></span>
+                              <span style={{ color: formSubmitted ? "#059669" : "#EA580C" }}>
+                                {formSubmitted ? "Submitted" : "Pending Candidate"}
+                              </span>
+                            </>
+                          )}
                         </div>
                         <div style={{ fontSize: "0.8rem", color: "#64748B", marginTop: "0.2rem" }}>
                           {item.candidateSubmittedAt ? new Date(item.candidateSubmittedAt).toLocaleDateString() : "-"}

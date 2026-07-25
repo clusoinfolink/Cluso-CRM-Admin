@@ -686,6 +686,7 @@ export default function ServiceFormBuilder({
   const [drafts, setDrafts] = useState<Record<string, ServiceFormField[]>>({});
   const [serviceEntryModeDrafts, setServiceEntryModeDrafts] = useState<Record<string, boolean>>({});
   const [serviceEntryLabelDrafts, setServiceEntryLabelDrafts] = useState<Record<string, string | undefined>>({});
+  const [clientFillableDrafts, setClientFillableDrafts] = useState<Record<string, boolean>>({});
   const [expandedDropdownEditors, setExpandedDropdownEditors] = useState<Record<string, boolean>>({});
   const [showCandidatePreview, setShowCandidatePreview] = useState(false);
   const [previewFieldWidths, setPreviewFieldWidths] = useState<Record<string, PreviewFieldWidth>>({});
@@ -791,6 +792,10 @@ export default function ServiceFormBuilder({
   const allowMultipleEntries = activeServiceId
     ? serviceEntryModeDrafts[activeServiceId] ?? Boolean(selectedService?.allowMultipleEntries)
     : false;
+
+  const clientFillable = activeServiceId
+    ? clientFillableDrafts[activeServiceId] ?? Boolean(selectedService?.clientFillable ?? true)
+    : true;
 
   const candidatePreviewFields = useMemo(
     () =>
@@ -1412,6 +1417,11 @@ export default function ServiceFormBuilder({
     setServiceEntryLabelDrafts((prev) => ({ ...prev, [activeServiceId]: label }));
   }
 
+  function updateServiceClientFillable(enabled: boolean) {
+    if (!activeServiceId) return;
+    setClientFillableDrafts((prev) => ({ ...prev, [activeServiceId]: enabled }));
+  }
+
   async function saveForm(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMessage("");
@@ -1604,6 +1614,7 @@ export default function ServiceFormBuilder({
           serviceId: activeServiceId,
           allowMultipleEntries,
           multipleEntriesLabel: normalizedMultipleEntriesLabel,
+          clientFillable,
           saveCandidateLayoutSnapshot,
           formFields: cleaned,
         }),
@@ -1625,6 +1636,10 @@ export default function ServiceFormBuilder({
       setServiceEntryModeDrafts((prev) => ({
         ...prev,
         [activeServiceId]: allowMultipleEntries,
+      }));
+      setClientFillableDrafts((prev) => ({
+        ...prev,
+        [activeServiceId]: clientFillable,
       }));
       setMessage(data.message ?? "Service form updated.");
       await onSaved();
@@ -1731,6 +1746,42 @@ export default function ServiceFormBuilder({
                     />
                   </div>
                 )}
+              </div>
+
+              <div
+                style={{
+                  border: "1px solid #CBD5E1",
+                  borderRadius: "8px",
+                  background: "#F8FAFC",
+                  padding: "1rem",
+                  display: "grid",
+                  gap: "0.8rem",
+                }}
+              >
+                <div>
+                  <label
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.6rem",
+                      fontWeight: 600,
+                      color: "#0F172A",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(clientFillable)}
+                      onChange={(e) => updateServiceClientFillable(e.target.checked)}
+                      style={{ width: "1.1rem", height: "1.1rem", cursor: "pointer", accentColor: "#2563EB" }}
+                    />
+                    <User size={18} color="#2563EB" />
+                    Allow Client to fill this form (Customer Portal)
+                  </label>
+                  <div style={{ color: "#64748B", fontSize: "0.85rem", paddingLeft: "1.7rem", marginTop: "0.2rem" }}>
+                    When checked, customer can fill form details during order creation or via &quot;Fill Details&quot;. If unchecked, only candidate can fill this form via candidate portal.
+                  </div>
+                </div>
               </div>
 
               <div

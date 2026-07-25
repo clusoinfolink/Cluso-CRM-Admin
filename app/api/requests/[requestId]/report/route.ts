@@ -1220,7 +1220,7 @@ async function getScopedRequest(auth: {
   };
 }
 
-async function buildPdfBuffer(report: ReportPayload) {
+async function buildPdfBuffer(report: ReportPayload, uploadedDoc?: { fileName: string; fileMimeType: string; fileData: string } | null) {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
   const { readFile } = await import("fs/promises");
   const path = await import("path");
@@ -2483,6 +2483,47 @@ async function buildPdfBuffer(report: ReportPayload) {
     color: palette.ink,
   });
 
+  /* ─── Appendix: Client Uploaded Document (if present) ─── */
+  if (uploadedDoc && uploadedDoc.fileData) {
+    try {
+      if (uploadedDoc.fileMimeType === "application/pdf") {
+        const base64Data = uploadedDoc.fileData.split(",")[1] || uploadedDoc.fileData;
+        const uploadedPdfBytes = Buffer.from(base64Data, "base64");
+        const uploadedPdfDoc = await PDFDocument.load(uploadedPdfBytes);
+        const copiedPages = await pdfDoc.copyPages(uploadedPdfDoc, uploadedPdfDoc.getPageIndices());
+        for (const appendedPage of copiedPages) {
+          pdfDoc.addPage(appendedPage);
+        }
+      } else {
+        /* Excel or other document format */
+        const appendixPage = pdfDoc.addPage([595.28, 841.89]);
+        appendixPage.drawText("APPENDIX — CLIENT UPLOADED DOCUMENT", {
+          x: 40,
+          y: 790,
+          size: 14,
+          font: boldFont,
+          color: palette.brand,
+        });
+        appendixPage.drawText(`Attached File: ${uploadedDoc.fileName}`, {
+          x: 40,
+          y: 765,
+          size: 10,
+          font: regularFont,
+          color: palette.ink,
+        });
+        appendixPage.drawText("This verification request was submitted with a pre-filled client spreadsheet/document.", {
+          x: 40,
+          y: 745,
+          size: 9,
+          font: regularFont,
+          color: palette.inkSoft,
+        });
+      }
+    } catch (err) {
+      console.error("[report-pdf] failed to append uploaded document appendix", err);
+    }
+  }
+
   const pdfBytes = await pdfDoc.save();
   return Buffer.from(pdfBytes);
 }
@@ -2682,7 +2723,7 @@ export async function GET(
 
     const reportData = scoped.item.reportData as ReportPayload;
 
-    const pdfBuffer = await buildPdfBuffer(reportData);
+    const pdfBuffer = await buildPdfBuffer(reportData, scoped.item.clientUploadedDocument as any);
     const pdfBytes = Uint8Array.from(pdfBuffer);
     const safeFilename = (reportData.reportNumber || "verification-report")
       .replace(/[^a-zA-Z0-9_-]+/g, "_")

@@ -69,6 +69,7 @@ export interface IService extends Document {
   includedServiceIds: mongoose.Types.ObjectId[];
   hiddenFromCustomerPortal?: boolean;
   isDefaultPersonalDetails?: boolean;
+  clientFillable?: boolean;
   formFields: ServiceFormField[];
   candidateLayoutSnapshot?: CandidateLayoutSnapshotField[];
   createdAt: Date;
@@ -87,6 +88,7 @@ const serviceSchema = new Schema<IService>(
     includedServiceIds: [{ type: Schema.Types.ObjectId, ref: "Service" }],
     hiddenFromCustomerPortal: { type: Boolean, default: false },
     isDefaultPersonalDetails: { type: Boolean, default: false },
+    clientFillable: { type: Boolean, default: true },
     formFields: [
       {
         fieldKey: { type: String, default: "" },
@@ -189,7 +191,8 @@ const hasServiceEntryField = Boolean(
 );
 const hasVisibilityFields = Boolean(
   mongoose.models.Service?.schema.path("hiddenFromCustomerPortal") &&
-    mongoose.models.Service?.schema.path("isDefaultPersonalDetails"),
+    mongoose.models.Service?.schema.path("isDefaultPersonalDetails") &&
+    mongoose.models.Service?.schema.path("clientFillable"),
 );
 
 if (
